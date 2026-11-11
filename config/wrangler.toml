@@ -1,19 +1,27 @@
-# FS AI — FAHAD SOMRAT AI — Cloudflare configuration (free tier only)
-# Workers + Pages + D1. No paid services. Replace the placeholder
-# database_id with the real one from `wrangler d1 create fs-ai-db`.
+# FS AI — FAHAD SOMRAT AI — Cloudflare Workers configuration (free tier only)
+# This file configures the WORKER (API + agents). The static frontend is
+# served by Cloudflare Pages — its build output directory ("frontend") is
+# set in the Pages project settings in the Cloudflare dashboard, NOT here.
+# (pages_build_output_dir is a Pages setting and is not valid in this file.)
 
 name = "fs-ai"
-main = "src/index.js"
+# Paths in this file are resolved relative to THIS file (config/), so the
+# entry point at the repo root is ../src/index.js. src/index.js is a thin
+# wrapper that re-exports the real handler in backend/worker.js.
+main = "../src/index.js"
 compatibility_date = "2026-11-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Static frontend served by Cloudflare Pages from the frontend/ directory.
-pages_build_output_dir = "frontend"
-
-# Workers entry for API routes is src/index.js when deployed as a Worker.
-# If you deploy Pages only, the Worker binding below is still used by
-# Pages Functions via the same D1 binding name (DB).
-
+# D1 database binding (the code reads env.DB).
+# database_id below is a PLACEHOLDER until the owner creates the database.
+# DO NOT invent an ID. Owner step (free, no card):
+#   npx wrangler d1 create fs-ai-db
+# then paste the returned database_id below, replacing the placeholder,
+# and apply database/schema.sql then database/seed.sql (see README
+# "How to deploy"). Until the real ID is in place, `wrangler deploy`
+# fails on this binding — that is expected, not a code bug. Without a
+# bound D1 the Worker still runs in honest fallback mode: reads use the
+# in-memory catalogue and writes answer 503 "not configured".
 [[d1_databases]]
 binding = "DB"
 database_name = "fs-ai-db"
@@ -23,7 +31,7 @@ database_id = "your-d1-database-id"
 SITE_NAME = "FS AI"
 SITE_FULL_NAME = "FAHAD SOMRAT AI"
 TAGLINE = "One Platform. Multiple Possibilities."
-PUBLIC_SITE_URL = "https://fs-ai.pages.dev"
+PUBLIC_SITE_URL = "https://fs-ai-5w5.pages.dev"
 # Honest defaults — never invent traffic or revenue:
 TRAFFIC_STATUS = "Data unavailable"
 TOTAL_REVENUE_USD = "0.00"

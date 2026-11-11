@@ -45,7 +45,7 @@ export function preparePinterestDraft(article) {
       title: article.title,
       description: (article.excerpt || '').slice(0, 200),
       board: article.divisionName || article.division || 'FS AI',
-      link: `https://fs-ai.pages.dev/articles/${article.slug}`,
+      link: `https://fs-ai-5w5.pages.dev/articles/${article.slug}`,
     },
     posted: false,
     note: 'Draft only — no pin is published without owner approval.',

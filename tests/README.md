@@ -76,7 +76,7 @@ mirrors `database/seed.sql` exactly. It checks:
 To run the live section:
 
 ```bash
-FS_AI_URL=https://fs-ai.pages.dev node --test tests/api-smoke.test.js
+FS_AI_URL=https://fs-ai-5w5.pages.dev node --test tests/api-smoke.test.js
 ```
 
 ## What is NOT tested live

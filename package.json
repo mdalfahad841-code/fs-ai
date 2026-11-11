@@ -1,1 +1,36 @@
-{"author":"Fahad Somrat","description":"FS AI — FAHAD SOMRAT AI. One Platform. Multiple Possibilities. Zero-cost multi-niche digital business platform (Cloudflare Pages + Workers + D1, free tier only).","devDependencies":{"wrangler":"^3.99.0"},"engines":{"node":">=20"},"keywords":["fs-ai","cloudflare","workers","d1","zero-cost"],"license":"UNLICENSED","name":"fs-ai","private":true,"scripts":{"db:migrate":"wrangler d1 execute fs-ai-db --file=database/migrations/001_initial.sql && wrangler d1 execute fs-ai-db --file=database/migrations/002_agents_accounts.sql","db:schema":"wrangler d1 execute fs-ai-db --file=database/schema.sql","db:seed":"wrangler d1 execute fs-ai-db --file=database/seed.sql","deploy":"wrangler deploy --config config/wrangler.toml","deploy:pages":"wrangler pages deploy frontend --project-name fs-ai","dev":"wrangler pages dev frontend","dev:worker":"wrangler dev --config config/wrangler.toml","test":"node --test \"tests/*.test.js\"","test:agents":"node --test tests/agents.test.js","test:api-smoke":"node --test tests/api-smoke.test.js","test:formula":"node --test tests/formula.test.js"},"type":"commonjs","version":"1.0.0"}
+{
+  "author": "Fahad Somrat",
+  "description": "FS AI \u2014 FAHAD SOMRAT AI. One Platform. Multiple Possibilities. Zero-cost multi-niche digital business platform (Cloudflare Pages + Workers + D1, free tier only).",
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "fs-ai",
+    "cloudflare",
+    "workers",
+    "d1",
+    "zero-cost"
+  ],
+  "license": "UNLICENSED",
+  "name": "fs-ai",
+  "private": true,
+  "scripts": {
+    "db:migrate": "wrangler d1 execute fs-ai-db --file=database/migrations/001_initial.sql && wrangler d1 execute fs-ai-db --file=database/migrations/002_agents_accounts.sql",
+    "db:schema": "wrangler d1 execute fs-ai-db --file=database/schema.sql",
+    "db:seed": "wrangler d1 execute fs-ai-db --file=database/seed.sql",
+    "deploy": "wrangler deploy --config config/wrangler.toml",
+    "deploy:dry-run": "wrangler deploy --dry-run --config config/wrangler.toml",
+    "deploy:pages": "wrangler pages deploy frontend --project-name fs-ai",
+    "dev": "wrangler pages dev frontend",
+    "dev:worker": "wrangler dev --config config/wrangler.toml",
+    "test": "node --test \"tests/*.test.js\"",
+    "test:agents": "node --test tests/agents.test.js",
+    "test:api-smoke": "node --test tests/api-smoke.test.js",
+    "test:formula": "node --test tests/formula.test.js"
+  },
+  "type": "commonjs",
+  "version": "1.0.0"
+}

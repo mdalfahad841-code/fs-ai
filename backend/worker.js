@@ -25,8 +25,7 @@ export const BRAND_FULL = 'FAHAD SOMRAT AI';
 export const TAGLINE = 'One Platform. Multiple Possibilities.';
 
 const ALLOWED_ORIGINS = [
-  'https://fs-ai.pages.dev',
-  'https://www.fs-ai.pages.dev',
+  'https://fs-ai-5w5.pages.dev',
   'http://localhost:8787',
   'http://localhost:5173',
 ];

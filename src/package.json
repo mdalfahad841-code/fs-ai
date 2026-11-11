@@ -1,0 +1,7 @@
+{
+  "description": "FS AI — Workers entry point. ESM scope so src/index.js is parsed as a module (mirrors backend/package.json).",
+  "name": "fs-ai-worker-entry",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0"
+}

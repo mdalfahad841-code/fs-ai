@@ -3,4 +3,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://fs-ai.pages.dev/sitemap.xml
+Sitemap: https://fs-ai-5w5.pages.dev/sitemap.xml

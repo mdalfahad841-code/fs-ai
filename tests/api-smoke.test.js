@@ -3,7 +3,7 @@
 // HONESTY RULE: these tests SKIP (they do not pass, and do not fail) when
 // there is no deployment to test. A live deployment is claimed only when a
 // real URL is set in FS_AI_URL and the requests genuinely succeed.
-//   FS_AI_URL=https://fs-ai.pages.dev node --test tests/api-smoke.test.js
+//   FS_AI_URL=https://fs-ai-5w5.pages.dev node --test tests/api-smoke.test.js
 //
 // Local Worker route functions are tested only if the Worker entry point
 // exists at ../src/index.js; if it does not exist yet, those tests skip too

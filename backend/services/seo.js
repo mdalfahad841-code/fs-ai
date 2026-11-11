@@ -7,7 +7,7 @@ import { ARTICLES } from '../routes/articles.js';
 import { DIVISIONS } from '../routes/divisions.js';
 import { escapeHtml } from '../security/crypto.js';
 
-export const SITE_URL = 'https://fs-ai.pages.dev';
+export const SITE_URL = 'https://fs-ai-5w5.pages.dev';
 export const SITE_NAME = 'FS AI — FAHAD SOMRAT AI';
 
 export function metaForArticle(article) {
