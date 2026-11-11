@@ -13,19 +13,15 @@ compatibility_date = "2026-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 # D1 database binding (the code reads env.DB).
-# database_id below is a PLACEHOLDER until the owner creates the database.
-# DO NOT invent an ID. Owner step (free, no card):
-#   npx wrangler d1 create fs-ai-db
-# then paste the returned database_id below, replacing the placeholder,
-# and apply database/schema.sql then database/seed.sql (see README
-# "How to deploy"). Until the real ID is in place, `wrangler deploy`
-# fails on this binding — that is expected, not a code bug. Without a
-# bound D1 the Worker still runs in honest fallback mode: reads use the
-# in-memory catalogue and writes answer 503 "not configured".
+# database_id set 2026-11-12 from the owner's real D1 database fs-ai-db,
+# created in the Cloudflare dashboard. Until the schema is applied,
+# `wrangler deploy` succeeds but the Worker runs in fallback mode for
+# reads and 503 "not configured" for writes. Apply database/schema.sql
+# then database/seed.sql (see README "How to deploy").
 [[d1_databases]]
 binding = "DB"
 database_name = "fs-ai-db"
-database_id = "your-d1-database-id"
+database_id = "5043ece5-a853-433c-95f1-ee15a12b6b56"
 
 [vars]
 SITE_NAME = "FS AI"
