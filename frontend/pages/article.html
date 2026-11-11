@@ -47,7 +47,7 @@ document.addEventListener('DOMContentLoaded', function () {
     '<p class="article-meta">Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
     (div ? '<a href="division.html?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
-    '<p>This article is part of the FS AI free library. The full text of this guide is published with the article in the complete FS AI package; the summary above is the excerpt shown on the site. No paywall, no sign-up — free to read.</p>' +
+    (a.body ? '<div class="article-full">' + a.body + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
     '<p>Found this useful? Explore the <a href="tools.html">free tools</a> — including the calculators that go with this topic — or browse the other articles in ' + window.FSAI.esc(a.division) + ' below.</p>';
   var related = window.FSAI.articlesByDivision(a.division).filter(function (x) { return x.id !== a.id; }).slice(0, 3);
   var grid = document.getElementById('relatedGrid');
