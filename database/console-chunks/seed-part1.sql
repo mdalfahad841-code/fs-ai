@@ -1,21 +1,5 @@
--- ============================================================================
--- FS AI — FAHAD SOMRAT AI — seed data
--- Apply AFTER database/schema.sql (or migrations 001 + 002).
--- Idempotent-ish: INSERT OR IGNORE / OR REPLACE on unique keys where safe.
---
--- HONESTY RULES (do not change):
---   * Revenue seed is $0.00 — no earnings have been made.
---   * Analytics seed is "Data unavailable" with NULL metrics — no fake rows.
---   * Only GitHub, YouTube and Pinterest are recorded as opened accounts.
---     Facebook, WhatsApp Business, Business Email, Search Console, Analytics,
---     AdSense and Affiliate are PENDING until the owner verifies them.
--- ============================================================================
 
-PRAGMA foreign_keys = ON;
 
--- ---------------------------------------------------------------------------
--- Website settings
--- ---------------------------------------------------------------------------
 INSERT OR REPLACE INTO website_settings (setting_key, setting_value, description) VALUES
 ('site_name', 'FS AI', 'Public brand name'),
 ('site_full_name', 'FAHAD SOMRAT AI', 'Full brand name'),
@@ -26,17 +10,9 @@ INSERT OR REPLACE INTO website_settings (setting_key, setting_value, description
 ('traffic_status', 'Data unavailable', 'Honest traffic status: no analytics account connected yet'),
 ('currency', 'USD', 'Reporting currency');
 
--- ---------------------------------------------------------------------------
--- Owner account — PLACEHOLDER ONLY.
--- password_hash MUST be replaced with a real bcrypt hash (cost 10) via the
--- secure setup flow before anyone can log in. This value is not a password.
--- ---------------------------------------------------------------------------
 INSERT OR IGNORE INTO owner_accounts (email, password_hash, display_name, role, is_active)
 VALUES ('owner@example.com', 'SET_VIA_SECURE_SETUP_DO_NOT_USE', 'Fahad Somrat', 'SYSTEM_OWNER', 1);
 
--- ---------------------------------------------------------------------------
--- 8 business divisions
--- ---------------------------------------------------------------------------
 INSERT OR IGNORE INTO business_divisions (id, name, slug, tagline, description, sort_order) VALUES
 (1, 'Automotive', 'automotive', 'Cars, bikes and EVs, explained simply.',
  'Buying guides, maintenance checklists, EV and fuel-saving advice.', 1),
@@ -55,9 +31,6 @@ INSERT OR IGNORE INTO business_divisions (id, name, slug, tagline, description, 
 (8, 'Education & Learning', 'education-learning', 'Learn a new skill.',
  'Practical guides for learning digital skills in 30 days and more.', 8);
 
--- ---------------------------------------------------------------------------
--- Categories (one or two per division to start)
--- ---------------------------------------------------------------------------
 INSERT OR IGNORE INTO categories (id, division_id, name, slug, sort_order) VALUES
 (1, 1, 'Car Maintenance', 'car-maintenance', 1),
 (2, 1, 'Buying Guides', 'buying-guides', 2),
@@ -75,10 +48,6 @@ INSERT OR IGNORE INTO categories (id, division_id, name, slug, sort_order) VALUE
 (14, 7, 'Fitness', 'fitness', 1),
 (15, 8, 'Digital Skills', 'digital-skills', 1);
 
--- ---------------------------------------------------------------------------
--- 16 AI agents — Central Business Manager + 15 specialists.
--- can_publish = 0 for ALL agents: nothing publishes without owner approval.
--- ---------------------------------------------------------------------------
 INSERT OR IGNORE INTO ai_agents (id, name, slug, role, division_id, description, is_active, can_publish) VALUES
 (1, 'Business Manager', 'business-manager', 'manager', NULL,
  'Central Business Manager: coordinates all agents, queues jobs, requests owner approval.', 1, 0),
@@ -112,3 +81,30 @@ INSERT OR IGNORE INTO ai_agents (id, name, slug, role, division_id, description,
  'Tracks ad and affiliate accounts and the honest $0.00 revenue ledger.', 1, 0),
 (16, 'Security', 'security', 'security', NULL,
  'Security & Monitoring: login attempts, sessions and security events.', 1, 0);
+
+INSERT OR IGNORE INTO agent_permissions (agent_id, permission, scope) VALUES
+(1, 'jobs.create', 'all'), (1, 'jobs.read', 'all'), (1, 'agents.read', 'all'),
+(1, 'approvals.request', 'all'),
+(2, 'research.create', 'automotive'), (2, 'research.read', 'automotive'),
+(2, 'articles.draft', 'automotive'),
+(3, 'research.create', 'ai-technology'), (3, 'research.read', 'ai-technology'),
+(3, 'articles.draft', 'ai-technology'),
+(4, 'research.create', 'gadgets-electronics'), (4, 'research.read', 'gadgets-electronics'),
+(4, 'articles.draft', 'gadgets-electronics'),
+(5, 'research.create', 'finance-money'), (5, 'research.read', 'finance-money'),
+(5, 'articles.draft', 'finance-money'),
+(6, 'research.create', 'travel-lifestyle'), (6, 'research.read', 'travel-lifestyle'),
+(6, 'articles.draft', 'travel-lifestyle'),
+(7, 'tools.create', 'digital-tools'), (7, 'tools.read', 'digital-tools'),
+(7, 'tools.update', 'digital-tools'),
+(8, 'research.create', 'health-wellness'), (8, 'research.read', 'health-wellness'),
+(8, 'articles.draft', 'health-wellness'),
+(9, 'research.create', 'education-learning'), (9, 'research.read', 'education-learning'),
+(9, 'articles.draft', 'education-learning'),
+(10, 'articles.read', 'all'), (10, 'seo.audit', 'all'), (10, 'keywords.read', 'all'),
+(11, 'articles.draft', 'all'), (11, 'articles.read', 'all'),
+(12, 'articles.read', 'all'), (12, 'fact_check.verify', 'all'),
+(13, 'articles.read', 'all'), (13, 'approvals.request', 'all'),
+(14, 'analytics.read', 'all'),
+(15, 'monetization.read', 'all'), (15, 'revenue.read', 'all'),
+(16, 'security.read', 'all'), (16, 'security.log', 'all');

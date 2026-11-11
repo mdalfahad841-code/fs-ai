@@ -1,53 +1,33 @@
 INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
-(18, 4, 8, 'How to Start Saving With a Small Income',
- 'how-to-start-saving-with-small-income',
- 'Saving is possible on a small income — start tiny and automate it.',
- 'Saving feels impossible when money is tight, but the habit matters more than the amount. This guide shows how to start with a very small fixed amount, pay yourself first on payday, cut one recurring cost, build a small emergency fund before anything else, and grow the amount slowly as income rises.',
- 'FS AI', 'published', 1, 5);
-INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
-(19, 5, 10, 'Travel on a Budget: Plan a Trip Without Overspending',
- 'travel-on-a-budget-plan-trip-without-overspending',
- 'Transport, stays, food and activities — planned before you spend.',
- 'A good budget trip is planned before the money is spent, not after. This guide covers setting a total trip budget first, choosing cheaper travel dates, comparing stays, eating where locals eat, and keeping a daily spending limit — with a simple planning order that keeps a trip affordable without making it miserable.',
- 'FS AI', 'published', 1, 6);
-INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
-(20, 6, 12, 'Free Digital Tools: Converters and Calculators You Can Use Today',
- 'free-digital-tools-converters-calculators',
- 'Twenty free tools on FS AI — no sign-up, no payment, no download.',
- 'FS AI offers twenty free digital tools: fuel-cost, loan, savings, percentage and age calculators, unit and currency converters, BMI, tip, discount and compound-interest calculators, and more. This guide lists them all, explains what each one does, and shows how to get a correct answer in seconds with no sign-up and no payment.',
- 'FS AI', 'published', 1, 4);
-INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
 (21, 7, 14, 'Walking for Health: A Beginner''s Fitness Guide',
  'walking-for-health-beginners-fitness-guide',
- 'The simplest exercise there is — and how to start properly.',
+ 'The simplest exercise there is - and how to start properly.',
  'Walking is one of the easiest and safest ways to get fitter: it needs no equipment, no gym and no experience. This beginner''s guide covers how much to walk, how to build up gradually, good walking posture, suitable shoes, and how to make walking a daily habit that actually lasts.',
  'FS AI', 'published', 1, 4);
 INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
 (22, 8, 15, 'How to Learn a New Digital Skill in 30 Days',
  'how-to-learn-new-digital-skill-in-30-days',
  'A realistic 30-day plan: one skill, daily practice, one finished project.',
- 'Thirty days is enough to learn the basics of one digital skill — if you practise a little every day instead of studying in big bursts. This guide gives a realistic plan: pick one skill, learn the core concepts in week one, practise with small tasks in weeks two and three, and finish one real project in week four that proves what you learned.',
+ 'Thirty days is enough to learn the basics of one digital skill - if you practise a little every day instead of studying in big bursts. This guide gives a realistic plan: pick one skill, learn the core concepts in week one, practise with small tasks in weeks two and three, and finish one real project in week four that proves what you learned.',
  'FS AI', 'published', 1, 5);
 INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
 (23, 7, 14, 'Home Workout Basics: No Equipment Needed',
  'home-workout-basics-no-equipment-needed',
  'A safe beginner routine using only your body weight.',
- 'You do not need a gym or equipment to start exercising. This guide covers a safe beginner home routine — warm-up, bodyweight squats, push-ups, planks and stretching — how many sets and repetitions to start with, how to progress week by week, and the warning signs that mean you should stop and rest.',
+ 'You do not need a gym or equipment to start exercising. This guide covers a safe beginner home routine - warm-up, bodyweight squats, push-ups, planks and stretching - how many sets and repetitions to start with, how to progress week by week, and the warning signs that mean you should stop and rest.',
  'FS AI', 'published', 1, 5);
 INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
 (24, 4, 9, 'Understanding Interest: Loans Explained Simply',
  'understanding-interest-loans-explained-simply',
  'Simple interest, compound interest and loan payments in plain language.',
- 'Interest is the price of borrowing money — and understanding it is the difference between a loan you can afford and one you cannot. This guide explains simple and compound interest with worked examples, how a monthly loan payment is calculated, and why paying a little extra each month shortens a loan so much.',
+ 'Interest is the price of borrowing money - and understanding it is the difference between a loan you can afford and one you cannot. This guide explains simple and compound interest with worked examples, how a monthly loan payment is calculated, and why paying a little extra each month shortens a loan so much.',
  'FS AI', 'published', 1, 5);
 INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excerpt, body, author, status, fact_checked, reading_minutes) VALUES
 (25, 5, 11, 'How to Plan a Road Trip: Checklist and Costs',
  'how-to-plan-road-trip-checklist-costs',
- 'Route, car check, budget and packing — one checklist for the whole trip.',
+ 'Route, car check, budget and packing - one checklist for the whole trip.',
  'A good road trip is planned in four parts: the route and stops, a pre-trip car check, a realistic cost budget (fuel, tolls, food and stays), and a packing checklist. This guide gives you all four, including a fuel-cost estimate you can calculate before you leave so the trip never surprises your wallet.',
  'FS AI', 'published', 1, 6);-- ---------------------------------------------------------------------------
--- Article tags (two per article)
--- ---------------------------------------------------------------------------
 INSERT OR IGNORE INTO article_tags (article_id, tag) VALUES
 (1, 'EV'), (1, 'home charging'),
 (2, 'maintenance'), (2, 'checklist'),
@@ -74,3 +54,65 @@ INSERT OR IGNORE INTO article_tags (article_id, tag) VALUES
 (23, 'home workout'), (23, 'no equipment'),
 (24, 'interest'), (24, 'loans'),
 (25, 'road trip'), (25, 'checklist');
+
+INSERT OR IGNORE INTO digital_tools (id, name, slug, division_id, description, tool_type, formula) VALUES
+(1, 'Fuel Cost Calculator', 'fuel-cost-calculator', 6,
+ 'Estimate fuel cost for a trip from distance, mileage and fuel price.', 'calculator',
+ 'cost = (distance / mileage) x fuel price'),
+(2, 'Loan Payment Calculator', 'loan-payment-calculator', 6,
+ 'Monthly loan payment from principal, annual rate and term.', 'calculator',
+ 'M = P x r(1+r)^n / ((1+r)^n - 1)'),
+(3, 'Savings Goal Calculator', 'savings-goal-calculator', 6,
+ 'Monthly saving needed to reach a goal by a target date.', 'calculator',
+ 'monthly = goal / months'),
+(4, 'Percentage Calculator', 'percentage-calculator', 6,
+ 'Percent of a number, percent change and percentage points.', 'calculator',
+ 'part = total x percent / 100'),
+(5, 'Age Calculator', 'age-calculator', 6,
+ 'Age in years, months and days from a date of birth.', 'calculator',
+ 'age = today - date of birth'),
+(6, 'Unit Converter', 'unit-converter', 6,
+ 'Convert length, weight and temperature units.', 'converter',
+ '1 km = 0.621371 miles; 1 kg = 2.20462 lb; F = C x 9/5 + 32'),
+(7, 'BMI Calculator', 'bmi-calculator', 6,
+ 'Body mass index from weight and height.', 'calculator',
+ 'BMI = weight kg / (height m)^2'),
+(8, 'Currency Converter', 'currency-converter', 6,
+ 'Convert between currencies using a free exchange-rate source at runtime.', 'converter',
+ 'converted = amount x rate (rate fetched live; none stored)'),
+(9, 'Tip Calculator', 'tip-calculator', 6,
+ 'Tip amount and total bill, split per person.', 'calculator',
+ 'tip = bill x tip percent / 100'),
+(10, 'Discount Calculator', 'discount-calculator', 6,
+ 'Sale price and amount saved from a discount percent.', 'calculator',
+ 'sale price = price x (1 - discount / 100)'),
+(11, 'Compound Interest Calculator', 'compound-interest-calculator', 6,
+ 'Future value of savings with compound interest.', 'calculator',
+ 'A = P(1 + r/n)^(n x t)'),
+(12, 'EMI Calculator', 'emi-calculator', 6,
+ 'Equated monthly instalment for a loan.', 'calculator',
+ 'EMI = P x r(1+r)^n / ((1+r)^n - 1)'),
+(13, 'Travel Budget Calculator', 'travel-budget-calculator', 6,
+ 'Total trip budget from daily costs and trip length.', 'calculator',
+ 'total = (daily transport + stay + food + activities) x days'),
+(14, 'Calorie Calculator', 'calorie-calculator', 6,
+ 'Estimate daily calorie needs from age, weight, height and activity.', 'calculator',
+ 'BMR (Mifflin-St Jeor) x activity factor'),
+(15, 'Word Counter', 'word-counter', 6,
+ 'Count words, characters, sentences and reading time in any text.', 'checker',
+ 'words = text split on whitespace'),
+(16, 'Password Generator', 'password-generator', 6,
+ 'Generate a random password of a chosen length and character set.', 'generator',
+ 'random selection from chosen character sets'),
+(17, 'QR Code Generator', 'qr-code-generator', 6,
+ 'Generate a QR code for a link or text.', 'generator',
+ 'QR encoding of input text'),
+(18, 'Time Zone Converter', 'time-zone-converter', 6,
+ 'Convert a time between two time zones.', 'converter',
+ 'target time = source time + offset difference'),
+(19, 'Speed Converter', 'speed-converter', 6,
+ 'Convert speed between km/h, mph, m/s and knots.', 'converter',
+ '1 mph = 1.60934 km/h; 1 knot = 1.852 km/h'),
+(20, 'Area Converter', 'area-converter', 6,
+ 'Convert area between square metres, square feet, acres and hectares.', 'converter',
+ '1 acre = 4046.86 sq m; 1 sq ft = 0.092903 sq m');
