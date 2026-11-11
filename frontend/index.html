@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FS AI — One Platform. Multiple Possibilities.</title>
+<meta name="description" content="FS AI (FAHAD SOMRAT AI) by Fahad Somrat: 8 divisions, 25 free articles and 20 free tools. Explore more. Know more. Do more.">
+<link rel="stylesheet" href="styles/main.css">
+<link rel="stylesheet" href="styles/responsive.css">
+<link rel="stylesheet" href="styles/animations.css">
+<link rel="stylesheet" href="styles/themes.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div id="siteHeader" data-active="Home"></div>
+
+<main id="main">
+  <section class="hero" aria-label="Introduction">
+    <canvas id="heroParticles" aria-hidden="true"></canvas>
+    <div class="wrap hero-inner">
+      <div>
+        <p class="card-tag">FAHAD SOMRAT AI · ZERO-COST PLATFORM</p>
+        <h1>EXPLORE MORE.<br>KNOW MORE.<br><span>DO MORE.</span></h1>
+        <p class="lead">One Platform. Multiple Possibilities. Eight divisions, free articles and free tools — cars, AI, gadgets, money, travel, health and learning, all in one place.</p>
+        <form class="search-box" role="search" action="#search" onsubmit="return false;">
+          <label for="siteSearch" class="skip-link">Search articles</label>
+          <input id="siteSearch" type="search" placeholder="Search articles — try &quot;EV&quot;, &quot;budget&quot; or &quot;workout&quot;" autocomplete="off">
+          <button class="btn btn-primary" type="submit">Search</button>
+        </form>
+        <p id="searchCount" class="muted" aria-live="polite"></p>
+        <div class="hero-ctas">
+          <a class="btn btn-primary" href="#divisions">Explore divisions</a>
+          <a class="btn btn-outline" href="pages/tools.html">Use free tools</a>
+          <a class="btn btn-outline" href="pages/dashboard.html">Command Center</a>
+        </div>
+      </div>
+      <div class="hero-ring" aria-hidden="true"><div><strong>8</strong><span>DIVISIONS</span><strong>25</strong><span>ARTICLES</span><strong>20</strong><span>FREE TOOLS</span></div></div>
+    </div>
+  </section>
+
+  <section class="section" id="search" aria-label="Search results">
+    <div class="wrap">
+      <div id="searchResults" aria-live="polite"><p class="muted">Type to search all 25 articles.</p></div>
+    </div>
+  </section>
+
+  <section class="section" id="divisions" aria-label="Divisions">
+    <div class="wrap">
+      <div class="section-head"><h2>Eight divisions, one platform</h2><a href="pages/division.html">Browse all divisions →</a></div>
+      <div class="grid" id="divisionGrid"></div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Latest articles">
+    <div class="wrap">
+      <div class="section-head"><h2>Latest articles</h2><p class="muted">25 articles across 8 divisions</p></div>
+      <div class="grid" id="articleGrid"></div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Tools showcase">
+    <div class="wrap">
+      <div class="section-head"><h2>Free tools, ready to use</h2><a href="pages/tools.html">All 20 tools →</a></div>
+      <div class="grid" id="toolGridHome"></div>
+      <p class="muted">No sign-up, no download, no cost. Currency conversion uses a rate you enter yourself — this site never invents live rates.</p>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Articles by division">
+    <div class="wrap">
+      <div class="section-head"><h2>Articles per division</h2><p class="muted">Real counts from the articles on this site</p></div>
+      <div class="card"><canvas id="divisionChart" height="320" role="img" aria-label="Bar chart of articles per division"></canvas>
+      <ul class="clean" id="divisionChartFallback"></ul></div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Newsletter">
+    <div class="wrap">
+      <div class="newsletter">
+        <h2>Stay in the loop</h2>
+        <p>There is no automatic mailing list yet — this form opens your email app so you can ask to be added. No address is stored by this site.</p>
+        <form id="newsletterForm">
+          <label for="newsletterEmail" class="skip-link">Your email address</label>
+          <input id="newsletterEmail" type="email" required placeholder="you@example.com">
+          <button class="btn btn-primary" type="submit">Email to subscribe</button>
+        </form>
+        <p id="newsletterNote" class="muted"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-label="Honest numbers">
+    <div class="wrap">
+      <div class="note-box">
+        <strong>Honest numbers:</strong> Revenue $0.00. Traffic: Data unavailable — no analytics account is connected yet, so no traffic, clicks or earnings are claimed anywhere on this site.
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="siteFooter"></div>
+
+<script src="scripts/app.js"></script>
+<script src="scripts/navigation.js"></script>
+<script src="scripts/search.js"></script>
+<script src="scripts/charts.js"></script>
+<script src="scripts/animations.js"></script>
+<script src="scripts/tools.js"></script>
+<script>
+document.getElementById('newsletterForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var email = document.getElementById('newsletterEmail').value.trim();
+  if (!email) return;
+  var note = document.getElementById('newsletterNote');
+  note.textContent = 'Opening your email app to subscribe ' + email + '. Nothing is stored by this site.';
+  window.location.href = 'mailto:mdalfahad841@gmail.com?subject=' + encodeURIComponent('FS AI newsletter subscribe') + '&body=' + encodeURIComponent('Please add ' + email + ' to the FS AI newsletter.');
+});
+</script>
+</body>
+</html>

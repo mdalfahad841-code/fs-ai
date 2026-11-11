@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment / secrets — NEVER commit real values
+.env
+.env.*
+!.env.example
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+dist/
+build/
+out/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs / caches
+*.log
+npm-debug.log*
+.cache/
+
+# Local databases / dumps
+*.db
+*.sqlite
+*.sqlite3
+*.sql.gz

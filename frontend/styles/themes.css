@@ -1,0 +1,19 @@
+/* FS AI — themes. Dark is the default (see main.css :root).
+   Light theme is applied with <html data-theme="light"> and stored in localStorage. */
+:root[data-theme="light"] {
+  --bg: #f4f7fb; --surface: #ffffff; --surface-2: #eef2f8;
+  --text: #10141c; --text-muted: #5a6a80;
+  --border: #d3dce8; --shadow: 0 8px 24px rgba(16,32,56,.12);
+}
+:root[data-theme="light"] .site-header { background: rgba(244,247,251,.94); }
+:root[data-theme="light"] .hero {
+  background: radial-gradient(900px 480px at 70% -10%, rgba(40,120,255,.22), transparent 60%), linear-gradient(180deg, #dbe7f7, #f4f7fb);
+}
+:root[data-theme="light"] .hero p.lead { color: #33465e; }
+:root[data-theme="light"] .card p { color: #33465e; }
+:root[data-theme="light"] .hero-ring strong { color: #10141c; }
+:root[data-theme="light"] .site-footer { background: #e8eef6; }
+:root[data-theme="light"] .footer-grid a { color: #33465e; }
+:root[data-theme="light"] .newsletter { background: #dbe7f7; }
+:root[data-theme="light"] .article-body p { color: #33465e; }
+:root[data-theme="light"] .card h3 a { color: #10141c; }

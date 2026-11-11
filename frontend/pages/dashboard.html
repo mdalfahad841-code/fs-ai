@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Command Center — FS AI</title>
+<meta name="description" content="FS AI Command Center: real KPIs from the site's own content — 25 articles, 8 divisions, 20 tools, 16 agents. Revenue $0.00, traffic data unavailable.">
+<link rel="stylesheet" href="../styles/main.css">
+<link rel="stylesheet" href="../styles/responsive.css">
+<link rel="stylesheet" href="../styles/animations.css">
+<link rel="stylesheet" href="../styles/themes.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div id="siteHeader" data-active="Command Center"></div>
+<main id="main">
+  <section class="section" id="dashboard">
+    <div class="wrap">
+      <h1>Command Center</h1>
+      <p class="lead">The FS AI owner dashboard. Every number below comes from the real content on this site — nothing is invented.</p>
+      <p id="dashboardNote" class="muted"></p>
+      <div class="kpi-grid" id="kpiGrid"></div>
+
+      <div class="two-col">
+        <div class="card">
+          <h2>Articles per division</h2>
+          <table><thead><tr><th>Division</th><th>Articles</th><th>Share</th></tr></thead><tbody id="divisionCounts"></tbody></table>
+          <canvas id="divisionChart" height="320" role="img" aria-label="Bar chart of articles per division" style="margin-top:16px;"></canvas>
+          <ul class="clean" id="divisionChartFallback"></ul>
+        </div>
+        <div class="card">
+          <h2>Latest articles</h2>
+          <ul class="clean" id="latestArticles"></ul>
+        </div>
+      </div>
+
+      <div class="two-col" style="margin-top:24px;">
+        <div class="card">
+          <h2>AI agents (16)</h2>
+          <p class="muted">Publishing happens only after owner approval. Agents are listed as ready — their work is coordinated by the Business Manager.</p>
+          <ul class="clean" id="agentList"></ul>
+        </div>
+        <div class="card">
+          <h2>Accounts</h2>
+          <p class="muted">GitHub, YouTube and Pinterest accounts exist (links provided by the owner). None is connected via API yet — no token is stored and nothing is posted automatically. Everything else is pending — not claimed as created.</p>
+          <ul class="clean" id="accountList"></ul>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:24px;">
+        <h2>Demo sign-in (session only)</h2>
+        <p class="muted">This static build has <strong>no real server login</strong>. The demo below signs you in for this tab only, using sessionStorage; nothing is sent anywhere. Passwords in a real system must be hashed server-side with PBKDF2 (or bcrypt/argon2) with a per-user salt — never stored in plain text.</p>
+        <p id="authStatus" aria-live="polite"></p>
+        <form id="demoLoginForm">
+          <div class="field"><label for="demoEmail">Email</label><input id="demoEmail" type="email" value="demo@fs-ai.local" required></div>
+          <div class="field"><label for="demoPassword">Password (8+ characters)</label><input id="demoPassword" type="password" required minlength="8" placeholder="Demo password"></div>
+          <p id="authError" class="tool-error" role="alert"></p>
+          <button class="btn btn-primary" type="submit">Sign in (demo)</button>
+        </form>
+        <button class="btn btn-outline" id="demoSignOut" type="button" disabled>Sign out</button>
+      </div>
+
+      <p class="muted" style="margin-top:24px;"><a href="../index.html">← Back to home</a></p>
+    </div>
+  </section>
+</main>
+<div id="siteFooter"></div>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/navigation.js"></script>
+<script src="../scripts/animations.js"></script>
+<script src="../scripts/charts.js"></script>
+<script src="../scripts/dashboard.js"></script>
+<script src="../scripts/authentication.js"></script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Divisions — FS AI</title>
+<meta name="description" content="All 8 FS AI divisions: Automotive, AI & Technology, Gadgets & Electronics, Finance & Money, Travel & Lifestyle, Digital Tools, Health & Wellness, Education & Learning.">
+<link rel="stylesheet" href="../styles/main.css">
+<link rel="stylesheet" href="../styles/responsive.css">
+<link rel="stylesheet" href="../styles/animations.css">
+<link rel="stylesheet" href="../styles/themes.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div id="siteHeader" data-active="Divisions"></div>
+<main id="main">
+  <section class="section">
+    <div class="wrap">
+      <h1 id="divisionTitle">All divisions</h1>
+      <p class="lead" id="divisionIntro">Eight divisions, one platform. Choose a division to see its articles.</p>
+      <div class="grid" id="divisionGrid"></div>
+      <h2 id="divisionArticlesHeading" style="margin-top:40px;">Articles</h2>
+      <div class="grid" id="divisionArticles"></div>
+      <p class="muted"><a href="../index.html">← Back to home</a></p>
+    </div>
+  </section>
+</main>
+<div id="siteFooter"></div>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/navigation.js"></script>
+<script src="../scripts/animations.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var params = new URLSearchParams(window.location.search);
+  var id = params.get('division');
+  var div = id ? window.FSAI.divisionById(id) : null;
+  var title = document.getElementById('divisionTitle');
+  var intro = document.getElementById('divisionIntro');
+  var grid = document.getElementById('divisionArticles');
+  var heading = document.getElementById('divisionArticlesHeading');
+  if (div) {
+    document.title = div.name + ' — FS AI';
+    title.textContent = div.icon + ' ' + div.name;
+    intro.textContent = div.description;
+    heading.textContent = 'Articles in ' + div.name;
+    var list = window.FSAI.articlesByDivision(div.name);
+    if (list.length) {
+      grid.innerHTML = list.map(function (a) {
+        return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(a.category) + '</div>' +
+          '<h3><a href="article.html?id=' + a.id + '">' + window.FSAI.esc(a.title) + '</a></h3>' +
+          '<p>' + window.FSAI.esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + window.FSAI.formatDate(a.date) + '</time></article>';
+      }).join('');
+    } else {
+      grid.innerHTML = '<p>No articles in this division yet.</p>';
+    }
+    /* Hide the full grid when a single division is open, keep the choice visible. */
+    var all = document.getElementById('divisionGrid');
+    if (all) all.style.display = 'none';
+  } else {
+    grid.innerHTML = '';
+    heading.textContent = 'Latest articles';
+    window.FSAI.renderArticles(grid);
+  }
+});
+</script>
+</body>
+</html>

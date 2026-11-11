@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="FS AI logo">
+  <title>FS AI</title>
+  <rect width="64" height="64" rx="14" fill="#1f2937"/>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="12.5" fill="none" stroke="#3b82f6" stroke-width="2"/>
+  <text x="32" y="41" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" fill="#3b82f6" text-anchor="middle">FS</text>
+  <rect x="14" y="47" width="36" height="3" rx="1.5" fill="#60a5fa"/>
+</svg>

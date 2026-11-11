@@ -1,0 +1,24 @@
+/* FS AI — animations. All motion is disabled under prefers-reduced-motion. */
+.reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+.reveal.visible { opacity: 1; transform: translateY(0); }
+@keyframes heroGlow {
+  0%, 100% { box-shadow: 0 0 40px rgba(40,120,255,.35), inset 0 0 30px rgba(40,120,255,.2); }
+  50% { box-shadow: 0 0 80px rgba(40,120,255,.6), inset 0 0 50px rgba(40,120,255,.35); }
+}
+.hero-ring { animation: heroGlow 4s ease-in-out infinite; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.fade-in { animation: fadeIn .5s ease both; }
+.card { transition: transform .2s ease, border-color .2s ease; }
+.card:hover { transform: translateY(-3px); border-color: var(--blue); }
+.btn { transition: background .2s ease, border-color .2s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+  .hero-ring { animation: none; }
+}

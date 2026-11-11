@@ -1,0 +1,32 @@
+# FS AI — FAHAD SOMRAT AI — Cloudflare configuration (free tier only)
+# Workers + Pages + D1. No paid services. Replace the placeholder
+# database_id with the real one from `wrangler d1 create fs-ai-db`.
+
+name = "fs-ai"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static frontend served by Cloudflare Pages from the frontend/ directory.
+pages_build_output_dir = "frontend"
+
+# Workers entry for API routes is src/index.js when deployed as a Worker.
+# If you deploy Pages only, the Worker binding below is still used by
+# Pages Functions via the same D1 binding name (DB).
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fs-ai-db"
+database_id = "your-d1-database-id"
+
+[vars]
+SITE_NAME = "FS AI"
+SITE_FULL_NAME = "FAHAD SOMRAT AI"
+TAGLINE = "One Platform. Multiple Possibilities."
+PUBLIC_SITE_URL = "https://fs-ai.pages.dev"
+# Honest defaults — never invent traffic or revenue:
+TRAFFIC_STATUS = "Data unavailable"
+TOTAL_REVENUE_USD = "0.00"
+
+# [observability]
+# enabled = true
