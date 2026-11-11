@@ -132,7 +132,7 @@
   /* Shared rendering: header, footer, division grid, article cards, tools grid. */
   function renderHeader(active) {
     var nav = [
-      ['index.html', 'Home'], ['pages/division.html', 'Divisions'], ['pages/tools.html', 'Tools'], ['pages/dashboard.html', 'Command Center']
+      ['index.html', 'Home'], ['pages/division.html', 'Divisions'], ['pages/tools.html', 'Tools']
     ];
     /* Pages live one level deeper; fix relative links when on a sub-page. */
     var inPages = window.location.pathname.indexOf('/pages/') !== -1;
