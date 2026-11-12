@@ -27,7 +27,8 @@ INSERT OR IGNORE INTO articles (id, division_id, category_id, title, slug, excer
  'how-to-plan-road-trip-checklist-costs',
  'Route, car check, budget and packing - one checklist for the whole trip.',
  'A good road trip is planned in four parts: the route and stops, a pre-trip car check, a realistic cost budget (fuel, tolls, food and stays), and a packing checklist. This guide gives you all four, including a fuel-cost estimate you can calculate before you leave so the trip never surprises your wallet.',
- 'FS AI', 'published', 1, 6);-- ---------------------------------------------------------------------------
+ 'FS AI', 'published', 1, 6);
+
 INSERT OR IGNORE INTO article_tags (article_id, tag) VALUES
 (1, 'EV'), (1, 'home charging'),
 (2, 'maintenance'), (2, 'checklist'),

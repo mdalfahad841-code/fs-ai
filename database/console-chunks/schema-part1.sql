@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS owner_accounts (
     role            TEXT NOT NULL DEFAULT 'SYSTEM_OWNER'
                     CHECK (role IN ('SYSTEM_OWNER', 'SUPER_ADMIN', 'ADMIN')),
     is_active       INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
-    totp_secret     TEXT,              -- inert: MFA removed; kept for re-enable path
-    backup_codes    TEXT,              -- inert: MFA removed; kept for re-enable path
+    totp_secret     TEXT,              
+    backup_codes    TEXT,              
     last_login_at   TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS keywords (
     keyword         TEXT NOT NULL,
     division_id     INTEGER REFERENCES business_divisions(id) ON DELETE SET NULL,
     article_id      INTEGER REFERENCES articles(id) ON DELETE SET NULL,
-    search_volume   INTEGER,           -- NULL = unknown; never invented
+    search_volume   INTEGER,           
     difficulty      TEXT CHECK (difficulty IN ('low', 'medium', 'high')),
     target_rank     INTEGER,
     notes           TEXT,
@@ -133,3 +133,16 @@ CREATE TABLE IF NOT EXISTS keywords (
 CREATE INDEX IF NOT EXISTS idx_keywords_keyword  ON keywords(keyword);
 CREATE INDEX IF NOT EXISTS idx_keywords_division ON keywords(division_id);
 CREATE INDEX IF NOT EXISTS idx_keywords_article  ON keywords(article_id);
+
+CREATE TABLE IF NOT EXISTS research_records (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    division_id     INTEGER NOT NULL REFERENCES business_divisions(id) ON DELETE CASCADE,
+    topic           TEXT NOT NULL,
+    summary         TEXT,
+    findings        TEXT,              
+    sources         TEXT,              
+    agent_id        INTEGER REFERENCES ai_agents(id) ON DELETE SET NULL,
+    status          TEXT NOT NULL DEFAULT 'collected'
+                    CHECK (status IN ('collected', 'verified', 'used', 'discarded')),
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
