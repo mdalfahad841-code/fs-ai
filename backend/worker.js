@@ -16,6 +16,7 @@ import { handleTools } from './routes/tools.js';
 import { handleAgents } from './routes/agents.js';
 import { handleAccounts } from './routes/accounts.js';
 import { handleAnalytics } from './routes/analytics.js';
+import { handleAuth } from './routes/auth.js';
 import { requireOwner } from './middleware/auth.js';
 import { rateLimit } from './middleware/rate-limit.js';
 import { jsonError, jsonOk } from './middleware/validation.js';
@@ -72,6 +73,9 @@ async function route(request, env, ctx) {
   if (path === '/api/tools' || path.startsWith('/api/tools/')) return handleTools(request, env, ctx);
   if (path === '/api/accounts' && method === 'GET') return handleAccounts(request, env, ctx);
   if (path === '/api/analytics' && method === 'GET') return handleAnalytics(request, env, ctx);
+
+  // Owner auth routes (login/logout/me). No session needed to log in.
+  if (path.startsWith('/api/auth')) return handleAuth(request, env);
 
   // Owner-only routes (session token required).
   if (path.startsWith('/api/agents')) {

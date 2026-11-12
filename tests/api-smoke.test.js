@@ -89,6 +89,15 @@ describe('Local Worker route functions', localOpts, () => {
     assert.equal(body.ok, true);
   });
 
+  it('handleRequest answers /api/auth/login with 503 when no owner password is configured', async () => {
+    const res = await localRoutes.handleRequest(new Request('http://localhost/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@example.com', password: 'x'.repeat(12) }),
+    }));
+    assert.equal(res.status, 503);
+  });
+
   it('handleRequest answers an unknown route with 404', async () => {
     const res = await localRoutes.handleRequest(new Request('http://localhost/api/nope'));
     assert.equal(res.status, 404);
