@@ -409,6 +409,11 @@
           if (r.error) out.innerHTML = '<p class="tool-error" role="alert">' + F.esc(r.error) + '</p>';
           else out.innerHTML = '<ul class="tool-result-list">' + r.lines.map(function (l) { return '<li>' + F.esc(l) + '</li>'; }).join('') + '</ul>' +
             (r.note ? '<p class="muted">' + F.esc(r.note) + '</p>' : '');
+          // Mobile fix: the result sits below the form, so after Calculate
+          // bring it into view — otherwise the user sees no change at all.
+          if (out.scrollIntoView) {
+            try { out.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e2) { out.scrollIntoView(); }
+          }
         }
       };
     }
