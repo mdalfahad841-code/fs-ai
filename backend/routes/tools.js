@@ -2,8 +2,14 @@
  * FS AI — Tools route. The 20 real free tools.
  * All tools run client-side / on the free tier; none require sign-up or payment.
  * Currency conversion uses a manually entered rate — no live-rate claim is made.
+ *
+ * D1 table is digital_tools (database/schema.sql) — NOT `tools`. The D1
+ * rows are mapped to the fallback shape: the seed catalogue (20 rows) uses
+ * different slugs from the frontend tool ids, so the API returns the D1
+ * rows as stored, with the division slug joined in. `?category=` filters
+ * by division slug (e.g. automotive) or by tool_type.
  */
-import { jsonOk, jsonError } from '../middleware/validation.js';
+import { jsonOk, jsonError, d1All } from '../middleware/validation.js';
 
 export const TOOLS = [
   { id: 1, slug: 'fuel-cost', name: 'Fuel Cost', category: 'Automotive', description: 'Estimate fuel cost for a trip from distance, mileage and fuel price.' },
@@ -28,6 +34,26 @@ export const TOOLS = [
   { id: 20, slug: 'time', name: 'Time', category: 'General', description: 'Convert time units and time-zone-friendly duration calculations.' },
 ];
 
+function mapToolRow(row) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    description: row.description,
+    division: row.division || null,
+    divisionName: row.division_name || null,
+    toolType: row.tool_type,
+    formula: row.formula || null,
+    isActive: row.is_active === 1,
+  };
+}
+
+const TOOL_SELECT =
+  'SELECT t.*, d.slug AS division, d.name AS division_name ' +
+  'FROM digital_tools t LEFT JOIN business_divisions d ON d.id = t.division_id ' +
+  'WHERE t.is_active = 1';
+
 export async function handleTools(request, env) {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
@@ -37,9 +63,9 @@ export async function handleTools(request, env) {
   if (parts.length === 3) {
     const slug = decodeURIComponent(parts[2]);
     if (env.DB) {
-      const { results } = await env.DB.prepare('SELECT * FROM tools WHERE slug = ? LIMIT 1').bind(slug).all();
-      if (!results.length) return jsonError('Tool not found', 404);
-      return jsonOk({ tool: results[0], source: 'd1' });
+      const rows = await d1All(env, `${TOOL_SELECT} AND t.slug = ? LIMIT 1`, [slug]);
+      if (!rows || !rows.length) return jsonError('Tool not found', 404);
+      return jsonOk({ tool: mapToolRow(rows[0]), source: 'd1' });
     }
     const tool = TOOLS.find((t) => t.slug === slug);
     if (!tool) return jsonError('Tool not found', 404);
@@ -48,8 +74,12 @@ export async function handleTools(request, env) {
 
   const category = url.searchParams.get('category');
   if (env.DB) {
-    const { results } = await env.DB.prepare('SELECT * FROM tools ORDER BY id ASC').all();
-    const tools = category ? results.filter((t) => t.category === category) : results;
+    let sql = TOOL_SELECT;
+    const params = [];
+    if (category) { sql += ' AND (d.slug = ? OR t.tool_type = ?)'; params.push(category, category); }
+    sql += ' ORDER BY t.id ASC';
+    const rows = await d1All(env, sql, params);
+    const tools = (rows || []).map(mapToolRow);
     return jsonOk({ tools, total: tools.length, source: 'd1' });
   }
   const tools = category ? TOOLS.filter((t) => t.category === category) : TOOLS;

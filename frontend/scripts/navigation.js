@@ -29,6 +29,7 @@
           document.documentElement.setAttribute('data-theme', 'light');
           try { localStorage.setItem('fsai-theme', 'light'); } catch (e) {}
         }
+        try { window.dispatchEvent(new CustomEvent('fsai:theme-change')); } catch (e) {}
       });
     }
     /* Highlight the nav link for the current page (in case markup was static). */

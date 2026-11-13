@@ -7,6 +7,7 @@
   .tool-chip { flex: 1 1 45%; }
   .two-col { grid-template-columns: 1fr; }
   .section { padding: 40px 0; }
+  .form-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
   body { font-size: 15px; }
@@ -30,6 +31,8 @@
   .tool-chip { flex: 1 1 100%; }
   .newsletter form { flex-direction: column; }
   .newsletter .btn { width: 100%; }
+  .newsletter .consent { flex-basis: auto; }
+  .dashboard-section { padding: 16px; }
   table { font-size: 14px; }
   th, td { padding: 8px; }
   #divisionChart { height: 280px; }

@@ -4,7 +4,81 @@
  * from the `articles` table; otherwise uses the clearly-labelled in-memory
  * fallback below (the same real catalogue, never fake live data).
  */
-import { jsonOk, jsonError, parseQuery } from '../middleware/validation.js';
+import {
+  jsonOk, jsonError, parseQuery, d1All, nowIso, disclaimerForDivision,
+} from '../middleware/validation.js';
+
+// Public-article visibility rule (D1): status = 'published' AND
+// (publish_at IS NULL OR publish_at <= now) AND the division is active.
+// Column names follow database/schema.sql + migration 004: articles has
+// division_id (FK to business_divisions) and published_at / publish_at —
+// NOT the `division` / `publishedAt` columns this file used before.
+// NOTE on seed bodies: D1 article rows may carry short (49-65 word)
+// bodies while the frontend ships the full 641-959 word text. The API
+// still returns the D1 row as-is — never 404s or hides it for a short
+// body — and the frontend falls back to its own full body by slug.
+// ORDER BY ... NULLS LAST: live rows seeded before published_at existed
+// have NULL dates and must sort after dated rows, not first.
+const PUBLIC_LIST_SQL =
+  'SELECT a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt ' +
+  'FROM articles a JOIN business_divisions d ON d.id = a.division_id ' +
+  "WHERE a.status = ? AND (a.publish_at IS NULL OR a.publish_at <= ?) AND d.is_active = 1";
+const PUBLIC_SINGLE_SQL =
+  'SELECT a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt ' +
+  'FROM articles a JOIN business_divisions d ON d.id = a.division_id ' +
+  'WHERE a.slug = ? AND a.status = ? AND (a.publish_at IS NULL OR a.publish_at <= ?) AND d.is_active = 1 LIMIT 1';
+
+// Fallback list/single queries without the publish_at filter, used only
+// when the live D1 has not had migration 004 applied yet (no publish_at
+// column) — the status + active-division rules still apply.
+const PUBLIC_LIST_SQL_NO_SCHEDULE =
+  'SELECT a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt ' +
+  'FROM articles a JOIN business_divisions d ON d.id = a.division_id ' +
+  'WHERE a.status = ? AND d.is_active = 1';
+const PUBLIC_SINGLE_SQL_NO_SCHEDULE =
+  'SELECT a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt ' +
+  'FROM articles a JOIN business_divisions d ON d.id = a.division_id ' +
+  'WHERE a.slug = ? AND a.status = ? AND d.is_active = 1 LIMIT 1';
+
+async function queryPublicList(env, division, search, limit) {
+  const now = nowIso();
+  try {
+    let sql = PUBLIC_LIST_SQL;
+    const params = ['published', now];
+    if (division) { sql += ' AND d.slug = ?'; params.push(division); }
+    if (search) { sql += ' AND (a.title LIKE ? OR a.excerpt LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+    sql += ' ORDER BY a.published_at DESC NULLS LAST, a.id DESC LIMIT ?';
+    params.push(limit);
+    return await d1All(env, sql, params);
+  } catch {
+    // Migration 004 not applied yet on this database — retry without the
+    // publish_at filter rather than failing the public read.
+    let sql = PUBLIC_LIST_SQL_NO_SCHEDULE;
+    const params = ['published'];
+    if (division) { sql += ' AND d.slug = ?'; params.push(division); }
+    if (search) { sql += ' AND (a.title LIKE ? OR a.excerpt LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+    sql += ' ORDER BY a.published_at DESC NULLS LAST, a.id DESC LIMIT ?';
+    params.push(limit);
+    return await d1All(env, sql, params);
+  }
+}
+
+async function queryPublicSingle(env, slug) {
+  const now = nowIso();
+  try {
+    const rows = await d1All(env, PUBLIC_SINGLE_SQL, [slug, 'published', now]);
+    return rows && rows[0];
+  } catch {
+    const rows = await d1All(env, PUBLIC_SINGLE_SQL_NO_SCHEDULE, [slug, 'published']);
+    return rows && rows[0];
+  }
+}
+
+function withDisclaimer(article) {
+  if (!article) return article;
+  const disclaimer = disclaimerForDivision(article.division);
+  return disclaimer ? { ...article, disclaimer } : article;
+}
 
 export const ARTICLES = [
   { id: 1, slug: 'ev-charging-at-home-beginners-guide', title: "EV Charging at Home: A Complete Beginner's Guide", division: 'automotive', divisionName: 'Automotive', excerpt: 'Home charging explained in plain language: charger types, costs, installation and safety.', status: 'published', publishedAt: '2026-11-01' },
@@ -34,14 +108,6 @@ export const ARTICLES = [
   { id: 25, slug: 'how-to-plan-road-trip-checklist-costs', title: 'How to Plan a Road Trip: Checklist and Costs', division: 'travel-lifestyle', divisionName: 'Travel & Lifestyle', excerpt: 'Route, vehicle checks, budget and packing — a complete road-trip checklist.', status: 'published', publishedAt: '2026-11-11' },
 ];
 
-async function queryD1(env, sql, params = []) {
-  if (!env.DB) return null;
-  const stmt = env.DB.prepare(sql);
-  const bound = params.length ? stmt.bind(...params) : stmt;
-  const result = await bound.all();
-  return result.results || [];
-}
-
 export async function handleArticles(request, env) {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
@@ -53,13 +119,13 @@ export async function handleArticles(request, env) {
   if (parts.length === 3) {
     const slug = decodeURIComponent(parts[2]);
     if (env.DB) {
-      const rows = await queryD1(env, 'SELECT * FROM articles WHERE slug = ? LIMIT 1', [slug]);
-      if (rows && rows.length) return jsonOk({ article: rows[0], source: 'd1' });
-      return jsonError('Article not found', 404);
+      const article = await queryPublicSingle(env, slug);
+      if (!article) return jsonError('Article not found', 404);
+      return jsonOk({ article: withDisclaimer(article), source: 'd1' });
     }
     const article = ARTICLES.find((a) => a.slug === slug);
     if (!article) return jsonError('Article not found', 404);
-    return jsonOk({ article, source: 'fallback' });
+    return jsonOk({ article: withDisclaimer(article), source: 'fallback' });
   }
 
   const q = parseQuery(url);
@@ -68,13 +134,7 @@ export async function handleArticles(request, env) {
   const limit = Math.min(Math.max(parseInt(q.get('limit') || '25', 10) || 25, 1), 100);
 
   if (env.DB) {
-    let sql = 'SELECT * FROM articles WHERE status = ?';
-    const params = ['published'];
-    if (division) { sql += ' AND division = ?'; params.push(division); }
-    if (search) { sql += ' AND (title LIKE ? OR excerpt LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
-    sql += ' ORDER BY publishedAt DESC LIMIT ?';
-    params.push(limit);
-    const rows = await queryD1(env, sql, params);
+    const rows = await queryPublicList(env, division, search, limit);
     return jsonOk({ articles: rows, total: rows.length, source: 'd1' });
   }
 

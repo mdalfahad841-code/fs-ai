@@ -22,9 +22,12 @@ export function auditEvent(action, detail, actor = 'system', meta = {}) {
 export async function auditEventToD1(env, entry) {
   if (!env || !env.DB) return false;
   try {
+    // Real audit table is agent_activity_logs (schema.sql §13) — the old
+    // `activity_log` table never existed, so this insert used to fail
+    // silently on every call.
     await env.DB.prepare(
-      'INSERT INTO activity_log (at, actor, action, detail) VALUES (?, ?, ?, ?)'
-    ).bind(entry.at, entry.actor, entry.action, entry.detail).run();
+      'INSERT INTO agent_activity_logs (agent_id, action, entity_type, details, status, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(null, entry.action, 'security', JSON.stringify({ actor: entry.actor, detail: entry.detail }), 'success', entry.at).run();
     return true;
   } catch {
     return false;

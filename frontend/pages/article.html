@@ -8,6 +8,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Article — FS AI</title>
 <meta name="description" content="Read a free FS AI article.">
+<link rel="canonical" href="https://fs-ai-5w5.pages.dev/pages/article.html">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="FS AI">
+<meta property="og:title" content="Article — FS AI">
+<meta property="og:description" content="Read a free FS AI article.">
+<meta property="og:url" content="https://fs-ai-5w5.pages.dev/pages/article.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Article — FS AI">
+<meta name="twitter:description" content="Read a free FS AI article.">
+<!-- Per-article title, description, canonical and JSON-LD are injected by
+     JavaScript from the loaded article (see the script at the end of this
+     page). Crawlers that do not run JavaScript will see only these generic
+     tags — static Pages hosting has no server rendering. -->
 <link rel="stylesheet" href="../styles/main.css">
 <link rel="stylesheet" href="../styles/responsive.css">
 <link rel="stylesheet" href="../styles/animations.css">
@@ -44,11 +57,65 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   document.title = a.title + ' — FS AI';
   var div = window.FSAI.DIVISIONS.find(function (d) { return d.name === a.division; });
+  /* Per-article SEO, injected from the loaded article data. Honest note:
+     this only exists after JavaScript runs — a crawler that does not run
+     JS sees the generic tags in <head>. */
+  var canonical = 'https://fs-ai-5w5.pages.dev/pages/article.html?id=' + a.id;
+  function setMeta(name, value, attr) {
+    var sel = attr === 'property' ? 'meta[property="' + name + '"]' : 'meta[name="' + name + '"]';
+    var el = document.querySelector(sel);
+    if (el) el.setAttribute('content', value);
+  }
+  function setLink(rel, href) {
+    var el = document.querySelector('link[rel="' + rel + '"]');
+    if (el) el.setAttribute('href', href);
+  }
+  setMeta('description', a.excerpt, 'name');
+  setMeta('og:title', a.title + ' — FS AI', 'property');
+  setMeta('og:description', a.excerpt, 'property');
+  setMeta('og:url', canonical, 'property');
+  setMeta('twitter:title', a.title + ' — FS AI', 'name');
+  setMeta('twitter:description', a.excerpt, 'name');
+  setLink('canonical', canonical);
+  var ld = {
+    '@context': 'https://schema.org', '@type': 'Article',
+    headline: a.title, description: a.excerpt,
+    datePublished: a.date, inLanguage: 'en',
+    author: { '@type': 'Person', name: 'Fahad Somrat' },
+    publisher: { '@type': 'Organization', name: 'FS AI', url: 'https://fs-ai-5w5.pages.dev/' },
+    mainEntityOfPage: canonical,
+    articleSection: a.division
+  };
+  var oldLd = document.getElementById('articleJsonLd');
+  if (oldLd) oldLd.remove();
+  var ldEl = document.createElement('script');
+  ldEl.id = 'articleJsonLd';
+  ldEl.type = 'application/ld+json';
+  ldEl.textContent = JSON.stringify(ld);
+  document.head.appendChild(ldEl);
+  var crumbs = {
+    '@context': 'https://schema.org', '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://fs-ai-5w5.pages.dev/' },
+      { '@type': 'ListItem', position: 2, name: a.division, item: div ? 'https://fs-ai-5w5.pages.dev/pages/division.html?division=' + div.id : 'https://fs-ai-5w5.pages.dev/pages/division.html' },
+      { '@type': 'ListItem', position: 3, name: a.title, item: canonical }
+    ]
+  };
+  var oldCr = document.getElementById('articleCrumbs');
+  if (oldCr) oldCr.remove();
+  var crEl = document.createElement('script');
+  crEl.id = 'articleCrumbs';
+  crEl.type = 'application/ld+json';
+  crEl.textContent = JSON.stringify(crumbs);
+  document.head.appendChild(crEl);
+  var disclaimer = a.disclaimer || window.FSAI.DISCLAIMER;
+  var showDisclaimer = !!a.disclaimer || div && (div.id === 'health-wellness' || div.id === 'finance-money');
   body.innerHTML =
     '<p class="card-tag">' + window.FSAI.esc(a.division) + ' · ' + window.FSAI.esc(a.category) + '</p>' +
     '<h1>' + window.FSAI.esc(a.title) + '</h1>' +
     '<p class="article-meta">Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
     (div ? '<a href="division.html?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
+    (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
     (a.body ? '<div class="article-full">' + a.body + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
     '<p>Found this useful? Explore the <a href="tools.html">free tools</a> — including the calculators that go with this topic — or browse the other articles in ' + window.FSAI.esc(a.division) + ' below.</p>';

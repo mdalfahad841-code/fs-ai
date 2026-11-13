@@ -8,6 +8,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Divisions — FS AI</title>
 <meta name="description" content="All 8 FS AI divisions: Automotive, AI & Technology, Gadgets & Electronics, Finance & Money, Travel & Lifestyle, Digital Tools, Health & Wellness, Education & Learning.">
+<link rel="canonical" href="https://fs-ai-5w5.pages.dev/pages/division.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="FS AI">
+<meta property="og:title" content="Divisions — FS AI">
+<meta property="og:description" content="All 8 FS AI divisions: Automotive, AI & Technology, Gadgets & Electronics, Finance & Money, Travel & Lifestyle, Digital Tools, Health & Wellness, Education & Learning.">
+<meta property="og:url" content="https://fs-ai-5w5.pages.dev/pages/division.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Divisions — FS AI">
+<meta name="twitter:description" content="All 8 FS AI divisions, one platform.">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"CollectionPage","name":"Divisions — FS AI","url":"https://fs-ai-5w5.pages.dev/pages/division.html","isPartOf":{"@type":"WebSite","name":"FS AI","url":"https://fs-ai-5w5.pages.dev/"}}</script>
+<!-- Per-division title/description/canonical are updated by JavaScript when
+     ?division= is present; crawlers without JS see these generic tags. -->
 <link rel="stylesheet" href="../styles/main.css">
 <link rel="stylesheet" href="../styles/responsive.css">
 <link rel="stylesheet" href="../styles/animations.css">
@@ -43,6 +55,17 @@ document.addEventListener('DOMContentLoaded', function () {
   var heading = document.getElementById('divisionArticlesHeading');
   if (div) {
     document.title = div.name + ' — FS AI';
+    var divCanonical = 'https://fs-ai-5w5.pages.dev/pages/division.html?division=' + div.id;
+    var descEl = document.querySelector('meta[name="description"]');
+    if (descEl) descEl.setAttribute('content', div.description);
+    var ogTitle = document.querySelector('meta[property="og:title"]');
+    if (ogTitle) ogTitle.setAttribute('content', div.name + ' — FS AI');
+    var ogDesc = document.querySelector('meta[property="og:description"]');
+    if (ogDesc) ogDesc.setAttribute('content', div.description);
+    var ogUrl = document.querySelector('meta[property="og:url"]');
+    if (ogUrl) ogUrl.setAttribute('content', divCanonical);
+    var canon = document.querySelector('link[rel="canonical"]');
+    if (canon) canon.setAttribute('href', divCanonical);
     title.textContent = div.icon + ' ' + div.name;
     intro.textContent = div.description;
     heading.textContent = 'Articles in ' + div.name;

@@ -6,8 +6,18 @@
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","G-JVSCJT2DHJ");</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
 <title>Command Center — FS AI</title>
 <meta name="description" content="FS AI Command Center: real KPIs from the site's own content — 25 articles, 8 divisions, 20 tools, 16 agents. Revenue $0.00, traffic data unavailable.">
+<link rel="canonical" href="https://fs-ai-5w5.pages.dev/pages/dashboard.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="FS AI">
+<meta property="og:title" content="Command Center — FS AI">
+<meta property="og:description" content="FS AI Command Center for the owner.">
+<meta property="og:url" content="https://fs-ai-5w5.pages.dev/pages/dashboard.html">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Command Center — FS AI">
+<meta name="twitter:description" content="FS AI Command Center for the owner.">
 <link rel="stylesheet" href="../styles/main.css">
 <link rel="stylesheet" href="../styles/responsive.css">
 <link rel="stylesheet" href="../styles/animations.css">
@@ -35,35 +45,168 @@
 
       <div id="dashboardContent" hidden style="display:none">
         <h1>Command Center</h1>
-        <p class="lead">The FS AI owner dashboard. Every number below comes from the real content on this site — nothing is invented.</p>
+        <p class="lead">The FS AI owner dashboard. Every number below comes from the real content on this site or the live Worker API — nothing is invented.</p>
         <p id="dashboardNote" class="muted"></p>
-        <div class="kpi-grid" id="kpiGrid"></div>
+        <p id="dashboardApiStatus" class="muted" aria-live="polite">Waiting for a verified server session…</p>
 
-        <div class="two-col">
-          <div class="card">
-            <h2>Articles per division</h2>
-            <table><thead><tr><th>Division</th><th>Articles</th><th>Share</th></tr></thead><tbody id="divisionCounts"></tbody></table>
-            <canvas id="divisionChart" height="320" role="img" aria-label="Bar chart of articles per division" style="margin-top:16px;"></canvas>
-            <ul class="clean" id="divisionChartFallback"></ul>
+        <!-- 1. Overview -->
+        <section class="card dashboard-section" data-section="overview" id="section-overview" aria-label="Overview">
+          <h2>Overview</h2>
+          <div class="kpi-grid" id="kpiGrid"></div>
+          <div class="two-col">
+            <div>
+              <h3>Articles per division</h3>
+              <table><thead><tr><th>Division</th><th>Articles</th><th>Share</th></tr></thead><tbody id="divisionCounts"></tbody></table>
+              <canvas id="divisionChart" height="320" role="img" aria-label="Bar chart of articles per division" style="margin-top:16px;"></canvas>
+              <ul class="clean" id="divisionChartFallback"></ul>
+            </div>
+            <div>
+              <h3>Latest articles</h3>
+              <ul class="clean" id="latestArticles"></ul>
+            </div>
           </div>
-          <div class="card">
-            <h2>Latest articles</h2>
-            <ul class="clean" id="latestArticles"></ul>
-          </div>
-        </div>
+        </section>
 
-        <div class="two-col" style="margin-top:24px;">
-          <div class="card">
-            <h2>AI agents (16)</h2>
-            <p class="muted">Publishing happens only after owner approval. Agents are listed as ready — their work is coordinated by the Business Manager.</p>
-            <ul class="clean" id="agentList"></ul>
+        <!-- 2. Content Management -->
+        <section class="card dashboard-section" data-section="content-management" id="section-content" aria-label="Content Management">
+          <h2>Content Management</h2>
+          <p class="muted">Articles from the live API (<code>GET /api/admin/articles</code>). Create, edit, publish, unpublish or delete. Edits store a revision first.</p>
+          <p id="contentStatus" aria-live="polite"></p>
+          <div class="field"><label for="contentFilter">Filter by status</label>
+            <select id="contentFilter"><option value="">All statuses</option><option value="published">Published</option><option value="draft">Draft</option><option value="pending_approval">Pending approval</option><option value="approved">Approved</option><option value="archived">Archived</option></select>
           </div>
-          <div class="card">
-            <h2>Accounts</h2>
-            <p class="muted">GitHub, YouTube and Pinterest accounts exist (links provided by the owner). None is connected via API yet — no token is stored and nothing is posted automatically. Everything else is pending — not claimed as created.</p>
-            <ul class="clean" id="accountList"></ul>
+          <div class="table-scroll"><table><thead><tr><th>Title</th><th>Division</th><th>Status</th><th>Published</th><th>Actions</th></tr></thead><tbody id="adminArticleList"></tbody></table></div>
+          <h3 id="articleFormTitle">New article</h3>
+          <form id="articleForm" class="form-grid">
+            <div class="field"><label for="articleTitle">Title</label><input id="articleTitle" type="text" required minlength="5" maxlength="200"></div>
+            <div class="field"><label for="articleDivision">Division (slug)</label><input id="articleDivision" type="text" required placeholder="automotive"></div>
+            <div class="field"><label for="articleCategory">Category</label><input id="articleCategory" type="text" placeholder="Guide"></div>
+            <div class="field"><label for="articleStatus">Status</label><select id="articleStatus"><option value="draft">Draft</option><option value="pending_approval">Pending approval</option><option value="approved">Approved</option><option value="published">Published</option></select></div>
+            <div class="field form-span"><label for="articleExcerpt">Excerpt</label><textarea id="articleExcerpt" rows="2"></textarea></div>
+            <div class="field form-span"><label for="articleBody">Body (HTML)</label><textarea id="articleBody" rows="6"></textarea></div>
+            <div class="form-span"><button class="btn btn-primary" type="submit">Save article</button>
+            <button class="btn btn-outline" type="button" id="articleFormCancel">Cancel edit</button></div>
+          </form>
+          <p id="articleFormStatus" aria-live="polite"></p>
+          <h3>Revisions</h3>
+          <p class="muted">Select “Revisions” on an article above to see its earlier versions.</p>
+          <ul class="clean" id="articleRevisions"></ul>
+        </section>
+
+        <!-- 3. Division Management -->
+        <section class="card dashboard-section" data-section="division-management" id="section-divisions" aria-label="Division Management">
+          <h2>Division Management</h2>
+          <p class="muted">Divisions from the live API. A division with articles cannot be deleted (the API answers 409) — move or delete its articles first.</p>
+          <p id="divisionStatus" aria-live="polite"></p>
+          <div class="table-scroll"><table><thead><tr><th>Name</th><th>Slug</th><th>Articles</th><th>Active</th><th>Actions</th></tr></thead><tbody id="adminDivisionList"></tbody></table></div>
+          <h3>New division</h3>
+          <form id="divisionForm" class="form-grid">
+            <div class="field"><label for="divisionName">Name</label><input id="divisionName" type="text" required minlength="2"></div>
+            <div class="field"><label for="divisionSlug">Slug (optional — derived from the name)</label><input id="divisionSlug" type="text" placeholder="new-division"></div>
+            <div class="field form-span"><label for="divisionDescription">Description</label><textarea id="divisionDescription" rows="2"></textarea></div>
+            <div class="form-span"><button class="btn btn-primary" type="submit">Add division</button></div>
+          </form>
+          <p id="divisionFormStatus" aria-live="polite"></p>
+        </section>
+
+        <!-- 4. Tools Management -->
+        <section class="card dashboard-section" data-section="tools-management" id="section-tools" aria-label="Tools Management">
+          <h2>Tools Management</h2>
+          <p class="muted">Tools from the live API (<code>GET /api/tools</code>). The 20 working tools on this site are the ones in the frontend catalogue; the API list is shown here as the server reports it.</p>
+          <p id="toolsStatus" aria-live="polite"></p>
+          <div class="table-scroll"><table><thead><tr><th>Tool</th><th>Slug</th><th>Division</th><th>Status</th></tr></thead><tbody id="adminToolList"></tbody></table></div>
+        </section>
+
+        <!-- 5. AI Agent Control -->
+        <section class="card dashboard-section" data-section="ai-agent-control" id="section-agents" aria-label="AI Agent Control">
+          <h2>AI Agent Control</h2>
+          <p class="muted">Publishing happens only after owner approval. No agent publishes, posts, spends money or connects an account on its own.</p>
+          <p><strong>Emergency Stop: <span id="emergencyStopState">Unknown</span></strong>
+          <button class="btn btn-danger" type="button" id="emergencyStopBtn">Turn Emergency Stop ON</button></p>
+          <p id="agentStatus" aria-live="polite"></p>
+          <ul class="clean" id="adminAgentList"></ul>
+          <h3>Agent logs</h3>
+          <p class="muted">Select “Logs” on an agent above to see its last 50 activity rows.</p>
+          <ul class="clean" id="agentLogs"></ul>
+        </section>
+
+        <!-- 6. Social Media Management -->
+        <section class="card dashboard-section" data-section="social-media" id="section-social" aria-label="Social Media Management">
+          <h2>Social Media Management</h2>
+          <p class="muted">Real account statuses. Facebook, WhatsApp Business and Business Email are paused by the owner — they are not created and there is no connect button here, because connecting them needs the owner’s sign-in on his own phone.</p>
+          <p id="socialStatus" aria-live="polite"></p>
+          <ul class="clean" id="socialAccountList"></ul>
+          <h3>Owner steps still needed</h3>
+          <ul class="clean" id="socialOwnerSteps"></ul>
+        </section>
+
+        <!-- 7. Newsletter Management -->
+        <section class="card dashboard-section" data-section="newsletter-management" id="section-newsletter" aria-label="Newsletter Management">
+          <h2>Newsletter Management</h2>
+          <p class="muted">Subscribers are stored as <strong>pending confirmation</strong> — confirmation emails cannot be sent yet because no free email sender is connected. This is not double opt-in.</p>
+          <p id="subscriberStatus" aria-live="polite"></p>
+          <div class="field"><label for="subscriberFilter">Filter by status</label>
+            <select id="subscriberFilter"><option value="">All</option><option value="pending">Pending</option><option value="subscribed">Subscribed</option><option value="unsubscribed">Unsubscribed</option></select>
           </div>
-        </div>
+          <div class="table-scroll"><table><thead><tr><th>Email</th><th>Name</th><th>Status</th><th>Subscribed</th><th>Actions</th></tr></thead><tbody id="subscriberList"></tbody></table></div>
+        </section>
+
+        <!-- 8. SEO Management -->
+        <section class="card dashboard-section" data-section="seo-management" id="section-seo" aria-label="SEO Management">
+          <h2>SEO Management</h2>
+          <p id="seoStatus" aria-live="polite"></p>
+          <ul class="clean" id="seoChecks"></ul>
+        </section>
+
+        <!-- 9. Analytics -->
+        <section class="card dashboard-section" data-section="analytics" id="section-analytics" aria-label="Analytics">
+          <h2>Analytics</h2>
+          <p class="muted">Honest numbers only. Analytics (GA4 G-JVSCJT2DHJ) is connected on every public page, but no GA4 report is wired into this dashboard yet — traffic is reported as “Data unavailable” rather than invented.</p>
+          <p id="analyticsStatus" aria-live="polite"></p>
+          <div class="kpi-grid" id="analyticsGrid"></div>
+        </section>
+
+        <!-- 10. Monetization -->
+        <section class="card dashboard-section" data-section="monetization" id="section-monetization" aria-label="Monetization">
+          <h2>Monetization</h2>
+          <p class="muted">Income is from ads only. No product or subscription is sold.</p>
+          <p id="monetizationStatus" aria-live="polite"></p>
+          <div class="kpi-grid" id="monetizationGrid"></div>
+        </section>
+
+        <!-- 11. Account Connections -->
+        <section class="card dashboard-section" data-section="account-connections" id="section-accounts" aria-label="Account Connections">
+          <h2>Account Connections</h2>
+          <p class="muted">The same real statuses as Social Media Management, from the live API (<code>GET /api/accounts</code>) with the site’s own verified facts for Search Console and Analytics.</p>
+          <ul class="clean" id="accountList"></ul>
+          <h3>AI agents (16)</h3>
+          <p class="muted">Agents are listed as ready — their work is coordinated by the Business Manager.</p>
+          <ul class="clean" id="agentList"></ul>
+        </section>
+
+        <!-- 12. Security -->
+        <section class="card dashboard-section" data-section="security" id="section-security" aria-label="Security">
+          <h2>Security</h2>
+          <p id="securityStatus" aria-live="polite"></p>
+          <ul class="clean" id="securityPanel"></ul>
+        </section>
+
+        <!-- 13. System Logs -->
+        <section class="card dashboard-section" data-section="system-logs" id="section-logs" aria-label="System Logs">
+          <h2>System Logs</h2>
+          <p class="muted">Latest agent activity, aggregated from each agent’s last 50 log rows (<code>GET /api/agents/:id/logs</code>).</p>
+          <p id="logsStatus" aria-live="polite"></p>
+          <ul class="clean" id="systemLogs"></ul>
+        </section>
+
+        <!-- 14. Backup and Recovery -->
+        <section class="card dashboard-section" data-section="backup-recovery" id="section-backup" aria-label="Backup and Recovery">
+          <h2>Backup and Recovery</h2>
+          <p class="muted">Downloads a JSON export of the CMS and agent data (<code>GET /api/admin/backup</code>). This is a JSON export, not a D1-native backup — restore is manual. See the <a href="https://github.com/mdalfahad841-code/fs-ai/blob/main/docs/BACKUP-RECOVERY.md" target="_blank" rel="noopener">Backup and Recovery guide (docs/BACKUP-RECOVERY.md)</a> for the restore steps.</p>
+          <p><button class="btn btn-primary" type="button" id="backupDownloadBtn">Download backup (JSON)</button></p>
+          <p id="backupStatus" aria-live="polite"></p>
+          <ul class="clean" id="backupCounts"></ul>
+        </section>
       </div>
 
       <p class="muted" style="margin-top:24px;"><a href="../index.html">← Back to home</a></p>

@@ -81,3 +81,74 @@ export function validateArticleInput(body) {
   if (body.excerpt && body.excerpt.length > 500) errors.push('excerpt must be under 500 characters.');
   return { ok: errors.length === 0, errors, clean: errors.length ? null : { title: sanitiseText(body.title, 200), excerpt: sanitiseText(body.excerpt || '', 500), division: body.division || null } };
 }
+
+// ---------------------------------------------------------------------------
+// CMS / admin helpers (added 2026-11-13 for the CMS, newsletter, divisions
+// admin, agent-control and backup work). Pure functions only — no I/O.
+// ---------------------------------------------------------------------------
+
+// Lowercase hyphenated slug from a title, e.g. "Hello World!" -> "hello-world".
+export function slugify(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120);
+}
+
+// True when the value parses as a real date/time (ISO 8601 expected).
+export function isValidIsoDateTime(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms);
+}
+
+// Current UTC time as an ISO string (lexicographically comparable with the
+// ISO timestamps stored in D1 TEXT columns).
+export function nowIso() {
+  return new Date().toISOString();
+}
+
+// Article statuses allowed by the articles.status CHECK constraint.
+export const ARTICLE_STATUSES = ['draft', 'pending_approval', 'approved', 'published', 'archived'];
+
+// Divisions whose single-article responses carry a general-information
+// disclaimer. Worded honestly: general information only, not advice.
+export const DISCLAIMER_DIVISIONS = new Set(['health-wellness', 'finance-money']);
+export const GENERAL_INFO_DISCLAIMER =
+  'General information only — not medical/financial advice. Consult a qualified professional.';
+
+export function disclaimerForDivision(slug) {
+  return DISCLAIMER_DIVISIONS.has(slug) ? GENERAL_INFO_DISCLAIMER : null;
+}
+
+// Newsletter subscriber statuses allowed by the CHECK constraint.
+export const SUBSCRIBER_STATUSES = ['pending', 'subscribed', 'unsubscribed'];
+
+// ---------------------------------------------------------------------------
+// Minimal D1 helpers. All queries go through prepared statements with bound
+// parameters — user input is never interpolated into SQL. Returns [] / null
+// when env.DB is not bound, so callers can answer 503 honestly.
+// ---------------------------------------------------------------------------
+
+export async function d1All(env, sql, params = []) {
+  if (!env || !env.DB) return null;
+  const stmt = env.DB.prepare(sql);
+  const bound = params.length ? stmt.bind(...params) : stmt;
+  const result = await bound.all();
+  return result.results || [];
+}
+
+export async function d1First(env, sql, params = []) {
+  const rows = await d1All(env, sql, params);
+  if (rows === null) return null;
+  return rows.length ? rows[0] : undefined;
+}
+
+export async function d1Run(env, sql, params = []) {
+  if (!env || !env.DB) return null;
+  const stmt = env.DB.prepare(sql);
+  const bound = params.length ? stmt.bind(...params) : stmt;
+  return bound.run();
+}

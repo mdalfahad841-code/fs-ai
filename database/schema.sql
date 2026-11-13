@@ -1,10 +1,16 @@
 -- ============================================================================
 -- FS AI — FAHAD SOMRAT AI
 -- Full database schema (Cloudflare D1 / SQLite)
--- 23 tables. Zero-cost, free tier only.
+-- 26 tables. Zero-cost, free tier only.
 --
 -- Apply order: schema.sql -> seed.sql
--- (or migrations/001_initial.sql -> 002_agents_accounts.sql -> seed.sql)
+-- (or migrations/001_initial.sql -> 002_agents_accounts.sql ->
+--  003_sessions.sql -> 004_cms_newsletter.sql -> seed.sql)
+-- This file is the complete reference: it includes the `sessions` table
+-- (auth code reads/writes it), the `rate_limits` table (the Worker rate
+-- limiter's D1 path), articles.publish_at, article_revisions and
+-- ai_agents.status, so a fresh deploy from schema.sql alone has a
+-- working login, rate limiting, CMS and scheduled publishing.
 -- Revenue seed is $0.00; analytics seed is "Data unavailable" — never fake
 -- traffic, clicks, revenue or account connections.
 -- ============================================================================
@@ -48,6 +54,22 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token   ON user_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_owner   ON user_sessions(owner_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
+
+-- ---------------------------------------------------------------------------
+-- 2b. sessions — owner login sessions used by the auth middleware
+--     (backend/middleware/auth.js). This is the table the live login flow
+--     actually reads/writes (token_hash, owner_email, expires_at); it
+--     used to live only in migrations/003_sessions.sql, so a fresh deploy
+--     from schema.sql alone broke login. user_sessions (above) is a
+--     separate, currently unused table — do not confuse the two.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    owner_email TEXT NOT NULL,
+    expires_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
 -- ---------------------------------------------------------------------------
 -- 3. website_settings — key/value site settings (single source of truth)
@@ -117,6 +139,7 @@ CREATE TABLE IF NOT EXISTS articles (
     featured_image  TEXT,
     reading_minutes INTEGER,
     published_at    TEXT,
+    publish_at      TEXT,              -- scheduled publish time (migration 004); NULL = publish immediately when approved
     created_by      INTEGER REFERENCES owner_accounts(id) ON DELETE SET NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -204,6 +227,8 @@ CREATE TABLE IF NOT EXISTS ai_agents (
     division_id     INTEGER REFERENCES business_divisions(id) ON DELETE SET NULL,
     description     TEXT,
     is_active       INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    status          TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'paused', 'disabled')),
     can_publish     INTEGER NOT NULL DEFAULT 0 CHECK (can_publish IN (0, 1)),
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -435,3 +460,33 @@ CREATE TABLE IF NOT EXISTS newsletter_subscribers (
 );
 CREATE INDEX IF NOT EXISTS idx_newsletter_email  ON newsletter_subscribers(email);
 CREATE INDEX IF NOT EXISTS idx_newsletter_status ON newsletter_subscribers(status);
+
+-- ---------------------------------------------------------------------------
+-- 24. rate_limits — Worker rate-limiter state (backend/middleware/
+--     rate-limit.js). Without this table the limiter falls back to a
+--     per-isolate in-memory map on every Worker, so limits do not survive
+--     across isolates. Key is "<client-ip>:<read|write>".
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS rate_limits (
+    key       TEXT PRIMARY KEY,
+    count     INTEGER NOT NULL DEFAULT 0,
+    reset_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_reset ON rate_limits(reset_at);
+
+-- ---------------------------------------------------------------------------
+-- 25. article_revisions — pre-edit copies of articles (migration 004).
+--     The CMS stores the current row here BEFORE every owner edit, so the
+--     edit history survives as the audit trail.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS article_revisions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id  INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    title       TEXT,
+    excerpt     TEXT,
+    body        TEXT,
+    status      TEXT,
+    revised_by  TEXT,
+    revised_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_article_revisions_article ON article_revisions(article_id);

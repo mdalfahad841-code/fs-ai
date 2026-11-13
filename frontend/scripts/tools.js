@@ -38,10 +38,18 @@
         { id: 'intervalKm', label: 'Service interval (km)', type: 'number', def: 10000, min: 0 },
         { id: 'intervalMonths', label: 'Service interval (months)', type: 'number', def: 6, min: 0 } ],
       calc: function (v) {
-        var e = positive(v.lastKm, 'Odometer') || positive(v.intervalKm, 'Service interval (km)') || positive(v.intervalMonths, 'Service interval (months)'); if (e) return e;
+        /* Odometer may be 0 (a brand-new car) — only negative / missing is invalid. */
+        if (isNaN(v.lastKm) || v.lastKm < 0) return err('Odometer must be 0 or more.');
+        var e = positive(v.intervalKm, 'Service interval (km)') || positive(v.intervalMonths, 'Service interval (months)'); if (e) return e;
         if (!v.lastDate) return err('Enter the last service date.');
         var d = new Date(v.lastDate + 'T00:00:00'); if (isNaN(d.getTime())) return err('Enter a valid last service date.');
-        var next = new Date(d); next.setMonth(next.getMonth() + Math.round(v.intervalMonths));
+        /* Clamp to the last day of the target month: 31 May + 6 months is
+           30 November, not 1 December (plain setMonth() overflows). */
+        var target = d.getMonth() + Math.round(v.intervalMonths);
+        var year = d.getFullYear() + Math.floor(target / 12);
+        var month = ((target % 12) + 12) % 12;
+        var lastDay = new Date(year, month + 1, 0).getDate();
+        var next = new Date(year, month, Math.min(d.getDate(), lastDay));
         return ok(['Next service by distance: ' + fmt(v.lastKm + v.intervalKm, 0) + ' km',
           'Next service by date: ' + next.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })],
           'Service is due at whichever comes first — the distance or the date.');
@@ -160,7 +168,10 @@
         var e = positive(v.distance, 'Distance') || positive(v.speed, 'Average speed'); if (e) return e;
         if (isNaN(v.consumption) || v.consumption < 0) return err('Enter a valid fuel consumption (0 or more).');
         var hours = v.distance / v.speed;
-        var h = Math.floor(hours), m = Math.round((hours - h) * 60);
+        /* Round to whole minutes first, then split — otherwise a fractional
+           hour that rounds to 60 minutes prints as e.g. "1h 60m". */
+        var totalMins = Math.round(hours * 60);
+        var h = Math.floor(totalMins / 60), m = totalMins % 60;
         return ok(['Travel time: ' + h + 'h ' + m + 'm', 'Fuel needed: ' + fmt(v.distance * v.consumption / 100) + ' litres'],
           'Time = distance ÷ speed. Add rest stops for long journeys.');
       } },
@@ -238,6 +249,9 @@
       calc: function (v) {
         if (isNaN(v.value)) return err('Enter a valid value.');
         if (v.category === 'Temperature') {
+          if (['C', 'F', 'K'].indexOf(v.from) === -1 || ['C', 'F', 'K'].indexOf(v.to) === -1) {
+            return err('Choose temperature units: C, F or K.');
+          }
           var toC = v.from === 'C' ? v.value : v.from === 'F' ? (v.value - 32) * 5 / 9 : v.value - 273.15;
           var outT = v.to === 'C' ? toC : v.to === 'F' ? toC * 9 / 5 + 32 : toC + 273.15;
           return ok([fmt(v.value) + ' °' + v.from + ' = ' + fmt(outT) + ' °' + v.to], 'Temperature conversion.');
@@ -282,7 +296,12 @@
           return ok(['Duration: ' + fmtH(total), 'Start ' + v.time1 + ' + ' + fmtH(total) + ' = ' + String(Math.floor((sum % 1440) / 60)).padStart(2, '0') + ':' + String(sum % 60).padStart(2, '0')],
             'Add: start time plus the duration.');
         }
-        return ok(['Duration: ' + fmtH(total)], v.mode === 'Subtract time' ? 'Subtract this duration from a time of your choice.' : '');
+        if (v.mode === 'Subtract time' && !isNaN(base)) {
+          var diff2 = ((base - total) % 1440 + 1440) % 1440;
+          return ok(['Duration: ' + fmtH(total), 'Start ' + v.time1 + ' − ' + fmtH(total) + ' = ' + String(Math.floor(diff2 / 60)).padStart(2, '0') + ':' + String(diff2 % 60).padStart(2, '0')],
+            'Subtract: start time minus the duration. A result before midnight wraps to the previous day.');
+        }
+        return ok(['Duration: ' + fmtH(total)], v.mode === 'Subtract time' ? 'Enter a start time (HH:MM) in the Start time field to subtract this duration from it.' : '');
       } }
   ];
 

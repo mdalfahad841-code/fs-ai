@@ -18,7 +18,7 @@
   "name": "fs-ai",
   "private": true,
   "scripts": {
-    "db:migrate": "wrangler d1 execute fs-ai-db --file=database/migrations/001_initial.sql && wrangler d1 execute fs-ai-db --file=database/migrations/002_agents_accounts.sql",
+    "db:migrate": "wrangler d1 execute fs-ai-db --file=database/migrations/001_initial.sql && wrangler d1 execute fs-ai-db --file=database/migrations/002_agents_accounts.sql && wrangler d1 execute fs-ai-db --file=database/migrations/003_sessions.sql && wrangler d1 execute fs-ai-db --file=database/migrations/004_cms_newsletter.sql",
     "db:schema": "wrangler d1 execute fs-ai-db --file=database/schema.sql",
     "db:seed": "wrangler d1 execute fs-ai-db --file=database/seed.sql",
     "deploy": "wrangler deploy --config config/wrangler.toml",

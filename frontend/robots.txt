@@ -1,0 +1,6 @@
+# FS AI — FAHAD SOMRAT AI
+# robots.txt — allow all crawlers; sitemap below.
+User-agent: *
+Allow: /
+
+Sitemap: https://fs-ai-5w5.pages.dev/sitemap.xml

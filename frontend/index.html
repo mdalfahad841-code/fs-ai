@@ -8,6 +8,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FS AI — One Platform. Multiple Possibilities.</title>
 <meta name="description" content="FS AI (FAHAD SOMRAT AI) by Fahad Somrat: 8 divisions, 25 free articles and 20 free tools. Explore more. Know more. Do more.">
+<link rel="canonical" href="https://fs-ai-5w5.pages.dev/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="FS AI">
+<meta property="og:title" content="FS AI — One Platform. Multiple Possibilities.">
+<meta property="og:description" content="FS AI (FAHAD SOMRAT AI) by Fahad Somrat: 8 divisions, 25 free articles and 20 free tools. Explore more. Know more. Do more.">
+<meta property="og:url" content="https://fs-ai-5w5.pages.dev/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="FS AI — One Platform. Multiple Possibilities.">
+<meta name="twitter:description" content="8 divisions, 25 free articles and 20 free tools. Explore more. Know more. Do more.">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"FS AI","alternateName":"FAHAD SOMRAT AI","url":"https://fs-ai-5w5.pages.dev/","description":"Zero-cost multi-niche platform: 8 divisions, 25 free articles and 20 free tools.","inLanguage":"en"}</script>
 <link rel="stylesheet" href="styles/main.css">
 <link rel="stylesheet" href="styles/responsive.css">
 <link rel="stylesheet" href="styles/animations.css">
@@ -79,13 +89,22 @@
     <div class="wrap">
       <div class="newsletter">
         <h2>Stay in the loop</h2>
-        <p>There is no automatic mailing list yet — this form opens your email app so you can ask to be added. No address is stored by this site.</p>
+        <p>Subscribe and your address is stored as <strong>pending confirmation</strong>. Confirmation emails cannot be sent yet: no free email sender is connected. This is not double opt-in — no confirmation email will arrive until a free sender is set up.</p>
         <form id="newsletterForm">
+          <label for="newsletterName" class="skip-link">Your name (optional)</label>
+          <input id="newsletterName" type="text" placeholder="Your name (optional)" autocomplete="name">
           <label for="newsletterEmail" class="skip-link">Your email address</label>
-          <input id="newsletterEmail" type="email" required placeholder="you@example.com">
-          <button class="btn btn-primary" type="submit">Email to subscribe</button>
+          <input id="newsletterEmail" type="email" required placeholder="you@example.com" autocomplete="email">
+          <label class="consent"><input id="newsletterConsent" type="checkbox" required> I agree to receive the FS AI newsletter at this address.</label>
+          <button class="btn btn-primary" type="submit">Subscribe</button>
         </form>
-        <p id="newsletterNote" class="muted"></p>
+        <p id="newsletterNote" class="muted" aria-live="polite"></p>
+        <form id="unsubscribeForm" class="unsubscribe-form">
+          <label for="unsubscribeEmail" class="skip-link">Email address to unsubscribe</label>
+          <input id="unsubscribeEmail" type="email" required placeholder="you@example.com to unsubscribe">
+          <button class="btn btn-outline" type="submit">Unsubscribe</button>
+        </form>
+        <p id="unsubscribeNote" class="muted" aria-live="polite"></p>
       </div>
     </div>
   </section>
@@ -93,7 +112,7 @@
   <section class="section" aria-label="Honest numbers">
     <div class="wrap">
       <div class="note-box">
-        <strong>Honest numbers:</strong> Revenue $0.00. Traffic: Data unavailable — no analytics account is connected yet, so no traffic, clicks or earnings are claimed anywhere on this site.
+        <strong>Honest numbers:</strong> Revenue $0.00. Traffic: Data unavailable — Analytics (GA4 G-JVSCJT2DHJ) is connected, but no GA4 report is wired into this page yet, so no traffic, clicks or earnings are claimed anywhere on this site.
       </div>
     </div>
   </section>
@@ -107,15 +126,6 @@
 <script src="scripts/charts.js"></script>
 <script src="scripts/animations.js"></script>
 <script src="scripts/tools.js"></script>
-<script>
-document.getElementById('newsletterForm').addEventListener('submit', function (e) {
-  e.preventDefault();
-  var email = document.getElementById('newsletterEmail').value.trim();
-  if (!email) return;
-  var note = document.getElementById('newsletterNote');
-  note.textContent = 'Opening your email app to subscribe ' + email + '. Nothing is stored by this site.';
-  window.location.href = 'mailto:mdalfahad841@gmail.com?subject=' + encodeURIComponent('FS AI newsletter subscribe') + '&body=' + encodeURIComponent('Please add ' + email + ' to the FS AI newsletter.');
-});
-</script>
+<script src="scripts/newsletter.js"></script>
 </body>
 </html>

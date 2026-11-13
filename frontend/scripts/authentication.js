@@ -42,7 +42,22 @@
       sessionStorage.removeItem(LEGACY_DEMO_KEY);
     } catch (e) {}
   }
+  /* GATE TIMING: #dashboardContent is revealed ONLY after a stored server
+     session has been confirmed by GET /api/auth/me (or by a fresh server
+     sign-in in this tab). Until then the content stays hidden and the page
+     shows "Verifying session…". A 401 clears the session; any other failure
+     keeps the content hidden too — an unverified stored session never
+     reveals the dashboard. */
+  var sessionVerified = false;
   function isSignedIn() { return !!getSession(); }
+  function isSessionVerified() { return sessionVerified; }
+  function setVerified(v) {
+    sessionVerified = v;
+    if (window.FSAI) window.FSAI.sessionVerified = v;
+    if (v) {
+      try { window.dispatchEvent(new CustomEvent('fsai:session-verified')); } catch (e) {}
+    }
+  }
 
   /* --- Real server API (Worker + D1) --- */
   function apiLogin(email, password) {
@@ -97,6 +112,7 @@
           mode: 'server',
           at: new Date().toISOString(),
         });
+        setVerified(true); // a fresh server sign-in is itself a confirmation
         return { ok: true, user: { email: String(email).trim().toLowerCase(), name: 'Owner' } };
       }
       // A real server answer (wrong password, not configured, bad input)
@@ -108,17 +124,23 @@
     });
   }
 
-  /* Validate a stored server session against GET /api/auth/me. */
+  /* Validate a stored server session against GET /api/auth/me. Only a
+     successful /me response marks the session verified (and reveals the
+     dashboard). A 401 clears the session; anything else keeps the
+     dashboard hidden until the server confirms the session. */
   function validateSession() {
     var s = getSession();
-    if (!s || s.mode !== 'server' || !s.token) return Promise.resolve(s);
+    if (!s || s.mode !== 'server' || !s.token) { setVerified(false); return Promise.resolve(s); }
     return apiMe(s.token).then(function (r) {
-      if (r.ok) return getSession();
+      if (r.ok) { setVerified(true); return getSession(); }
+      setVerified(false);
       if (r.status === 401) { clearSession(); return null; }
       return getSession();
     }).catch(function () {
       // API unreachable right now: keep the stored session, but mark it
-      // unverified so the UI never presents it as a checked server login.
+      // unverified so the UI never presents it as a checked server login,
+      // and keep the dashboard hidden until the server can confirm it.
+      setVerified(false);
       var kept = getSession();
       if (kept) { kept.unverified = true; setSession(kept); }
       return kept;
@@ -127,6 +149,7 @@
 
   function signOut() {
     var s = getSession();
+    setVerified(false);
     var done = function () { clearSession(); };
     if (s && s.mode === 'server' && s.token) {
       return apiLogout(s.token).then(done, done);
@@ -136,8 +159,10 @@
   }
 
   window.FSAI = window.FSAI || {};
+  window.FSAI.sessionVerified = false;
   window.FSAI.auth = {
     isSignedIn: isSignedIn,
+    isSessionVerified: isSessionVerified,
     getSession: getSession,
     signIn: signIn,
     signOut: signOut,
@@ -156,9 +181,10 @@
     if (submitBtn) submitBtn.textContent = 'Sign in';
     function render() {
       var s = getSession();
-      // Gate the dashboard: only a real server session reveals it.
-      // Demo sessions and no session keep it hidden.
-      var serverSignedIn = !!(s && s.mode === 'server' && s.token);
+      // Gate the dashboard: only a server session CONFIRMED by /api/auth/me
+      // (or a fresh server sign-in) reveals it. A stored-but-unverified
+      // session, a demo session, or no session keeps it hidden.
+      var serverSignedIn = !!(s && s.mode === 'server' && s.token && sessionVerified);
       var content = document.getElementById('dashboardContent');
       if (content) {
         content.hidden = !serverSignedIn;
@@ -168,9 +194,11 @@
         if (!s) {
           status.textContent = 'Not signed in. Sign in with the owner account (real server login). If the server cannot be reached, a clearly-labelled demo sign-in is offered instead.';
         } else if (s.mode === 'server') {
-          status.textContent = s.unverified
-            ? 'Signed in as Owner (' + s.email + ') — server session stored, but the server could not be reached to verify it just now.'
-            : 'Signed in as Owner (' + s.email + ') via the FS AI server.' + (s.expiresAt ? ' Session expires ' + s.expiresAt + '.' : '');
+          status.textContent = !sessionVerified
+            ? 'Verifying session…'
+            : s.unverified
+              ? 'Signed in as Owner (' + s.email + ') — server session stored, but the server could not be reached to verify it just now.'
+              : 'Signed in as Owner (' + s.email + ') via the FS AI server.' + (s.expiresAt ? ' Session expires ' + s.expiresAt + '.' : '');
         } else {
           status.textContent = 'Signed in (DEMO — not a real server login) as ' + s.name + ' (' + s.email + '). Demo only, this tab only; nothing was sent to the server.';
         }

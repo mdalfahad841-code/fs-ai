@@ -29,9 +29,18 @@ export async function publishApproved(item, env) {
   };
   if (env && env.DB) {
     try {
+      // Real schema: articles has division_id (FK to business_divisions)
+      // and published_at — NOT `division` / `publishedAt`.
+      const divisionSlug = item.divisionSlug || item.division || record.division;
+      const { results } = await env.DB.prepare(
+        'SELECT id FROM business_divisions WHERE slug = ? LIMIT 1'
+      ).bind(divisionSlug).all();
+      const division = results && results[0];
+      if (!division) return { ok: false, error: `Unknown division: ${divisionSlug}` };
       await env.DB.prepare(
-        'INSERT INTO articles (slug, title, division, excerpt, status, publishedAt) VALUES (?, ?, ?, ?, ?, ?)'
-      ).bind(record.slug, record.title, record.division, record.excerpt, 'published', record.publishedAt).run();
+        'INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(division.id, record.title, record.slug, record.excerpt,
+        item.body || '', 'FS AI', 'published', 0, record.publishedAt).run();
       return { ok: true, published: record, source: 'd1' };
     } catch (err) {
       return { ok: false, error: `D1 publish failed: ${err.message}` };

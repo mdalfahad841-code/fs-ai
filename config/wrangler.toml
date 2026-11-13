@@ -34,3 +34,10 @@ TOTAL_REVENUE_USD = "0.00"
 
 # [observability]
 # enabled = true
+
+# Cron triggers (free tier): one hourly check that publishes ONLY
+# owner-approved articles whose publish_at has passed. It runs no other
+# automation and never publishes drafts or unapproved content. The
+# Emergency Stop flag skips the run entirely.
+[triggers]
+crons = ["0 * * * *"]

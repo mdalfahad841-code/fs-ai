@@ -13,9 +13,9 @@
  * "not configured" for writes — they never fabricate data. See
  * backend/worker.js and backend/routes/*.js.
  */
-import worker, { BRAND, BRAND_FULL, TAGLINE } from '../backend/worker.js';
+import worker, { BRAND, BRAND_FULL, TAGLINE, scheduled, publishDueArticles } from '../backend/worker.js';
 
-export { BRAND, BRAND_FULL, TAGLINE };
+export { BRAND, BRAND_FULL, TAGLINE, scheduled, publishDueArticles };
 export default worker;
 
 /**
@@ -30,4 +30,17 @@ export async function handleRequest(request, env = {}, ctx) {
     passThroughOnException: () => {},
   };
   return worker.fetch(request, env, context);
+}
+
+/**
+ * Call the Worker's scheduled handler (hourly cron in production).
+ * env defaults to {} (no D1 binding), so the due-publish check honestly
+ * reports that no database is bound instead of publishing anything.
+ */
+export async function handleScheduled(event, env = {}, ctx) {
+  const context = ctx || {
+    waitUntil: () => {},
+    passThroughOnException: () => {},
+  };
+  return scheduled(event, env, context);
 }

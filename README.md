@@ -110,13 +110,22 @@ npx wrangler d1 create fs-ai-db
 
 # Put the returned database_id into config/wrangler.toml
 
-# Option A — fresh database: apply the full schema, then the seed
+# Option A — fresh database: apply the full schema, then the seed.
+# schema.sql is complete: it includes the sessions table (owner login),
+# the rate_limits table, articles.publish_at, article_revisions and
+# ai_agents.status. Do NOT apply migration 004 after schema.sql — its
+# ALTER TABLE steps are already in the schema and would fail as
+# duplicate columns.
 npx wrangler d1 execute fs-ai-db --file=database/schema.sql
 npx wrangler d1 execute fs-ai-db --file=database/seed.sql
 
-# Option B — incremental: apply migrations in order, then the seed
+# Option B — incremental: apply migrations in order, then the seed.
+# Use this path for a database that was built from the OLD schema.sql
+# (before the sessions table was added to it), e.g. the live database.
 npx wrangler d1 execute fs-ai-db --file=database/migrations/001_initial.sql
 npx wrangler d1 execute fs-ai-db --file=database/migrations/002_agents_accounts.sql
+npx wrangler d1 execute fs-ai-db --file=database/migrations/003_sessions.sql
+npx wrangler d1 execute fs-ai-db --file=database/migrations/004_cms_newsletter.sql
 npx wrangler d1 execute fs-ai-db --file=database/seed.sql
 ```
 
@@ -192,10 +201,12 @@ fs-ai/
 │   ├── wrangler.toml            # Workers/Pages + D1 binding (free tier)
 │   └── deployment-config.json   # Deploy steps, limits, env placeholders
 ├── database/
-│   ├── schema.sql               # Full schema — 23 tables
+│   ├── schema.sql               # Full schema — 26 tables (incl. sessions, rate_limits)
 │   ├── migrations/
 │   │   ├── 001_initial.sql
-│   │   └── 002_agents_accounts.sql
+│   │   ├── 002_agents_accounts.sql
+│   │   ├── 003_sessions.sql
+│   │   └── 004_cms_newsletter.sql
 │   └── seed.sql                 # 8 divisions, 16 agents, 25 articles, 20 tools
 ├── public/
 │   ├── favicon.svg

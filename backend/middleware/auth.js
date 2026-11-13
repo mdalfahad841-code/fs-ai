@@ -35,14 +35,12 @@ export async function requireOwner(request, env) {
       return { ok: false, response: jsonError('Session check failed', 500) };
     }
   }
-  // No D1 bound: fall back to a signed comparison against the env secret.
-  // The token itself is never stored; only its hash is compared.
-  const expected = await hashSessionToken(env.SESSION_SECRET, env.SESSION_SECRET);
-  const provided = await hashSessionToken(token, env.SESSION_SECRET);
-  if (provided !== expected && token !== env.SESSION_SECRET) {
-    return { ok: false, response: jsonError('Invalid session', 401) };
-  }
-  return { ok: true, owner: 'owner' };
+  // No D1 bound: the session cannot be verified against a stored hash,
+  // so no token is accepted. The raw SESSION_SECRET is NEVER accepted as
+  // a Bearer token (removed 2026-11-13: it would let anyone holding the
+  // secret act as owner without a real login, and the live Worker always
+  // has D1 bound anyway).
+  return { ok: false, response: jsonError('Invalid session', 401) };
 }
 
 export async function createSession(env, ownerEmail, password) {
