@@ -114,6 +114,16 @@
   };
 
   function divisionById(id) { return DIVISIONS.find(function (d) { return d.id === id; }) || null; }
+  /* Division-page state for a ?division= slug: 'all' when no slug is given,
+     'division' when it matches a real division, 'not-found' when it matches
+     none. The page uses this so an unknown slug shows "Division not found"
+     instead of silently falling back to the all-divisions view. */
+  function divisionPageState(id) {
+    if (!id) return { status: 'all', division: null, slug: null };
+    var div = divisionById(id);
+    if (!div) return { status: 'not-found', division: null, slug: id };
+    return { status: 'division', division: div, slug: id };
+  }
   function articlesByDivision(name) { return ARTICLES.filter(function (a) { return a.division === name; }); }
   function articleById(id) { return ARTICLES.find(function (a) { return a.id === Number(id); }) || null; }
   function countsByDivision() {
@@ -135,7 +145,7 @@
   window.FSAI = {
     SITE: SITE, DIVISIONS: DIVISIONS, ARTICLES: ARTICLES, TOOLS: TOOLS, AGENTS: AGENTS, ACCOUNTS: ACCOUNTS,
     DISCLAIMER: GENERAL_DISCLAIMER,
-    divisionById: divisionById, articlesByDivision: articlesByDivision, articleById: articleById,
+    divisionById: divisionById, divisionPageState: divisionPageState, articlesByDivision: articlesByDivision, articleById: articleById,
     countsByDivision: countsByDivision, formatDate: formatDate, esc: esc
   };
 

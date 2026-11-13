@@ -131,11 +131,16 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
     assert.ok(body.articles.every((a) => a.division && a.division_name));
   });
 
-  it('seeded article rows are returned even with short bodies', async () => {
+  it('seeded articles carry the full bodies', async () => {
     const res = await handleRequest(req('GET', '/api/articles'), env);
     const articles = (await res.json()).articles;
+    assert.equal(articles.length, 25);
+    for (const a of articles) {
+      const words = a.body.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+      assert.ok(words > 400, `article ${a.id} body is ${words} words, expected full text > 400`);
+    }
     const first = articles.find((a) => a.id === 1);
-    assert.ok(first.body.length < 500, 'seed bodies are short summaries, not full text');
+    assert.ok(first.body.length > 4000, 'seed body is the full article text, not a summary');
     assert.equal(res.status, 200);
   });
 

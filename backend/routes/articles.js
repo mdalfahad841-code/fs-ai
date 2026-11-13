@@ -13,10 +13,10 @@ import {
 // Column names follow database/schema.sql + migration 004: articles has
 // division_id (FK to business_divisions) and published_at / publish_at —
 // NOT the `division` / `publishedAt` columns this file used before.
-// NOTE on seed bodies: D1 article rows may carry short (49-65 word)
-// bodies while the frontend ships the full 641-959 word text. The API
-// still returns the D1 row as-is — never 404s or hides it for a short
-// body — and the frontend falls back to its own full body by slug.
+// NOTE on seed bodies: the seed now carries the full article bodies
+// (619-899 words each, matching the frontend text). The API still returns
+// the D1 row as-is — never 404s or hides it for a short body — and the
+// frontend falls back to its own full body by slug.
 // ORDER BY ... NULLS LAST: live rows seeded before published_at existed
 // have NULL dates and must sort after dated rows, not first.
 const PUBLIC_LIST_SQL =

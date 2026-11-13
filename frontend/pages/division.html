@@ -36,7 +36,7 @@
       <div class="grid" id="divisionGrid"></div>
       <h2 id="divisionArticlesHeading" style="margin-top:40px;">Articles</h2>
       <div class="grid" id="divisionArticles"></div>
-      <p class="muted"><a href="../index.html">← Back to home</a></p>
+      <p class="muted" id="divisionBackLinks"><a href="../index.html">← Back to home</a></p>
     </div>
   </section>
 </main>
@@ -48,11 +48,26 @@
 document.addEventListener('DOMContentLoaded', function () {
   var params = new URLSearchParams(window.location.search);
   var id = params.get('division');
-  var div = id ? window.FSAI.divisionById(id) : null;
+  var state = window.FSAI.divisionPageState(id);
+  var div = state.division;
   var title = document.getElementById('divisionTitle');
   var intro = document.getElementById('divisionIntro');
   var grid = document.getElementById('divisionArticles');
   var heading = document.getElementById('divisionArticlesHeading');
+  var all = document.getElementById('divisionGrid');
+  var back = document.getElementById('divisionBackLinks');
+  if (state.status === 'not-found') {
+    /* Unknown slug: say so plainly instead of showing the generic
+       all-divisions view as if nothing was wrong. */
+    document.title = 'Division not found — FS AI';
+    title.textContent = 'Division not found';
+    intro.textContent = 'There is no division called "' + state.slug + '". Please check the spelling, or browse all divisions.';
+    heading.style.display = 'none';
+    grid.innerHTML = '';
+    if (all) all.style.display = 'none';
+    if (back) back.innerHTML = '<a href="division.html">← Browse all divisions</a> · <a href="../index.html">← Back to home</a>';
+    return;
+  }
   if (div) {
     document.title = div.name + ' — FS AI';
     var divCanonical = 'https://fs-ai-5w5.pages.dev/pages/division.html?division=' + div.id;
@@ -80,7 +95,6 @@ document.addEventListener('DOMContentLoaded', function () {
       grid.innerHTML = '<p>No articles in this division yet.</p>';
     }
     /* Hide the full grid when a single division is open, keep the choice visible. */
-    var all = document.getElementById('divisionGrid');
     if (all) all.style.display = 'none';
   } else {
     grid.innerHTML = '';
