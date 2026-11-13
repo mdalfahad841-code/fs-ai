@@ -435,7 +435,15 @@
       }).join('');
       list.addEventListener('click', function (e) {
         var btn = e.target.closest('[data-tool]');
-        if (btn) showTool(btn.getAttribute('data-tool'));
+        if (btn) {
+          showTool(btn.getAttribute('data-tool'));
+          // Mobile: the form is now above the list, but the tap happened
+          // down in the list — bring the form into view right away.
+          var title = document.getElementById('toolTitle');
+          if (title && title.scrollIntoView) {
+            try { title.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e2) { title.scrollIntoView(); }
+          }
+        }
       });
     }
     var params = new URLSearchParams(window.location.search);

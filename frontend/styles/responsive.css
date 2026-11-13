@@ -3,6 +3,9 @@
   .hero-inner { grid-template-columns: 1fr; }
   .hero-ring { display: none; }
   .tool-layout { grid-template-columns: 1fr; }
+  /* Mobile: the form sits below 20 tool chips and is invisible without a
+     long scroll — show the workspace first, the tool list second. */
+  .tool-layout > div:last-child { order: -1; }
   .tool-list { flex-direction: row; flex-wrap: wrap; }
   .tool-chip { flex: 1 1 45%; }
   .two-col { grid-template-columns: 1fr; }
