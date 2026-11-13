@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FS AI — Owner Login Setup (runs on your phone only)</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0b1220; color: #e6edf3; margin: 0; padding: 20px; }
+  .card { background: #111c33; border: 1px solid #1f3a5f; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  h2 { font-size: 16px; margin: 0 0 10px; color: #7cc4ff; }
+  p { font-size: 14px; line-height: 1.5; color: #b8c4d4; }
+  input { width: 100%; box-sizing: border-box; padding: 12px; border-radius: 8px; border: 1px solid #2a4a73; background: #0b1526; color: #fff; font-size: 16px; margin: 8px 0; }
+  button { background: #2563eb; color: #fff; border: 0; border-radius: 8px; padding: 12px 18px; font-size: 15px; margin: 4px 4px 4px 0; }
+  button.copy { background: #0e7490; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 74px; padding: 10px; border-radius: 8px; border: 1px solid #2a4a73; background: #0b1526; color: #7ee787; font-size: 12px; word-break: break-all; }
+  .warn { background: #3a2a00; border: 1px solid #8a6d00; color: #ffd479; border-radius: 8px; padding: 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>FS AI — Owner Login Setup</h1>
+<p>Use this page if you forgot the Command Center password: make a new hash below, then replace the OWNER_PASSWORD_HASH variable in the Cloudflare Worker settings (Settings → Runtime variables and secrets) and save. Your old password stops working as soon as the Worker redeploys.</p>
+<p><a href="dashboard.html">← Back to Command Center</a></p>
+<p>Everything on this page runs in <b>your phone's browser only</b>. Your password is never sent anywhere — the hash is made on your device. Send only the <b>hash</b> (not the password) to Faru, or paste it straight into the Worker settings yourself.</p>
+
+<div class="card">
+  <h2>1. SESSION_SECRET (random code)</h2>
+  <p>Tap Generate, then copy the code. This goes into the Worker as a variable named <b>SESSION_SECRET</b>.</p>
+  <button id="genSecret">Generate SESSION_SECRET</button>
+  <button class="copy" onclick="copyOut('secretOut')">Copy</button>
+  <textarea id="secretOut" readonly placeholder="Your random secret will appear here"></textarea>
+</div>
+
+<div class="card">
+  <h2>2. OWNER_PASSWORD_HASH (from your password)</h2>
+  <p>Type the password you want for the Command Center login, then tap Generate hash. The output goes into the Worker as a variable named <b>OWNER_PASSWORD_HASH</b>.</p>
+  <input type="password" id="pw" placeholder="Choose a strong dashboard password" autocomplete="new-password">
+  <input type="password" id="pw2" placeholder="Type it again to confirm" autocomplete="new-password">
+  <button id="genHash">Generate hash</button>
+  <button class="copy" onclick="copyOut('hashOut')">Copy hash</button>
+  <textarea id="hashOut" readonly placeholder="pbkdf2$100000$..."></textarea>
+  <p id="msg"></p>
+</div>
+
+<div class="warn">Keep the password written down somewhere safe (your own notebook / password manager). If you lose it, login can be reset only by making a new hash and replacing the variable.</div>
+
+<script>
+function bufToHex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function randomHex(bytes) {
+  const a = new Uint8Array(bytes);
+  crypto.getRandomValues(a);
+  return bufToHex(a.buffer);
+}
+document.getElementById('genSecret').onclick = () => {
+  document.getElementById('secretOut').value = randomHex(32);
+};
+document.getElementById('genHash').onclick = async () => {
+  const pw = document.getElementById('pw').value;
+  const pw2 = document.getElementById('pw2').value;
+  const msg = document.getElementById('msg');
+  if (!pw || pw.length < 8) { msg.textContent = 'Password at least 8 characters hote hobe.'; msg.style.color = '#ff9d9d'; return; }
+  if (pw !== pw2) { msg.textContent = 'Duitar password miltese na — abar likho.'; msg.style.color = '#ff9d9d'; return; }
+  msg.textContent = 'Hash banano hocche...';
+  msg.style.color = '#7cc4ff';
+  const enc = new TextEncoder();
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, baseKey, 256);
+  document.getElementById('hashOut').value = 'pbkdf2$100000$' + bufToHex(salt.buffer) + '$' + bufToHex(bits);
+  msg.textContent = 'Hoise. Hash ta copy koro — password ta kothao pathaio na.';
+  msg.style.color = '#7ee787';
+};
+function copyOut(id) {
+  const el = document.getElementById(id);
+  el.select();
+  navigator.clipboard.writeText(el.value).catch(() => document.execCommand('copy'));
+}
+</script>
+</body>
+</html>

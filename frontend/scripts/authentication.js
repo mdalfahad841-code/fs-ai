@@ -7,7 +7,12 @@
    DEMO FALLBACK ONLY: if the API cannot be reached at all (fetch throws),
    the old session-only demo sign-in (demo@fs-ai.local, this tab only) is
    offered instead — and the UI always labels it DEMO, never a real login.
-   A server 401/503 is a real rejection and does NOT fall back to demo. */
+   A server 401/503 is a real rejection and does NOT fall back to demo.
+   DASHBOARD GATING: the dashboard content (#dashboardContent) is shown
+   ONLY while a stored session with mode === 'server' (a real server
+   token) is active. A demo-mode session, or no session, keeps the
+   dashboard content hidden — the page then shows only the login card,
+   with a clear DEMO note when a demo session is active. */
 (function () {
   'use strict';
   var API_BASE = 'https://fs-ai.mdalfahad841.workers.dev';
@@ -72,7 +77,7 @@
   function demoSignInLocal(email, password) {
     if (!email || !password) return { ok: false, error: 'Enter an email and a password.' };
     if (String(email).trim().toLowerCase() !== DEMO_USER.email) {
-      return { ok: false, error: 'Server unreachable — demo sign-in only works with the demo email shown on the sign-in form.' };
+      return { ok: false, error: 'Server unreachable — demo sign-in only works with the demo email demo@fs-ai.local.' };
     }
     if (password.length < 8) return { ok: false, error: 'Password must be at least 8 characters.' };
     setSession({ email: DEMO_USER.email, name: DEMO_USER.name, token: null, expiresAt: null, mode: 'demo', at: new Date().toISOString() });
@@ -151,6 +156,14 @@
     if (submitBtn) submitBtn.textContent = 'Sign in';
     function render() {
       var s = getSession();
+      // Gate the dashboard: only a real server session reveals it.
+      // Demo sessions and no session keep it hidden.
+      var serverSignedIn = !!(s && s.mode === 'server' && s.token);
+      var content = document.getElementById('dashboardContent');
+      if (content) {
+        content.hidden = !serverSignedIn;
+        content.style.display = serverSignedIn ? '' : 'none';
+      }
       if (status) {
         if (!s) {
           status.textContent = 'Not signed in. Sign in with the owner account (real server login). If the server cannot be reached, a clearly-labelled demo sign-in is offered instead.';
