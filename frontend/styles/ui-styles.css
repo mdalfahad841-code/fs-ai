@@ -1,0 +1,304 @@
+/* FS AI — UI design styles (Strategy Fox reel, 2026-11-14).
+   "STOP USING AI DESIGNS AND USE THESE INSTEAD" — all 10 styles, one brand.
+   Shared palette (--blue / --navy / --amber) and type come from main.css;
+   this sheet only layers the styles on top. It is loaded LAST, after
+   main/responsive/animations/themes, so it never edits those files.
+   Rules that change layout are desktop-only (min-width: 901px). Nothing in
+   this file adds width at phone sizes, and no JavaScript, backend, database
+   or API behaviour is touched. Honest labels ($0.00, "Data unavailable")
+   are text, not CSS, and are untouched. */
+
+/* ---- shared style variables (theme-aware) ---- */
+:root {
+  --neu-dark: rgba(0,0,0,.45);
+  --neu-dark-soft: rgba(0,0,0,.28);
+  --neu-light: rgba(255,255,255,.07);
+  --clay-shadow: 0 18px 34px rgba(0,0,0,.35), inset 0 2px 0 rgba(255,255,255,.08), inset 0 -6px 14px rgba(0,0,0,.18);
+  --ink: #0b0f16;
+  --chrome: linear-gradient(180deg, #ffffff 0%, #c9d6e8 38%, #7d94b5 50%, #e8f0fa 62%, #9db4d4 100%);
+}
+:root[data-theme="light"] {
+  --neu-dark: rgba(16,32,56,.18);
+  --neu-dark-soft: rgba(16,32,56,.10);
+  --neu-light: rgba(255,255,255,.9);
+  --clay-shadow: 0 16px 30px rgba(16,32,56,.16), inset 0 2px 0 rgba(255,255,255,.95), inset 0 -6px 14px rgba(16,32,56,.06);
+  --ink: #10141c;
+}
+
+/* ============ 1. BENTO GRID — home grids + dashboard KPI tiles ============
+   Tiles of different sizes on one neat board. Desktop only; at phone and
+   tablet widths the grids fall back to the single-column / auto-fill rules
+   in responsive.css, so nothing overflows at 320px. */
+@media (min-width: 901px) {
+  #divisionGrid, #articleGrid, #toolGridHome, #divisionArticles {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  #divisionGrid > :first-child, #articleGrid > :first-child,
+  #toolGridHome > :first-child, #divisionArticles > :first-child {
+    grid-column: span 2;
+  }
+  .kpi-grid { grid-template-columns: repeat(4, 1fr); }
+  .kpi-grid > :first-child { grid-column: span 2; }
+}
+
+/* ============ 2. GLASSMORPHISM — frosted panels floating over colour ======
+   Sticky header, hero ring, search input, and the dashboard sign-in card. */
+.site-header {
+  background: linear-gradient(180deg, rgba(21,34,56,.72), rgba(16,20,28,.62));
+  backdrop-filter: blur(14px) saturate(1.3);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  border-bottom: 1px solid rgba(255,255,255,.09);
+}
+:root[data-theme="light"] .site-header {
+  background: linear-gradient(180deg, rgba(255,255,255,.78), rgba(244,247,251,.66));
+  border-bottom: 1px solid rgba(16,32,56,.08);
+}
+.hero-ring {
+  background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.22), rgba(40,120,255,.10) 55%, rgba(40,120,255,.04));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,.22);
+}
+.search-box input {
+  background: rgba(26,34,51,.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,.14);
+}
+:root[data-theme="light"] .search-box input {
+  background: rgba(255,255,255,.65);
+  border-color: rgba(16,32,56,.14);
+}
+#loginCard {
+  background: linear-gradient(160deg, rgba(33,44,66,.72), rgba(16,20,28,.58));
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  border: 1px solid rgba(255,255,255,.14);
+}
+:root[data-theme="light"] #loginCard {
+  background: linear-gradient(160deg, rgba(255,255,255,.82), rgba(238,242,248,.70));
+  border-color: rgba(16,32,56,.12);
+}
+
+/* ============ 3. NEUMORPHISM — soft shapes pressed into the surface ======
+   Tool chips (raised, pressed when active) and form fields / tool results
+   (soft inset). Covers the public tools page and every dashboard form. */
+.tool-chip {
+  border-radius: 14px;
+  border: 1px solid transparent;
+  box-shadow: 6px 6px 12px var(--neu-dark), -6px -6px 12px var(--neu-light);
+}
+.tool-chip:hover {
+  box-shadow: 3px 3px 8px var(--neu-dark), -3px -3px 8px var(--neu-light);
+}
+.tool-chip.active {
+  background: var(--surface-2);
+  border-color: var(--blue);
+  box-shadow: inset 5px 5px 10px var(--neu-dark), inset -5px -5px 10px var(--neu-light);
+}
+.field input, .field select, .field textarea {
+  background: var(--surface);
+  border: 1px solid transparent;
+  box-shadow: inset 5px 5px 10px var(--neu-dark-soft), inset -5px -5px 10px var(--neu-light);
+}
+.tool-result {
+  border: 1px solid transparent;
+  box-shadow: 8px 8px 16px var(--neu-dark), -8px -8px 16px var(--neu-light);
+}
+
+/* ============ 4. CLAYMORPHISM — puffy, rounded, almost touchable =========
+   Tool cards on the home page and KPI tiles in the Command Center
+   (Overview, Analytics, Monetization, Autonomy). */
+.tool-card, .kpi-card {
+  border-radius: 26px;
+  border: 1px solid rgba(255,255,255,.07);
+  box-shadow: var(--clay-shadow);
+}
+.tool-card:hover, .kpi-card:hover { transform: translateY(-3px); }
+:root[data-theme="light"] .tool-card, :root[data-theme="light"] .kpi-card {
+  border-color: rgba(16,32,56,.06);
+}
+
+/* ============ 5. NEO-BRUTALISM — thick borders, flat colour, nothing polite
+   Article/division tags, status pills everywhere (dashboard + autonomy),
+   and the honest-numbers box on the home page. */
+.card-tag {
+  display: inline-block;
+  background: var(--blue);
+  color: #fff;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  padding: 2px 8px;
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.status-pill {
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  box-shadow: 2px 2px 0 rgba(0,0,0,.5);
+}
+:root[data-theme="light"] .status-pill { box-shadow: 2px 2px 0 rgba(16,32,56,.35); }
+.note-box {
+  background: var(--amber);
+  color: var(--ink);
+  border: 3px solid var(--ink);
+  border-radius: 6px;
+  box-shadow: 5px 5px 0 var(--ink);
+}
+.note-box strong { color: var(--ink); }
+
+/* ============ 6. MINIMALISM — white space does the talking ================
+   Article reading pages: no card chrome, generous leading, hairline rules.
+   Dashboard tables and log lists: flat rows, hairline separators, air. */
+.article-body { background: transparent; }
+.article-body p { line-height: 1.85; }
+.article-body h1 { letter-spacing: -.01em; }
+.article-body h2, .article-full h2 {
+  font-size: 24px;
+  margin: 36px 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.table-scroll th, .table-scroll td { padding: 12px 14px; }
+.dashboard-section ul.clean li { padding: 14px 2px; }
+
+/* ============ 7. RETRO Y2K — chrome, gradients, a little bit of 2003 =====
+   Restrained accent only: the FS brand mark and the hero headline/numbers.
+   Never a whole page. Light theme keeps the headline readable in blue. */
+.brand-mark {
+  background: var(--chrome);
+  color: #10141c;
+  border: 1px solid rgba(255,255,255,.5);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 2px 6px rgba(0,0,0,.35);
+}
+.hero h1 span, .hero-ring strong {
+  background: var(--chrome);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+:root[data-theme="light"] .hero h1 span {
+  background: none;
+  color: var(--blue);
+  -webkit-text-fill-color: var(--blue);
+}
+:root[data-theme="light"] .hero-ring strong {
+  background: none;
+  color: #10141c;
+  -webkit-text-fill-color: #10141c;
+}
+
+/* ============ 8. LIQUID GLASS — depth and refraction, like water ==========
+   Hero (slow drifting refraction blobs), newsletter panel, and the
+   Autonomous Operations section in the Command Center. */
+.hero::before, .hero::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(60px);
+}
+.hero::before {
+  width: 420px; height: 420px; left: -120px; top: -80px;
+  background: radial-gradient(circle, rgba(40,120,255,.5), transparent 65%);
+  animation: liquidDrift 18s ease-in-out infinite alternate;
+}
+.hero::after {
+  width: 360px; height: 360px; right: -100px; bottom: -140px;
+  background: radial-gradient(circle, rgba(245,166,35,.28), transparent 65%);
+  animation: liquidDrift 22s ease-in-out infinite alternate-reverse;
+}
+@keyframes liquidDrift {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(60px, 40px) scale(1.15); }
+}
+.newsletter {
+  background: linear-gradient(150deg, rgba(40,120,255,.20), rgba(21,34,56,.55) 55%, rgba(40,120,255,.12));
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 18px 40px rgba(0,0,0,.30);
+}
+:root[data-theme="light"] .newsletter {
+  background: linear-gradient(150deg, rgba(40,120,255,.14), rgba(255,255,255,.75) 55%, rgba(40,120,255,.10));
+  border-color: rgba(16,32,56,.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 18px 40px rgba(16,32,56,.14);
+}
+#section-autonomy {
+  background: linear-gradient(155deg, rgba(40,120,255,.16), rgba(26,34,51,.60) 55%, rgba(25,195,125,.10));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 16px 36px rgba(0,0,0,.28);
+}
+:root[data-theme="light"] #section-autonomy {
+  background: linear-gradient(155deg, rgba(40,120,255,.12), rgba(255,255,255,.80) 55%, rgba(25,195,125,.10));
+  border-color: rgba(16,32,56,.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 16px 36px rgba(16,32,56,.14);
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero::before, .hero::after { animation: none; }
+}
+
+/* ============ 9. FLAT DESIGN — no shadows, no textures ====================
+   Icons, labels and table headers: just colour and shape. */
+.div-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 56px; height: 56px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  font-size: 30px;
+  line-height: 1;
+}
+th { background: var(--surface-2); }
+.kpi-label {
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.site-footer { box-shadow: none; }
+
+/* ============ 10. SKEUOMORPHISM — buttons that look like real buttons =====
+   Theme/nav toggles (chunky physical switches), the red Emergency Stop
+   alarm buttons in the Command Center, and the owner sign-in button. */
+.theme-toggle, .nav-toggle {
+  background: linear-gradient(180deg, #2b3a55, #1a2233 55%, #141b29);
+  border: 1px solid #0b0f16;
+  border-bottom-width: 3px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 2px 4px rgba(0,0,0,.4);
+}
+.theme-toggle:active, .nav-toggle:active {
+  transform: translateY(2px);
+  border-bottom-width: 1px;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,.5);
+}
+:root[data-theme="light"] .theme-toggle, :root[data-theme="light"] .nav-toggle {
+  background: linear-gradient(180deg, #ffffff, #dbe2ec 60%, #c6d2e2);
+  border-color: #9db0c8;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.95), 0 2px 4px rgba(16,32,56,.25);
+}
+#emergencyStopBtn, #autonomyStopBtn {
+  background: linear-gradient(180deg, #ff7a7a, #e5484d 55%, #b3272e);
+  color: #fff;
+  border: 1px solid #7d1a1e;
+  border-bottom-width: 4px;
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 3px 8px rgba(0,0,0,.45);
+  text-shadow: 0 1px 1px rgba(0,0,0,.35);
+}
+#emergencyStopBtn:active, #autonomyStopBtn:active {
+  transform: translateY(3px);
+  border-bottom-width: 1px;
+}
+#demoLoginForm .btn-primary {
+  background: linear-gradient(180deg, #3f8cff, #2878ff 55%, #1c5fd6);
+  border: 1px solid #123a7d;
+  border-bottom-width: 3px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 3px 8px rgba(0,0,0,.4);
+}
+#demoLoginForm .btn-primary:active {
+  transform: translateY(2px);
+  border-bottom-width: 1px;
+}
