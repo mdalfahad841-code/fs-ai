@@ -1,9 +1,10 @@
 /**
  * FS AI — Analytics route. Honest by design.
- * No analytics account is connected yet, so traffic is always reported as
- * "Data unavailable" and revenue as 0. Never fabricate visitors, clicks
- * or earnings. When a real analytics source is connected, this route reads
- * it; until then it reports the honest zero/unknown state.
+ * The GA4 tag (G-JVSCJT2DHJ) is on every public page, but no GA4 report is
+ * wired in yet and no AdSense account is connected, so traffic is always
+ * reported as "Data unavailable" and revenue as 0. Never fabricate
+ * visitors, clicks or earnings. When a real analytics source is connected,
+ * this route reads it; until then it reports the honest zero/unknown state.
  *
  * D1 table is website_analytics (database/schema.sql) — NOT
  * `analytics_snapshots`. Columns: recorded_date, source, page_views,
@@ -23,7 +24,7 @@ export const HONEST_ANALYTICS = {
   revenueFormatted: '$0.00',
   analyticsConnected: false,
   adsenseConnected: false,
-  note: 'No analytics or AdSense account is connected yet. These figures are honest zeros/unknowns, not estimates.',
+  note: 'GA4 tag G-JVSCJT2DHJ is on every public page, but no GA4 report is wired in yet and no AdSense account is connected. These figures are honest zeros/unknowns, not estimates.',
 };
 
 export async function handleAnalytics(request, env) {

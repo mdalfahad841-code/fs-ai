@@ -94,7 +94,17 @@
 
   function accountRow(a) {
     var name = a.platform || a.name;
-    var link = a.url ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.handle || name) + '</a>' : '<span class="muted">Not yet created or connected</span>';
+    var link;
+    if (a.url) {
+      link = '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.handle || name) + '</a>';
+    } else if (a.status === 'Verified' || a.status === 'Connected' || a.status === 'active') {
+      /* Verified/Connected rows have no URL to link — show the status
+         itself, never "Not yet created or connected", which contradicts
+         the pill next to it (seen on the owner's phone, 2026-11-14). */
+      link = '<span class="muted">' + esc(a.status) + '</span>';
+    } else {
+      link = '<span class="muted">Not yet created or connected</span>';
+    }
     return '<li><strong>' + esc(name) + '</strong> — ' + link + ' ' + statusPill(a.status) +
       (a.detail ? '<br><span class="muted">' + esc(a.detail) + '</span>' : '') + '</li>';
   }
