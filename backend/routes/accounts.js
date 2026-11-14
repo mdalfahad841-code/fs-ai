@@ -1,8 +1,16 @@
 /**
  * FS AI — Accounts route. Real account statuses only.
- * Created/opened: GitHub, YouTube, Pinterest.
- * Pending (never claimed as created/connected): Facebook, WhatsApp Business,
- * Business Email, Search Console, Analytics, AdSense, Affiliate.
+ * Created/opened (profile exists — NOT an account connection and NOT a
+ * publishing API connection): GitHub, YouTube, Pinterest.
+ * Search Console: Google Property Verified by the owner 2026-11-11
+ * (verification file google745797e85dfd966e.html is served from this site).
+ * No Search Console API connection exists.
+ * Analytics: Tracking Connected — Reporting API Not Connected. The GA4 tag
+ * (G-JVSCJT2DHJ) is on every public page, but no GA4 Reporting API
+ * (googleapis / analyticsdata) is used anywhere in this repo, so traffic
+ * stays "Data unavailable". Never label Analytics fully connected.
+ * Pending owner authorization (never claimed as created/connected):
+ * Facebook, WhatsApp Business, Business Email, AdSense, Affiliate.
  *
  * D1 table is monetization_accounts (database/schema.sql) — NOT `accounts`
  * — and it has NO `detail` column (the notes live in `notes`). Status
@@ -14,14 +22,14 @@
 import { jsonOk, jsonError, d1All, d1Run, nowIso } from '../middleware/validation.js';
 
 export const ACCOUNTS = [
-  { id: 'github', platform: 'GitHub', handle: 'mdalfahad841-code', url: 'https://github.com/mdalfahad841-code/fs-ai', status: 'created', detail: 'Public repository fs-ai exists; no code uploaded yet at last check.' },
-  { id: 'youtube', platform: 'YouTube', handle: '@FSAI-e5f', url: 'https://www.youtube.com/@FSAI-e5f', status: 'created', detail: 'Channel handle @FSAI-e5f.' },
-  { id: 'pinterest', platform: 'Pinterest', handle: 'watchwithf', url: 'https://www.pinterest.com/watchwithf/', status: 'created', detail: 'Profile watchwithf.' },
-  { id: 'facebook', platform: 'Facebook', handle: null, url: null, status: 'pending', detail: 'Not created yet.' },
-  { id: 'whatsapp-business', platform: 'WhatsApp Business', handle: null, url: null, status: 'pending', detail: 'Not created yet.' },
-  { id: 'business-email', platform: 'Business Email', handle: null, url: null, status: 'pending', detail: 'Not created yet.' },
-  { id: 'search-console', platform: 'Search Console', handle: null, url: null, status: 'pending', detail: 'Not connected yet.' },
-  { id: 'analytics', platform: 'Analytics', handle: null, url: null, status: 'pending', detail: 'Not connected yet — traffic is "Data unavailable".' },
+  { id: 'github', platform: 'GitHub', handle: 'mdalfahad841-code', url: 'https://github.com/mdalfahad841-code/fs-ai', status: 'created', detail: 'Public repository fs-ai exists (profile exists — verified live 2026-11-14). No publishing API is connected.' },
+  { id: 'youtube', platform: 'YouTube', handle: '@FSAI-e5f', url: 'https://www.youtube.com/@FSAI-e5f', status: 'created', detail: 'Profile exists (handle @FSAI-e5f — verified live 2026-11-14). No account connection or publishing API is connected.' },
+  { id: 'pinterest', platform: 'Pinterest', handle: 'watchwithf', url: 'https://www.pinterest.com/watchwithf/', status: 'created', detail: 'Profile exists (watchwithf — verified live 2026-11-14). No account connection or publishing API is connected.' },
+  { id: 'facebook', platform: 'Facebook', handle: null, url: null, status: 'pending', detail: 'Pending owner authorization — not created yet.' },
+  { id: 'whatsapp-business', platform: 'WhatsApp Business', handle: null, url: null, status: 'pending', detail: 'Pending owner authorization — not created yet.' },
+  { id: 'business-email', platform: 'Business Email', handle: null, url: null, status: 'pending', detail: 'Pending owner authorization — not created yet.' },
+  { id: 'search-console', platform: 'Search Console', handle: 'Verified 2026-11-11', url: null, status: 'verified', detail: 'Google Property Verified by the owner 2026-11-11 (URL-prefix + verification file google745797e85dfd966e.html served from this site). Verification File Installed. No Search Console API connection exists.' },
+  { id: 'analytics', platform: 'Analytics', handle: 'GA4 G-JVSCJT2DHJ', url: null, status: 'Tracking Connected — Reporting API Not Connected', detail: 'Tracking Connected — Reporting API Not Connected: GA4 tag G-JVSCJT2DHJ is on every public page, but no GA4 Reporting API is connected, so traffic is "Data unavailable".' },
   { id: 'adsense', platform: 'AdSense', handle: null, url: null, status: 'pending', detail: 'Not connected yet — revenue is $0.00.' },
   { id: 'affiliate', platform: 'Affiliate', handle: null, url: null, status: 'pending', detail: 'Not started yet.' },
 ];

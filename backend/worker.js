@@ -20,6 +20,8 @@ import { handleAuth } from './routes/auth.js';
 import { handleAdminArticles, publishDueArticles } from './routes/admin-articles.js';
 import { handleNewsletter, handleAdminSubscribers } from './routes/newsletter.js';
 import { handleAdmin } from './routes/admin.js';
+import { handleAutonomy } from './routes/orchestrator.js';
+import { runDailyWorkflow, runWeeklyWorkflow } from './routes/scheduler.js';
 import { requireOwner } from './middleware/auth.js';
 import { rateLimit } from './middleware/rate-limit.js';
 import { jsonError, jsonOk } from './middleware/validation.js';
@@ -119,6 +121,14 @@ async function route(request, env, ctx) {
     return handleAccounts(request, env, ctx);
   }
 
+  // Autonomous Operations (owner-only). Auth is enforced here, before
+  // the orchestrator runs — handleAutonomy assumes a verified owner.
+  if (path.startsWith('/api/autonomy')) {
+    const auth = await requireOwner(request, env);
+    if (!auth.ok) return auth.response;
+    return handleAutonomy(request, env, ctx, auth);
+  }
+
   if (path === '/' && method === 'GET') {
     return jsonOk({ brand: BRAND_FULL, tagline: TAGLINE, api: '/api/health' });
   }
@@ -145,10 +155,23 @@ export default {
   // Hourly cron (see [triggers] in config/wrangler.toml): publish only the
   // owner-approved articles whose publish_at has passed. Nothing else is
   // ever auto-published, and the Emergency Stop skips the run entirely.
+  // At 00:00 UTC the daily workflow also runs, and on Sundays at 00:00 UTC
+  // the weekly workflow runs too. The 00:00 UTC guard is required:
+  // runDailyWorkflow writes one daily_reports row per invocation, so
+  // calling it on every hourly tick would write 24 rows/day.
   async scheduled(event, env, ctx) {
     try {
       const result = await publishDueArticles(env);
       console.log('FS AI scheduled publish:', JSON.stringify(result));
+      const now = new Date(event && event.scheduledTime ? event.scheduledTime : Date.now());
+      if (now.getUTCHours() === 0) {
+        const daily = await runDailyWorkflow(env);
+        console.log('FS AI scheduled daily workflow:', JSON.stringify(daily));
+        if (now.getUTCDay() === 0) {
+          const weekly = await runWeeklyWorkflow(env);
+          console.log('FS AI scheduled weekly workflow:', JSON.stringify(weekly));
+        }
+      }
       return result;
     } catch (err) {
       console.error('FS AI scheduled publish error:', err);

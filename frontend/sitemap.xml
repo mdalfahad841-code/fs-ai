@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <!-- Home -->
   <url><loc>https://fs-ai-5w5.pages.dev/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
-  <!-- Divisions -->
   <url><loc>https://fs-ai-5w5.pages.dev/pages/division.html</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/division.html?division=automotive</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/division.html?division=ai-technology</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
@@ -12,7 +10,6 @@
   <url><loc>https://fs-ai-5w5.pages.dev/pages/division.html?division=digital-tools</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/division.html?division=health-wellness</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/division.html?division=education-learning</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
-  <!-- Articles (25) — real routes: /pages/article.html?id=N -->
   <url><loc>https://fs-ai-5w5.pages.dev/pages/article.html?id=1</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/article.html?id=2</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/article.html?id=3</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
@@ -38,7 +35,6 @@
   <url><loc>https://fs-ai-5w5.pages.dev/pages/article.html?id=23</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/article.html?id=24</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/article.html?id=25</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
-  <!-- Tools (20) — real routes: /pages/tools.html?tool=<frontend id> -->
   <url><loc>https://fs-ai-5w5.pages.dev/pages/tools.html</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/tools.html?tool=fuel-cost</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/tools.html?tool=mileage</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
@@ -60,7 +56,8 @@
   <url><loc>https://fs-ai-5w5.pages.dev/pages/tools.html?tool=date-calculator</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/tools.html?tool=unit-converter</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/tools.html?tool=time-calculator</loc><changefreq>monthly</changefreq><priority>0.6</priority></url>
-  <!-- Legal -->
   <url><loc>https://fs-ai-5w5.pages.dev/pages/privacy.html</loc><changefreq>weekly</changefreq><priority>0.3</priority></url>
   <url><loc>https://fs-ai-5w5.pages.dev/pages/terms.html</loc><changefreq>weekly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://fs-ai-5w5.pages.dev/pages/about.html</loc><changefreq>monthly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://fs-ai-5w5.pages.dev/pages/contact.html</loc><changefreq>monthly</changefreq><priority>0.3</priority></url>
 </urlset>

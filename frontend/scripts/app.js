@@ -100,7 +100,7 @@
     { name: 'WhatsApp Business', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },
     { name: 'Business Email', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },
     { name: 'Search Console', handle: 'Verified 2026-11-11', url: null, status: 'Verified', detail: 'Verified — verification file google745797e85dfd966e.html is served from this site.' },
-    { name: 'Analytics', handle: 'GA4 G-JVSCJT2DHJ', url: null, status: 'Connected', detail: 'Connected — GA4 tag G-JVSCJT2DHJ is on every public page. Traffic is reported as "Data unavailable" until a real GA4 report is wired in; no numbers are claimed.' },
+    { name: 'Analytics', handle: 'GA4 G-JVSCJT2DHJ', url: null, status: 'Tracking Connected — Reporting API Not Connected', detail: 'Tracking Connected — GA4 tag G-JVSCJT2DHJ is live on every public page; no GA4 Reporting API is connected. Traffic is reported as "Data unavailable" until a real GA4 report is wired in; no numbers are claimed.' },
     { name: 'AdSense', handle: null, url: null, status: 'Pending', detail: 'Not applied for yet — revenue is $0.00.' },
     { name: 'Affiliate', handle: null, url: null, status: 'Pending', detail: 'Not started yet.' }
   ];
@@ -173,7 +173,7 @@
     var inPages = window.location.pathname.indexOf('/pages/') !== -1;
     var prefix = inPages ? '../' : '';
     var existing = ACCOUNTS.filter(function (a) { return a.status === 'Exists'; });
-    var verified = ACCOUNTS.filter(function (a) { return a.status === 'Verified' || a.status === 'Connected'; });
+    var verified = ACCOUNTS.filter(function (a) { return a.status === 'Verified' || a.status === 'Connected' || a.status.indexOf('Tracking Connected') === 0; });
     var paused = ACCOUNTS.filter(function (a) { return a.status === 'Paused'; });
     var pending = ACCOUNTS.filter(function (a) { return a.status === 'Pending'; });
     var links = existing.map(function (a) {
@@ -183,13 +183,13 @@
       '<div><h3>FS AI</h3><p>FAHAD SOMRAT AI — One Platform. Multiple Possibilities.</p>' +
       '<p>Founded by Fahad Somrat. Zero-cost platform: no paid services, no fake numbers.</p></div>' +
       '<div><h3>Divisions</h3><p>' + DIVISIONS.map(function (d) { return '<a href="' + prefix + 'pages/division.html?division=' + d.id + '">' + esc(d.name) + '</a>'; }).join(' · ') + '</p>' +
-      '<p><a href="' + prefix + 'pages/privacy.html">Privacy</a> · <a href="' + prefix + 'pages/terms.html">Terms</a></p></div>' +
+      '<p><a href="' + prefix + 'pages/about.html">About</a> · <a href="' + prefix + 'pages/contact.html">Contact</a> · <a href="' + prefix + 'pages/privacy.html">Privacy</a> · <a href="' + prefix + 'pages/terms.html">Terms</a></p></div>' +
       '<div><h3>Accounts</h3><p>' + links + '</p>' +
       '<p>Verified / connected: ' + verified.map(function (a) { return esc(a.name) + (a.handle ? ' (' + esc(a.handle) + ')' : ''); }).join(', ') + '.</p>' +
       '<p>Paused by owner — not created yet: ' + paused.map(function (a) { return esc(a.name); }).join(', ') + '.</p>' +
       '<p>Pending: ' + pending.map(function (a) { return esc(a.name); }).join(', ') + '.</p></div>' +
       '<div><h3>Honest numbers</h3><p>Revenue: $0.00<br>Traffic: Data unavailable<br>Articles: ' + ARTICLES.length + ' · Divisions: ' + DIVISIONS.length + ' · Tools: ' + TOOLS.length + '</p></div>' +
-      '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. No personal or family content is used on this platform. <a href="' + prefix + 'pages/privacy.html">Privacy</a> · <a href="' + prefix + 'pages/terms.html">Terms</a></p></div></footer>';
+      '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. No personal or family content is used on this platform. <a href="' + prefix + 'pages/about.html">About</a> · <a href="' + prefix + 'pages/contact.html">Contact</a> · <a href="' + prefix + 'pages/privacy.html">Privacy</a> · <a href="' + prefix + 'pages/terms.html">Terms</a></p></div></footer>';
   }
 
   function articleCard(a) {

@@ -60,10 +60,12 @@ touches the live database unless you point it at one — do not.
 ## How to download the export (from the Command Center)
 
 1. Sign in to the Command Center as the owner.
-2. Open the Backup section (or, until the dashboard button exists, call
-   the endpoint directly from the browser console while signed in):
+2. Open the Backup section and tap **Download backup (JSON)** — the button
+   downloads the export as `fs-ai-backup-YYYY-MM-DD.json`. (If the button is
+   ever unavailable, call the endpoint directly from the browser console
+   while signed in:
    `fetch('/api/admin/backup', { headers: { Authorization: 'Bearer ' + token } }).then(r => r.json())`
-   where `token` is the owner session token stored by the dashboard.
+   where `token` is the owner session token stored by the dashboard.)
 3. Save the returned JSON to a file, e.g. `fs-ai-backup-YYYY-MM-DD.json`,
    and keep a copy somewhere other than this machine.
 

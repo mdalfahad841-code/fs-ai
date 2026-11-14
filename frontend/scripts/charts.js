@@ -19,16 +19,26 @@
     canvas.width = cssW * dpr; canvas.height = cssH * dpr;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cssW, cssH);
-    var padL = 150, padB = 28, padT = 12;
+    var padL = cssW < 480 ? 96 : 150, padB = 28, padT = 12;
     var barH = (cssH - padT - padB) / data.length - 10;
     var barW = cssW - padL - 24;
     ctx.font = '13px Arial, sans-serif';
+    /* Narrow screens (e.g. 320px phones): the fixed 150px label gutter
+       clipped long division names on the left and the caption on the
+       right. Shorten any label that does not fit the gutter, and shorten
+       the caption to fit the canvas. */
+    function fitText(text, maxW) {
+      if (ctx.measureText(text).width <= maxW) return text;
+      var t = text;
+      while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+      return t + '…';
+    }
     data.forEach(function (d, i) {
       var y = padT + i * (barH + 10);
       var w = Math.max(4, (d.count / max) * barW);
       ctx.fillStyle = labelColor;
       ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-      ctx.fillText(d.division, padL - 10, y + barH / 2);
+      ctx.fillText(fitText(d.division, padL - 12), padL - 10, y + barH / 2);
       ctx.fillStyle = '#2878FF';
       ctx.fillRect(padL, y, w, barH);
       ctx.fillStyle = labelColor;
@@ -37,7 +47,9 @@
     });
     ctx.fillStyle = captionColor;
     ctx.textAlign = 'left';
-    ctx.fillText('Articles per division — ' + F.ARTICLES.length + ' articles total', padL, cssH - 8);
+    var caption = 'Articles per division — ' + F.ARTICLES.length + ' articles total';
+    if (ctx.measureText(caption).width > cssW - 16) caption = F.ARTICLES.length + ' articles total';
+    ctx.fillText(caption, 8, cssH - 8);
     return true;
   }
   window.FSAI = window.FSAI || {};

@@ -455,6 +455,7 @@ CREATE TABLE IF NOT EXISTS newsletter_subscribers (
                     CHECK (status IN ('pending', 'subscribed', 'unsubscribed')),
     subscribed_at   TEXT,
     unsubscribed_at TEXT,
+    consent_given_at TEXT,          -- ISO time consent was given (migration 007)
     source          TEXT,              -- e.g. 'website', 'import'
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -23,6 +23,14 @@ binding = "DB"
 database_name = "fs-ai-db"
 database_id = "5043ece5-a853-433c-95f1-ee15a12b6b56"
 
+# Workers AI binding (the code reads env.AI). Free tier: 10,000
+# Neurons/day, resets 00:00 UTC, no card — on Workers Free, requests
+# above the cap fail (error 3036) instead of billing anything. The LLM
+# layer (backend/llm/) enforces a 9,000-Neuron/day cap in code before
+# calling, and falls back to Groq/Gemini only when their keys exist.
+[ai]
+binding = "AI"
+
 [vars]
 SITE_NAME = "FS AI"
 SITE_FULL_NAME = "FAHAD SOMRAT AI"

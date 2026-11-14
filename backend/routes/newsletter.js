@@ -3,7 +3,9 @@
  *
  * Public:
  *   POST /api/newsletter/subscribe    { email, name?, consent } — consent
- *         must be true; new addresses are stored with status 'pending'.
+ *         must be true; new addresses are stored with status 'pending' and
+ *         the consent time in consent_given_at (migration 007 — consent is
+ *         now persisted, not just enforced at intake).
  *         Double opt-in confirmation emails are NOT sent: no free email
  *         sender is connected, so 'pending' is the honest stored state.
  *         A duplicate email answers 200 { subscribed: false } without
@@ -47,10 +49,10 @@ async function subscribe(request, env) {
   if (existing) {
     if (existing.status === 'unsubscribed') {
       // Re-subscribe: back to pending (no confirmation email is sent —
-      // no email sender is connected).
+      // no email sender is connected). Consent is re-recorded.
       await d1Run(env,
-        'UPDATE newsletter_subscribers SET status = ?, subscribed_at = ?, unsubscribed_at = NULL WHERE email = ?',
-        ['pending', nowIso(), email]);
+        'UPDATE newsletter_subscribers SET status = ?, subscribed_at = ?, consent_given_at = ?, unsubscribed_at = NULL WHERE email = ?',
+        ['pending', nowIso(), nowIso(), email]);
       return jsonOk({
         subscribed: true, status: 'pending',
         message: 'Subscribed. Your subscription is stored as pending — confirmation emails are not sent yet because no email sender is connected.',
@@ -59,8 +61,8 @@ async function subscribe(request, env) {
     return jsonOk({ subscribed: false, message: 'This email is already subscribed.' });
   }
   await d1Run(env,
-    'INSERT INTO newsletter_subscribers (email, name, status, subscribed_at, source, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [email, sanitiseText(body?.name || '', 100) || null, 'pending', nowIso(), 'website', nowIso()]);
+    'INSERT INTO newsletter_subscribers (email, name, status, subscribed_at, consent_given_at, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [email, sanitiseText(body?.name || '', 100) || null, 'pending', nowIso(), nowIso(), 'website', nowIso()]);
   return jsonOk({
     subscribed: true, status: 'pending',
     message: 'Subscribed. Your subscription is stored as pending — confirmation emails are not sent yet because no email sender is connected.',

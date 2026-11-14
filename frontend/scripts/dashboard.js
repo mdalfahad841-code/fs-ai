@@ -50,7 +50,9 @@
     var lower = s.toLowerCase();
     var cls = 'status-pill';
     if (['active', 'connected', 'verified', 'exists', 'created', 'published', 'subscribed'].indexOf(lower) !== -1) cls += ' ok';
+    else if (lower.indexOf('tracking connected') === 0) cls += ' ok'; /* "Tracking Connected — Reporting API Not Connected" is a live-tag state, not a failure. */
     else if (['pending', 'paused', 'draft', 'pending_approval', 'approved'].indexOf(lower) !== -1) cls += ' pending';
+    else if (lower.indexOf('pending owner authorization') === 0) cls += ' pending';
     else if (['failed', 'disabled', 'rejected', 'suspended', 'archived', 'unsubscribed'].indexOf(lower) !== -1) cls += ' failed';
     return '<span class="' + cls + '">' + esc(s || 'Unknown') + '</span>';
   }
@@ -67,17 +69,21 @@
   }
 
   /* Verified facts the site itself proves (not API claims): Search Console
-     is verified (verification file is served from this site) and GA4
-     G-JVSCJT2DHJ is tagged on every public page. Facebook / WhatsApp
-     Business / Business Email are paused by the owner. The API fallback
-     still lists Search Console + Analytics as pending, so the dashboard
-     corrects those two rows and labels the correction. */
+     is Google Property Verified by the owner 2026-11-11 (verification file
+     is served from this site — "Verification File Installed", not an API
+     connection) and GA4 G-JVSCJT2DHJ is tagged on every public page.
+     Analytics is therefore exactly "Tracking Connected — Reporting API Not
+     Connected" — never "Connected" alone, because no GA4 Reporting API is
+     used anywhere in this repo. Facebook / WhatsApp Business / Business
+     Email are paused by the owner and pending his authorization. The live
+     API (D1) still lists Search Console + Analytics as pending, so the
+     dashboard corrects those two rows and labels the correction. */
   var ACCOUNT_OVERRIDES = {
-    'search-console': { status: 'Verified', detail: 'Verified — verification file google745797e85dfd966e.html is served from this site. (API still reports pending; corrected here from the site itself.)' },
-    'analytics': { status: 'Connected', detail: 'Connected — GA4 tag G-JVSCJT2DHJ is on every public page. Traffic is "Data unavailable" until a real GA4 report is wired in. (API still reports pending; corrected here from the site itself.)' },
-    'facebook': { status: 'Paused', detail: 'Paused by owner — not created yet. Owner sign-in on his own phone is needed to create it.' },
-    'whatsapp-business': { status: 'Paused', detail: 'Paused by owner — not created yet. Owner sign-in on his own phone is needed to create it.' },
-    'business-email': { status: 'Paused', detail: 'Paused by owner — not created yet. Owner sign-in / provider choice is needed.' },
+    'search-console': { status: 'Verified', detail: 'Google Property Verified by the owner 2026-11-11 (URL-prefix + verification file google745797e85dfd966e.html served from this site). Verification File Installed — no Search Console API connection exists. (API still reports pending; corrected here from the site itself.)' },
+    'analytics': { status: 'Tracking Connected — Reporting API Not Connected', detail: 'Tracking Connected — Reporting API Not Connected: GA4 tag G-JVSCJT2DHJ is on every public page, but no GA4 Reporting API is connected, so traffic is "Data unavailable". (API still reports pending; corrected here from the site itself.)' },
+    'facebook': { status: 'Paused', detail: 'Pending owner authorization — Paused by owner, not created yet. Owner sign-in on his own phone is needed to create it.' },
+    'whatsapp-business': { status: 'Paused', detail: 'Pending owner authorization — Paused by owner, not created yet. Owner sign-in on his own phone is needed to create it.' },
+    'business-email': { status: 'Paused', detail: 'Pending owner authorization — Paused by owner, not created yet. Owner sign-in / provider choice is needed.' },
   };
 
   function applyAccountOverrides(accounts) {
@@ -97,10 +103,13 @@
     var link;
     if (a.url) {
       link = '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.handle || name) + '</a>';
-    } else if (a.status === 'Verified' || a.status === 'Connected' || a.status === 'active') {
+    } else if (a.status === 'Verified' || a.status === 'Connected' || a.status === 'active' ||
+      String(a.status).indexOf('Tracking Connected') === 0) {
       /* Verified/Connected rows have no URL to link — show the status
          itself, never "Not yet created or connected", which contradicts
-         the pill next to it (seen on the owner's phone, 2026-11-14). */
+         the pill next to it (seen on the owner's phone, 2026-11-14).
+         "Tracking Connected — Reporting API Not Connected" counts here:
+         the GA4 tag is live, so the row must never claim nothing exists. */
       link = '<span class="muted">' + esc(a.status) + '</span>';
     } else {
       link = '<span class="muted">Not yet created or connected</span>';
@@ -123,7 +132,7 @@
         { label: 'Free tools', value: String(tools), note: 'Converters and calculators' },
         { label: 'AI agents', value: String(agents), note: '14-agent system + Business Manager + Security' },
         { label: 'Revenue', value: revenue, note: 'Zero-cost platform — no paid services, no sales yet' },
-        { label: 'Traffic', value: traffic, note: analytics && analytics.analyticsConnected ? 'GA4 connected — latest snapshot shown' : 'Analytics is connected (GA4), but no GA4 report is wired in — no traffic numbers are claimed' },
+        { label: 'Traffic', value: traffic, note: analytics && analytics.analyticsConnected ? 'GA4 connected — latest snapshot shown' : 'GA4 tag is live (tracking), but no GA4 Reporting API is connected — no traffic numbers are claimed' },
       ];
       if (kpi) {
         kpi.innerHTML = cards.map(function (c) {
@@ -547,8 +556,8 @@
         return '<li><strong>' + esc(c.label) + '</strong> ' + statusPill(c.status) + (c.detail ? '<br><span class="muted">' + esc(c.detail) + '</span>' : '') + '</li>';
       }).join('');
     };
-    checks.push({ label: 'Search Console', status: 'Verified', detail: 'Verified by the owner 2026-11-11 (URL-prefix + verification file google745797e85dfd966e.html). Sitemap submitted — re-submit after the corrected sitemap is deployed.' });
-    checks.push({ label: 'Analytics (GA4 G-JVSCJT2DHJ)', status: 'Connected', detail: 'GA4 tag is on every public page. Data may take up to 48h to appear; no GA4 report is wired into this dashboard yet.' });
+    checks.push({ label: 'Search Console', status: 'Verified', detail: 'Google Property Verified by the owner 2026-11-11 (URL-prefix + verification file google745797e85dfd966e.html). Verification File Installed — no Search Console API connection exists. Sitemap submitted — re-submit after the corrected sitemap is deployed.' });
+    checks.push({ label: 'Analytics (GA4 G-JVSCJT2DHJ)', status: 'Tracking Connected — Reporting API Not Connected', detail: 'GA4 tag is on every public page (tracking). No GA4 Reporting API is connected, so no GA4 report is wired into this dashboard yet; traffic stays "Data unavailable".' });
     checks.push({ label: 'Canonical + Open Graph + Twitter/X meta', status: 'Active', detail: 'Present on index, article, division, tools and dashboard pages. Per-article meta is injected by JavaScript, so crawlers that do not run JS see only the generic article tags.' });
     checks.push({ label: 'JSON-LD', status: 'Active', detail: 'WebSite on the homepage; Article + BreadcrumbList injected by JavaScript on article pages; CollectionPage on division pages.' });
     render();
@@ -584,9 +593,9 @@
       setText('analyticsStatus', d.note || '');
       var cards = [
         { label: 'Revenue', value: d.revenueFormatted || '$0.00', note: 'Honest $0.00 — no sales, no AdSense yet' },
-        { label: 'Visitors', value: String(d.visitors != null ? d.visitors : 'Data unavailable'), note: d.analyticsConnected ? 'From the latest snapshot' : 'No GA4 report wired in yet' },
-        { label: 'Page views', value: String(d.pageViews != null ? d.pageViews : 'Data unavailable'), note: d.analyticsConnected ? 'From the latest snapshot' : 'No GA4 report wired in yet' },
-        { label: 'Clicks', value: String(d.clicks != null ? d.clicks : 'Data unavailable'), note: d.analyticsConnected ? 'From the latest snapshot' : 'No GA4 report wired in yet' },
+        { label: 'Visitors', value: String(d.visitors != null ? d.visitors : 'Data unavailable'), note: d.analyticsConnected ? 'From the latest snapshot' : 'No GA4 Reporting API connected yet' },
+        { label: 'Page views', value: String(d.pageViews != null ? d.pageViews : 'Data unavailable'), note: d.analyticsConnected ? 'From the latest snapshot' : 'No GA4 Reporting API connected yet' },
+        { label: 'Clicks', value: String(d.clicks != null ? d.clicks : 'Data unavailable'), note: d.analyticsConnected ? 'From the latest snapshot' : 'No GA4 Reporting API connected yet' },
       ];
       if (grid) {
         grid.innerHTML = cards.map(function (c) {

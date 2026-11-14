@@ -1,10 +1,14 @@
 /**
  * FS AI — Analytics route. Honest by design.
- * The GA4 tag (G-JVSCJT2DHJ) is on every public page, but no GA4 report is
- * wired in yet and no AdSense account is connected, so traffic is always
- * reported as "Data unavailable" and revenue as 0. Never fabricate
- * visitors, clicks or earnings. When a real analytics source is connected,
- * this route reads it; until then it reports the honest zero/unknown state.
+ * Status is exactly "Tracking Connected — Reporting API Not Connected":
+ * the GA4 tag (G-JVSCJT2DHJ) is on every public page, but no GA4 report
+ * is wired in — there is NO GA4 Data API usage anywhere in this repo
+ * (no googleapis, analyticsdata or analyticsreporting import/call), so
+ * traffic is always reported as "Data unavailable" and revenue as 0.
+ * Never fabricate visitors, clicks or earnings, and never label
+ * Analytics fully connected from the tag alone. No AdSense account is
+ * connected. When a real analytics source is connected, this route reads
+ * it; until then it reports the honest zero/unknown state.
  *
  * D1 table is website_analytics (database/schema.sql) — NOT
  * `analytics_snapshots`. Columns: recorded_date, source, page_views,
@@ -23,8 +27,9 @@ export const HONEST_ANALYTICS = {
   revenueCurrency: 'USD',
   revenueFormatted: '$0.00',
   analyticsConnected: false,
+  analyticsStatus: 'Tracking Connected — Reporting API Not Connected',
   adsenseConnected: false,
-  note: 'GA4 tag G-JVSCJT2DHJ is on every public page, but no GA4 report is wired in yet and no AdSense account is connected. These figures are honest zeros/unknowns, not estimates.',
+  note: 'Tracking Connected — Reporting API Not Connected: GA4 tag G-JVSCJT2DHJ is on every public page, but no GA4 Reporting API is connected and no AdSense account is connected. Traffic is "Data unavailable" and revenue is $0.00 — honest zeros/unknowns, not estimates.',
 };
 
 export async function handleAnalytics(request, env) {

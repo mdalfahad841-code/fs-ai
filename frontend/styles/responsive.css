@@ -30,7 +30,13 @@
   .search-box .btn { width: 100%; }
   .grid { grid-template-columns: 1fr; }
   .section-head h2 { font-size: 24px; }
-  .kpi-grid { grid-template-columns: 1fr 1fr; }
+  /* KPI cards go single-column on phones: at 320px a two-column grid gives
+     each card only ~116px, and the live "Data unavailable" traffic value
+     (30px, "unavailable" ≈ 175px unbreakable) forced both columns to
+     224px — the page measured 501px wide at 320px. min-width: 0 lets the
+     track shrink below content minimum; the value wraps at its space. */
+  .kpi-grid { grid-template-columns: 1fr; }
+  .kpi-grid > * { min-width: 0; }
   .tool-chip { flex: 1 1 100%; }
   .newsletter form { flex-direction: column; }
   .newsletter .btn { width: 100%; }

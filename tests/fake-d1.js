@@ -425,10 +425,10 @@ function makeFakeD1() {
       if (row) Object.assign(row, { status, unsubscribed_at });
       return { success: true, meta: { changes: row ? 1 : 0, last_row_id: 0 } };
     }
-    if (q.startsWith("UPDATE newsletter_subscribers SET status = ?, subscribed_at = ?, unsubscribed_at = NULL WHERE email = ?")) {
-      const [status, subscribed_at, email] = params;
+    if (q.startsWith("UPDATE newsletter_subscribers SET status = ?, subscribed_at = ?, consent_given_at = ?, unsubscribed_at = NULL WHERE email = ?")) {
+      const [status, subscribed_at, consent_given_at, email] = params;
       const row = tables.newsletter_subscribers.find((s) => s.email === email);
-      if (row) Object.assign(row, { status, subscribed_at, unsubscribed_at: null });
+      if (row) Object.assign(row, { status, subscribed_at, consent_given_at, unsubscribed_at: null });
       return { success: true, meta: { changes: row ? 1 : 0, last_row_id: 0 } };
     }
     if (q.startsWith("UPDATE newsletter_subscribers SET status = ?, unsubscribed_at = ? WHERE id = ?")) {
