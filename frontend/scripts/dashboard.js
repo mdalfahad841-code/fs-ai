@@ -399,6 +399,17 @@
     });
   }
 
+  // Tell the other dashboard sections that the E-Stop state changed, so
+  // they re-fetch and re-render instead of showing a stale ON/OFF until
+  // a full page reload. Live 2026-11-19: toggling here left the
+  // Autonomous Operations section (autonomy.js) stale, and vice versa.
+  // Uses the codebase's existing fsai:* window-event convention
+  // (fsai:session-verified, fsai:theme-change). No new state source:
+  // every listener re-fetches from the server with its own loader.
+  function notifyEmergencyStopChanged() {
+    try { window.dispatchEvent(new CustomEvent('fsai:emergency-stop-changed')); } catch (e) {}
+  }
+
   function loadAgents() {
     setText('agentStatus', 'Loading agents…');
     api('/api/agents').then(function (r) {
@@ -475,7 +486,7 @@
         // the button label states exactly what will happen.
         var next = !emergencyStopped;
         api('/api/admin/emergency-stop', { method: 'POST', body: { stopped: next } }).then(function (r) {
-          if (r.ok) { emergencyStopped = !!r.data.stopped; loadEmergencyStop(); setText('agentStatus', 'Emergency Stop is now ' + (emergencyStopped ? 'ON.' : 'OFF.')); }
+          if (r.ok) { emergencyStopped = !!r.data.stopped; loadEmergencyStop(); notifyEmergencyStopChanged(); setText('agentStatus', 'Emergency Stop is now ' + (emergencyStopped ? 'ON.' : 'OFF.')); }
           else setText('agentStatus', apiError(r));
         }).catch(function () { setText('agentStatus', 'Could not reach the FS AI server.'); });
       });
@@ -751,5 +762,9 @@
     bindBackup();
     startIfVerified();
     window.addEventListener('fsai:session-verified', startIfVerified);
+    // The Autonomous Operations section (autonomy.js) toggles the same
+    // E-Stop: re-fetch our display when it changes, instead of showing
+    // a stale ON/OFF until a reload (live 2026-11-19).
+    window.addEventListener('fsai:emergency-stop-changed', loadEmergencyStop);
   });
 })();

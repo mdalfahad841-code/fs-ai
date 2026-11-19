@@ -79,7 +79,7 @@ function flush() {
   });
 }
 
-function makeHarness({ script, sessionVerified }) {
+function makeHarness({ script, scripts, sessionVerified }) {
   const calls = []; // every fetch call: { url, method, body }
   const confirmCalls = [];
   const elements = new Map();
@@ -115,6 +115,14 @@ function makeHarness({ script, sessionVerified }) {
     addEventListener(type, fn) {
       (this._windowListeners[type] = this._windowListeners[type] || []).push(fn);
     },
+    // Minimal window event bus: the shipped code dispatches
+    // fsai:session-verified / fsai:emergency-stop-changed via
+    // window.dispatchEvent(new CustomEvent(...)).
+    dispatchEvent(ev) {
+      (this._windowListeners[ev.type] || []).forEach((fn) => fn(ev));
+      return true;
+    },
+    CustomEvent: function CustomEvent(type) { this.type = type; },
     document: doc,
     // A valid server-mode session, so token() returns a Bearer token and
     // autonomy.js's startIfReady() succeeds (which also clears its poll
@@ -157,13 +165,29 @@ function makeHarness({ script, sessionVerified }) {
   if (sessionVerified) {
     sandbox.window.FSAI = {
       sessionVerified: true,
-      auth: { isSessionVerified: () => true },
+      auth: {
+        isSessionVerified: () => true,
+        // dashboard.js loadSecurity() reads this (same shape as
+        // authentication.js getSession()).
+        getSession: () => ({ mode: 'server', token: 'test-token', email: 'owner@example.test' }),
+      },
       esc: (s) => String(s == null ? '' : s),
       formatDate: (s) => String(s),
+      // dashboard.js loadOverview() reads these (same shape as app.js).
+      SITE: { revenue: '$0.00', traffic: 'Data unavailable' },
+      ARTICLES: [],
+      DIVISIONS: [],
+      TOOLS: [],
+      AGENTS: [],
+      countsByDivision: () => [],
     };
   }
   vm.createContext(sandbox);
-  vm.runInContext(script, sandbox, { filename: 'dashboard-under-test.js' });
+  // One script (single-section tests) or several in page order
+  // (dashboard.js then autonomy.js) sharing one DOM + one fake server.
+  (scripts || [script]).forEach((src, i) => {
+    vm.runInContext(src, sandbox, { filename: 'script-under-test-' + i + '.js' });
+  });
   return {
     sandbox, doc, calls, confirmCalls,
     get stopState() { return stopState; },
@@ -221,6 +245,61 @@ describe('Emergency Stop toggle posts without a confirm gate (regression 2026-11
       assert.ok(seg.length > 0, name + ': E-Stop handler must exist');
       assert.ok(!seg.includes('window.confirm('), name + ': E-Stop handler must not call window.confirm');
     }
+  });
+});
+
+describe('Emergency Stop display sync between the two sections (live 2026-11-19)', () => {
+  // Live 2026-11-19: toggling ON in AI Agent Control left the Autonomous
+  // Operations section showing the old OFF until a full page reload (and
+  // vice versa). The safety function itself worked (423 + persistence);
+  // only the live display was stale. Fix: each toggle dispatches
+  // fsai:emergency-stop-changed and the other section re-fetches its
+  // status from the server and re-renders. These tests run BOTH shipped
+  // scripts in one sandbox (page order: dashboard.js, autonomy.js) with
+  // one shared fake server, so a stale display fails the test.
+  it('dashboard.js toggle ON refreshes the autonomy.js section too (re-fetch, no reload)', async () => {
+    const h = makeHarness({ scripts: [DASHBOARD_JS, AUTONOMY_JS], sessionVerified: true });
+    h.fireDomReady();
+    await flush();
+    // Both sections read the initial OFF state from the server.
+    assert.equal(h.doc.getElementById('emergencyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'OFF — agent runs allowed');
+    const before = h.calls.length;
+    h.doc.getElementById('emergencyStopBtn').click();
+    await flush();
+    const post = h.calls.find((c) => c.url.endsWith('/api/admin/emergency-stop') && c.method === 'POST');
+    assert.ok(post, 'click must POST the toggle');
+    assert.deepEqual(post.body, { stopped: true });
+    // The other section must have re-fetched its status from the server
+    // AFTER the POST — not just re-rendered from the POST response.
+    const after = h.calls.slice(before);
+    assert.ok(after.some((c) => c.url.endsWith('/api/autonomy/status') && c.method === 'GET'),
+      'autonomy.js must re-fetch /api/autonomy/status after the toggle');
+    assert.equal(h.doc.getElementById('emergencyStopState').textContent, 'ON — agent runs are blocked (423)');
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'ON — agent runs are blocked (423)');
+    assert.equal(h.doc.getElementById('autonomyStopBtn').textContent, 'Turn Emergency Stop OFF');
+  });
+
+  it('autonomy.js toggle refreshes the dashboard.js section too, ON then OFF', async () => {
+    const h = makeHarness({ scripts: [DASHBOARD_JS, AUTONOMY_JS], sessionVerified: true });
+    h.fireDomReady();
+    await flush();
+    assert.equal(h.doc.getElementById('emergencyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'OFF — agent runs allowed');
+    const beforeOn = h.calls.length;
+    h.doc.getElementById('autonomyStopBtn').click();
+    await flush();
+    const afterOn = h.calls.slice(beforeOn);
+    assert.ok(afterOn.some((c) => c.url.endsWith('/api/admin/emergency-stop') && c.method === 'GET'),
+      'dashboard.js must re-fetch /api/admin/emergency-stop after the toggle');
+    assert.equal(h.doc.getElementById('emergencyStopState').textContent, 'ON — agent runs are blocked (423)');
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'ON — agent runs are blocked (423)');
+    // Toggle back OFF from the same button: both sections go OFF again.
+    h.doc.getElementById('autonomyStopBtn').click();
+    await flush();
+    assert.equal(h.doc.getElementById('emergencyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('emergencyStopBtn').textContent, 'Turn Emergency Stop ON');
   });
 });
 

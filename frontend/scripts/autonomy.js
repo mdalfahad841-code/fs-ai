@@ -305,6 +305,16 @@
     }).catch(function () { setText('autonomyStatus', 'Could not reach the FS AI server.'); });
   }
 
+  // Tell the other dashboard sections that the E-Stop state changed, so
+  // they re-fetch and re-render instead of showing a stale ON/OFF until
+  // a full page reload. Live 2026-11-19: toggling here left the AI Agent
+  // Control section (dashboard.js) stale, and vice versa. Uses the
+  // codebase's existing fsai:* window-event convention. No new state
+  // source: every listener re-fetches from the server with its own loader.
+  function notifyEmergencyStopChanged() {
+    try { window.dispatchEvent(new CustomEvent('fsai:emergency-stop-changed')); } catch (e) {}
+  }
+
   /* --- LLM provider status (GET /api/autonomy/llm) --- */
   function loadLlm() {
     setText('autonomyLlmStatus', 'Loading LLM provider status…');
@@ -689,6 +699,7 @@
           if (r.ok) {
             emergencyStopped = !!r.data.stopped;
             loadStatus();
+            notifyEmergencyStopChanged();
             setText('autonomyControlStatus', 'Emergency Stop is now ' + (emergencyStopped ? 'ON.' : 'OFF.'));
           } else {
             setText('autonomyControlStatus', apiError(r));
@@ -919,6 +930,10 @@
   document.addEventListener('DOMContentLoaded', function () {
     startIfReady();
     window.addEventListener('fsai:session-verified', startIfReady);
+    // The AI Agent Control section (dashboard.js) toggles the same
+    // E-Stop: re-fetch our display when it changes, instead of showing
+    // a stale ON/OFF until a reload (live 2026-11-19).
+    window.addEventListener('fsai:emergency-stop-changed', loadStatus);
     var poll = setInterval(function () {
       startIfReady();
       if (started) clearInterval(poll);
