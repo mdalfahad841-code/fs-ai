@@ -118,7 +118,8 @@
       '<p id="autonomyLlmStatus" aria-live="polite">Loading LLM provider status…</p>' +
       '<div class="kpi-grid" id="autonomyKpiGrid"></div>' +
       '<h3>Research sources</h3>' +
-      '<p class="muted">Free public RSS/Atom feeds, 3 per division (24 total). The daily workflow fetches them when auto-research is on. A failed feed is recorded here with its last error — never treated as checked.</p>' +
+      '<p class="muted">Free public RSS/Atom feeds, 3 per division (24 total). The daily workflow fetches them when auto-research is on. A failed feed is recorded here with its last error — never treated as checked. ' +
+      '“Discovered” is the total number of items ever stored from that feed; “Duplicates” is the total number of items skipped because they were already stored. Both are cumulative counters — they only change when a fetch actually runs. Reloading this page never changes them.</p>' +
       '<p id="autonomySourceStatus" aria-live="polite"></p>' +
       '<div class="table-scroll"><table><thead><tr><th>Source</th><th>Division</th><th>Status</th><th>Last fetch</th><th>Last error</th><th>Discovered</th><th>Duplicates</th><th>Actions</th></tr></thead><tbody id="autonomySourceList"></tbody></table></div>' +
       '<h3>Add a research source</h3>' +
@@ -163,7 +164,9 @@
       '<button class="btn btn-primary" type="button" id="autonomyRunDailyBtn">Run Daily Workflow Now</button>' +
       '</p>' +
       '<p class="muted">Start / Pause / Resume act on all agents through the Worker. ' +
-      '“Run Daily Workflow Now” runs the full daily workflow on demand; it is blocked (423) while the Emergency Stop is ON.</p>' +
+      '“Run Daily Workflow Now” runs the full daily workflow on demand; it is blocked (423) while the Emergency Stop is ON. ' +
+      'A manual run is an explicit re-run, so it runs even if the workflow already ran today. ' +
+      'The daily workflow also runs on schedule at 00:00 UTC (06:00 Dhaka) every day, and the weekly workflow on Sundays at 00:00 UTC.</p>' +
       '<p id="autonomyControlStatus" aria-live="polite"></p>' +
       '<p id="autonomyRunDailyStatus" aria-live="polite"></p>' +
       '<h3>Create a content draft task</h3>' +
@@ -198,6 +201,7 @@
       '<p><button class="btn btn-outline" type="button" id="autonomyConvertScaffoldBtn">Convert scaffold to draft</button></p>' +
       '<p id="autonomyConvertStatus" aria-live="polite"></p>' +
       '<h3>Task queue</h3>' +
+      '<p class="muted">A research task with no division runs all divisions — it skips only when EVERY division’s research agent is paused. A research task for one division skips when that division’s research agent is paused.</p>' +
       '<p id="autonomyTaskFilters">' +
       '<button class="btn btn-small" type="button" data-autonomy-filter="">All</button> ' +
       '<button class="btn btn-small" type="button" data-autonomy-filter="queued">Queued</button> ' +
@@ -299,17 +303,47 @@
         { label: 'Traffic', value: d.traffic != null ? String(d.traffic) : 'Data unavailable', note: 'No GA4 Data API is authorized yet' },
         { label: 'Last backup', value: d.lastBackup ? fmtDate(d.lastBackup.finishedAt) : 'Never', note: d.lastBackup ? (d.lastBackup.rowsExported + ' row(s) in ' + d.lastBackup.tablesExported + ' table(s)') : 'No successful backup recorded yet — use “Run backup now” below' },
       ];
+      // Auto switches: ON/OFF per automation, what each one gates, and
+      // why it is off. (Added 2026-11-20 — the flags existed in the
+      // status payload but were never shown.) Auto-publishing stays off
+      // while publishing mode is approved-only, regardless of its flag.
+      var flags = d.autoFlags || {};
+      var flagMeta = [
+        { key: 'auto_research', label: 'Auto-research', gates: 'daily feed fetching' },
+        { key: 'auto_generation', label: 'Auto-generation', gates: 'draft creation from fresh research' },
+        { key: 'auto_factcheck', label: 'Auto-fact-check', gates: 'claim checking in the daily workflow' },
+        { key: 'auto_correction', label: 'Auto-correction', gates: 'rewriting failed claims from evidence' },
+        { key: 'auto_publishing', label: 'Auto-publishing', gates: 'publishing gate-passed articles' },
+      ];
+      flagMeta.forEach(function (f) {
+        var on = flags[f.key] === 'on';
+        cards.push({
+          label: f.label, value: on ? 'ON' : 'OFF',
+          note: on ? 'Gates ' + f.gates + ' — runs in the daily workflow.'
+            : 'Off — ' + f.gates + ' does not run automatically.' +
+              (f.key === 'auto_publishing' ? ' Publishing stays approved-only regardless.' : ''),
+        });
+      });
       if (grid) {
         grid.innerHTML = cards.map(function (c) {
           return '<div class="card kpi-card"><div class="kpi-value">' + esc(c.value) + '</div><div class="kpi-label">' + esc(c.label) + '</div><p class="muted">' + esc(c.note) + '</p></div>';
         }).join('');
       }
       var agents = d.agents || [];
+      var lastRuns = d.lastRuns || {};
       if (list) {
         list.innerHTML = agents.map(function (a) {
+          var lr = lastRuns[a.id] || null;
+          var lastLine = lr
+            ? ' <span class="muted">— last run ' + fmtDate(lr.startedAt) + ': ' + esc(lr.outcome) + (lr.reason ? ' (' + esc(lr.reason) + ')' : '') + '</span>'
+            : ' <span class="muted">— no run recorded yet</span>';
+          var disabledNote = '';
+          if (a.status === 'paused') disabledNote = ' <span class="muted">(paused by owner — resume it to run)</span>';
+          else if (a.status === 'disabled') disabledNote = ' <span class="muted">(disabled)</span>';
+          else if (a.status === 'not-in-registry') disabledNote = ' <span class="muted">(preparation only — no posting)</span>';
           return '<li><strong>' + esc(a.role || a.id || a.name || 'Agent') + '</strong>' +
             (a.id && a.role ? ' <span class="muted">(' + esc(a.id) + ')</span>' : '') +
-            ' ' + statusPill(a.status) + '</li>';
+            ' ' + statusPill(a.status) + disabledNote + lastLine + '</li>';
         }).join('') || '<li>No agents reported by the API.</li>';
       }
     }).catch(function () { setText('autonomyStatus', 'Could not reach the FS AI server.'); });
@@ -434,6 +468,23 @@
   }
 
   /* --- Reports (GET/POST /api/autonomy/reports) --- */
+  // Stringify a report summary value readably. The old code did
+  // `k + ': ' + parsed[k]` on the raw summary object, so nested objects
+  // (steps, counts) rendered as "[object Object]" in the 19 Nov daily
+  // report. Fixed 2026-11-20: objects render as `key: value` pairs
+  // (one level deep for steps: `name: outcome`), never [object Object].
+  function stringifyReportValue(v, depth) {
+    if (v == null) return '—';
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (Array.isArray(v)) return v.map(function (x) { return stringifyReportValue(x, (depth || 0) + 1); }).join(', ');
+    if (typeof v === 'object') {
+      if (v.outcome != null) return String(v.outcome) + (v.error ? ' — ' + String(v.error).slice(0, 120) : '');
+      if ((depth || 0) >= 2) return JSON.stringify(v).slice(0, 120);
+      return Object.keys(v).map(function (k) { return k + ': ' + stringifyReportValue(v[k], (depth || 0) + 1); }).join('; ');
+    }
+    return String(v);
+  }
+
   function reportSummaryText(rep) {
     var s = rep.summary_json;
     if (s == null) return '';
@@ -442,14 +493,14 @@
         var parsed = JSON.parse(s);
         if (parsed && typeof parsed === 'object') {
           if (parsed.summary) return String(parsed.summary);
-          return Object.keys(parsed).map(function (k) { return k + ': ' + parsed[k]; }).join(', ');
+          return Object.keys(parsed).map(function (k) { return k + ': ' + stringifyReportValue(parsed[k], 1); }).join(', ');
         }
         return s;
       } catch (e) { return s; }
     }
     if (typeof s === 'object') {
       if (s.summary) return String(s.summary);
-      return Object.keys(s).map(function (k) { return k + ': ' + s[k]; }).join(', ');
+      return Object.keys(s).map(function (k) { return k + ': ' + stringifyReportValue(s[k], 1); }).join(', ');
     }
     return String(s);
   }
@@ -651,18 +702,66 @@
     }).catch(function () { setText('autonomyPipelineStatus', 'Could not reach the FS AI server.'); });
   }
 
+  // Per-article detail: fact-check claims + the 10 publish-gate checks
+  // + the 11 SEO checks, with the four states spelled out separately
+  // (content-ready vs fact-check-passed vs SEO-passed vs eligible vs
+  // authorized). Content-ready is NOT automatically eligible, and
+  // eligible is NOT automatically authorized — the article still waits
+  // for owner approval while publishing mode is "approved only".
+  // (Extended 2026-11-20: gate + SEO detail were invisible before.)
   function loadFactCheckDetail(articleId) {
-    setText('autonomyFactCheckDetail', 'Loading fact-check detail for article #' + articleId + '…');
-    api('/api/autonomy/fact-checks?article_id=' + encodeURIComponent(articleId)).then(function (r) {
-      if (!r.ok) { setText('autonomyFactCheckDetail', apiError(r)); return; }
-      var fc = r.data.factCheck;
-      if (!fc) { setText('autonomyFactCheckDetail', 'No fact-check on record for article #' + articleId + ' yet.'); return; }
-      var claims = r.data.claims || [];
-      var lines = claims.map(function (c) {
-        return '[' + c.verdict + '] ' + (c.claim_text || '').slice(0, 120) + (c.evidence_url ? ' — evidence: ' + c.evidence_url : ' — no evidence');
-      });
-      setText('autonomyFactCheckDetail', 'Article #' + articleId + ' — latest fact-check: ' + fc.verdict +
-        ' (' + fc.claims_verified + '/' + fc.claims_total + ' claims verified, ' + fc.claims_failed + ' failed). ' + lines.join(' | '));
+    setText('autonomyFactCheckDetail', 'Loading detail for article #' + articleId + '…');
+    Promise.all([
+      api('/api/autonomy/fact-checks?article_id=' + encodeURIComponent(articleId)),
+      api('/api/autonomy/gate?article_id=' + encodeURIComponent(articleId)),
+      api('/api/autonomy/seo?article_id=' + encodeURIComponent(articleId)),
+    ]).then(function (rs) {
+      var fcRes = rs[0] || {};
+      var gateRes = rs[1] || {};
+      var seoRes = rs[2] || {};
+      var parts = ['Article #' + articleId + ' —'];
+      if (fcRes.ok && fcRes.data && fcRes.data.factCheck) {
+        var fc = fcRes.data.factCheck;
+        var claims = fcRes.data.claims || [];
+        var lines = claims.map(function (c) {
+          return '[' + c.verdict + '] ' + (c.claim_text || '').slice(0, 120) + (c.evidence_url ? ' — evidence: ' + c.evidence_url : ' — no evidence');
+        });
+        parts.push('fact-check: ' + fc.verdict + ' (' + fc.claims_verified + '/' + fc.claims_total + ' claims verified, ' + fc.claims_failed + ' failed). ' + lines.join(' | '));
+      } else if (fcRes.ok) {
+        parts.push('fact-check: no fact-check on record yet.');
+      } else {
+        parts.push('fact-check: could not load (' + apiError(fcRes) + ').');
+      }
+      if (gateRes.ok && gateRes.data) {
+        var g = gateRes.data;
+        var checks = (g.checks || []).map(function (c) {
+          return (c.ok ? '✓ ' : '✗ ') + c.name + (c.detail ? ' — ' + c.detail : '');
+        });
+        parts.push('publish gate (' + (g.contentReady ? 'content-ready' : 'not content-ready') + '): ' + checks.join(' | ') + '.');
+        var fcCheck = (g.checks || []).find(function (c) { return c.name === 'fact-check-pass'; }) || {};
+        var seoPassCheck = (g.checks || []).find(function (c) { return c.name === 'seo-pass'; }) || {};
+        parts.push('States: content-ready ' + (g.contentReady ? 'YES' : 'NO') +
+          ' · fact-check passed ' + (fcCheck.ok ? 'YES' : 'NO') +
+          ' · SEO passed ' + (seoPassCheck.ok ? 'YES' : 'NO') +
+          ' · eligible ' + (g.eligible ? 'YES' : 'NO') +
+          ' · authorized to publish ' + (g.eligible ? 'YES' : 'NO') +
+          ' (publishing mode is "' + (g.publishingMode || 'approved_only') + '"' +
+          (g.eligible ? '' : ' — owner approval is still required') + ').');
+      } else {
+        parts.push('publish gate: could not load (' + apiError(gateRes) + ').');
+      }
+      if (seoRes.ok && seoRes.data && seoRes.data.seoCheck) {
+        var sc = seoRes.data.seoCheck;
+        var seoChecks = (seoRes.data.checks || []).map(function (c) {
+          return (c.ok ? '✓ ' : '✗ ') + c.name + (c.detail ? ' — ' + c.detail : '');
+        });
+        parts.push('SEO (' + sc.verdict + '): ' + seoChecks.join(' | ') + '.');
+      } else if (seoRes.ok) {
+        parts.push('SEO: no SEO check on record yet — run an SEO task for this article.');
+      } else {
+        parts.push('SEO: could not load (' + apiError(seoRes) + ').');
+      }
+      setText('autonomyFactCheckDetail', parts.join(' '));
     }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
   }
 
@@ -721,18 +820,37 @@
     var dailyBtn = el('autonomyRunDailyBtn');
     if (dailyBtn) {
       dailyBtn.addEventListener('click', function () {
+        if (dailyBtn.disabled) return;
+        dailyBtn.disabled = true;
         setText('autonomyRunDailyStatus', 'Running the daily workflow…');
-        api('/api/autonomy/run-daily', { method: 'POST' }).then(function (r) {
+        // A manual click is an explicit re-run: send force:true. The
+        // server still answers with the REAL status (completed /
+        // already_completed / blocked) — the button never claims success
+        // for a no-op. (Fixed 2026-11-20: the old call sent no body, so
+        // a second click on the same day silently no-op'd while the UI
+        // still said "Daily workflow finished.")
+        api('/api/autonomy/run-daily', { method: 'POST', body: { force: true } }).then(function (r) {
+          dailyBtn.disabled = false;
           if (!r.ok) { setText('autonomyRunDailyStatus', apiError(r)); return; }
           var d = r.data || {};
-          var summary = d.summary || d.message || '';
-          var detail = '';
-          if (d.tasks) detail = ' Tasks — queued: ' + (d.tasks.queued != null ? d.tasks.queued : '—') + ', done: ' + (d.tasks.done != null ? d.tasks.done : '—') + ', failed: ' + (d.tasks.failed != null ? d.tasks.failed : '—') + '.';
-          setText('autonomyRunDailyStatus', 'Daily workflow finished.' + (summary ? ' ' + summary : '') + detail);
+          var status = d.status || 'completed';
+          var counts = d.counts || {};
+          var countLine = ['researchFetched', 'researchItemsStored', 'contentEnqueued', 'factChecksRun', 'correctionsRun', 'seoRun', 'gateEvaluated', 'published']
+            .map(function (k) { return counts[k] != null ? k.replace(/([A-Z])/g, ' $1').toLowerCase() + ': ' + counts[k] : null; })
+            .filter(function (x) { return x; }).join(', ');
+          var msg;
+          if (status === 'already_completed') {
+            msg = 'Daily workflow already ran today (report #' + (d.reportId != null ? d.reportId : '—') + ') — no re-run. ' + (d.reason || '');
+          } else if (status === 'blocked') {
+            msg = 'Daily workflow blocked — Emergency Stop is on.';
+          } else {
+            msg = 'Daily workflow completed (report #' + (d.reportId != null ? d.reportId : '—') + ')' + (countLine ? ': ' + countLine + '.' : '.');
+          }
+          setText('autonomyRunDailyStatus', msg);
           loadStatus();
           loadTasks();
           loadReports();
-        }).catch(function () { setText('autonomyRunDailyStatus', 'Could not reach the FS AI server.'); });
+        }).catch(function () { dailyBtn.disabled = false; setText('autonomyRunDailyStatus', 'Could not reach the FS AI server.'); });
       });
     }
 
@@ -807,24 +925,36 @@
         var fetchBtn = e.target.closest('[data-autonomy-source-fetch]');
         if (fetchBtn) {
           var sid = fetchBtn.getAttribute('data-autonomy-source-fetch');
+          // Disable while the fetch is in flight: a double-click (or a
+          // double-tap on mobile) would otherwise fire a second fetch,
+          // and a re-fetch counts every item as a duplicate — that is
+          // the most plausible trigger for the 19 Nov counter jump on
+          // the three digital-tools sources (duplicates 0→50/10/40 with
+          // no new items). (Hardened 2026-11-20.)
+          if (fetchBtn.disabled) return;
+          fetchBtn.disabled = true;
           setText('autonomySourceStatus', 'Fetching source #' + sid + '…');
           api('/api/autonomy/sources/' + encodeURIComponent(sid) + '/fetch', { method: 'POST' }).then(function (r) {
+            fetchBtn.disabled = false;
             if (!r.ok) { setText('autonomySourceStatus', apiError(r)); return; }
             var s = r.data.source || {};
             setText('autonomySourceStatus', 'Source #' + sid + ': ' + (s.ok ? ('fetched ' + s.fetched + ' item(s), ' + s.added + ' new, ' + s.duplicates + ' duplicate(s).') : ('failed — ' + (s.error || 'unknown error') + '.')));
             loadSources();
-          }).catch(function () { setText('autonomySourceStatus', 'Could not reach the FS AI server.'); });
+          }).catch(function () { fetchBtn.disabled = false; setText('autonomySourceStatus', 'Could not reach the FS AI server.'); });
           return;
         }
         var toggleBtn = e.target.closest('[data-autonomy-source-toggle]');
         if (toggleBtn) {
           var tid = toggleBtn.getAttribute('data-autonomy-source-toggle');
           var currentlyActive = toggleBtn.getAttribute('data-autonomy-source-active') === '1';
+          if (toggleBtn.disabled) return;
+          toggleBtn.disabled = true;
           api('/api/autonomy/sources/' + encodeURIComponent(tid) + '/toggle', { method: 'POST', body: { is_active: currentlyActive ? 0 : 1 } }).then(function (r) {
+            toggleBtn.disabled = false;
             if (!r.ok) { setText('autonomySourceStatus', apiError(r)); return; }
             setText('autonomySourceStatus', 'Source #' + tid + (currentlyActive ? ' disabled.' : ' enabled.'));
             loadSources();
-          }).catch(function () { setText('autonomySourceStatus', 'Could not reach the FS AI server.'); });
+          }).catch(function () { toggleBtn.disabled = false; setText('autonomySourceStatus', 'Could not reach the FS AI server.'); });
         }
       });
     }

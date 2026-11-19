@@ -98,8 +98,30 @@ function freshEnv(extra = {}) {
     'database/migrations/005_autonomy.sql',
     'database/migrations/006_llm_usage.sql',
     'database/seed.sql',
+    'database/migrations/008_research.sql',
+    'database/migrations/009_factcheck.sql',
+    'database/migrations/010_pipeline.sql',
+    'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db), ...extra } };
+}
+
+// Evidence for the content-agent tests (2026-11-20): generation is
+// evidence-grounded — the agent only writes a draft when a supplied
+// source URL resolves to a stored research item.
+const TEST_SOURCE_URL = 'https://example.com/fake-ai-draft-evidence';
+function seedTestEvidence(db) {
+  const src = db.prepare("INSERT INTO research_sources (division_id, name, url, source_type) VALUES (1, 'Test Auto News', 'https://example.com/auto-news', 'rss')").run();
+  db.prepare('INSERT INTO research_items (source_id, division_id, title, url, summary, evidence_text, published_at, fetched_at, is_outdated) VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0)').run(
+    Number(src.lastInsertRowid),
+    'How to Test a Fake AI Draft',
+    TEST_SOURCE_URL,
+    'Testing guidance for a fake AI draft.',
+    'Testing guidance for a fake AI draft. It is general guidance only.',
+    '2026-11-19T00:00:00.000Z',
+    new Date().toISOString(),
+  );
 }
 
 function usageRows(db, where = '') {
@@ -241,13 +263,15 @@ describe('content agent + LLM', () => {
 
   it('with fake AI: done with llmGenerated:true and needsFactCheck:true, real body, no article row yet', async () => {
     const { db, env } = freshEnv();
+    seedTestEvidence(db);
     env.AI = {
       run: async () => ({
         response: 'Canned article body about testing. It is general guidance only.',
         usage: { prompt_tokens: 40, completion_tokens: 60 },
       }),
     };
-    const result = await runContentCreation(task, env);
+    const result = await runContentCreation(
+      { ...task, payload: { ...task.payload, sources: [TEST_SOURCE_URL] } }, env);
     assert.equal(result.outcome, 'done');
     assert.ok(result.draft, 'an AI draft is returned');
     assert.equal(result.draft.llmGenerated, true);
@@ -257,6 +281,8 @@ describe('content agent + LLM', () => {
     assert.ok(result.draft.body.includes('Canned article body about testing.'), 'draft body is the real LLM text');
     assert.ok(result.draft.factCheckFlags.some((f) => /needs fact-checking/.test(f)));
     assert.equal(result.scaffold.body, result.draft.body, 'scaffold carries the same real body for conversion');
+    assert.equal(result.draft.evidence.length, 1, 'the draft carries the resolved evidence (repair A)');
+    assert.equal(result.draft.sourceIds.length, 1, 'the draft carries the resolved source id');
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM articles').get().n, 25,
       'the agent inserts no article row — conversion is a separate owner step');
     assert.equal(usageRows(db, "WHERE outcome = 'ok'").length, 1, 'the generation was logged');
@@ -264,8 +290,13 @@ describe('content agent + LLM', () => {
 
   it('with no providers: no-op scaffold, no fabricated body', async () => {
     const { db, env } = freshEnv();
-    const result = await runContentCreation(task, env);
+    seedTestEvidence(db);
+    // Evidence IS seeded, so the no-op below is genuinely "no LLM
+    // provider available" — not missing evidence.
+    const result = await runContentCreation(
+      { ...task, payload: { ...task.payload, sources: [TEST_SOURCE_URL] } }, env);
     assert.equal(result.outcome, 'no-op');
+    assert.match(result.reason, /All free LLM providers unavailable/);
     assert.ok(result.scaffold, 'scaffold is returned');
     assert.equal(result.scaffold.body, undefined, 'no body was fabricated');
     assert.equal(result.draft, undefined, 'no draft without an LLM');

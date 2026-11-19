@@ -99,6 +99,7 @@ describe('backup -> restore round-trip (local SQLite)', () => {
       'database/migrations/009_factcheck.sql',
       'database/migrations/010_pipeline.sql',
       'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
     ]);
     // schema.sql turns FK enforcement ON for this connection; D1 does not
     // enforce ON DELETE CASCADE (see deleteArticle), so switch it OFF to

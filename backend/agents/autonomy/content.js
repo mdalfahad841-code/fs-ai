@@ -10,21 +10,33 @@
  * 'no-op' — no article body is fabricated. No article row is inserted
  * here; the orchestrator converts a scaffold/draft into a CMS draft
  * via convertScaffoldToDraft.
+ *
+ * EVIDENCE (fixed 2026-11-20): generation is evidence-grounded. The
+ * LLM receives the actual stored research (title, summary/evidence
+ * text, source URL, publication date) for each source URL that resolves
+ * to a research_items row — never a bare URL it cannot open (article
+ * #27's first draft was a refusal for exactly that reason). When no
+ * supplied source resolves to stored research, generation returns
+ * outcome 'no-op' with reason 'insufficient-evidence' instead of
+ * writing a sourceless draft. Resolved source IDs travel with the
+ * scaffold so convertScaffoldToDraft can persist article_sources rows
+ * (with research_item_id) for fact-checking and the publish gate.
  */
 import {
-  d1First, d1Run, nowIso, slugify, sanitiseText, isValidSlug,
-  disclaimerForDivision,
+  d1All, d1First, d1Run, nowIso, slugify, sanitiseText, isValidSlug,
+  disclaimerForDivision, deriveSeoDescription,
 } from '../../middleware/validation.js';
 import { generateText } from '../../llm/index.js';
 
 const LLM_SYSTEM_PROMPT =
   'You write plain-language educational articles for a general audience. ' +
   'Write 600-900 words in clear, simple English. Use only facts from the ' +
-  'sources given in the user message. Do not invent statistics, dates, ' +
+  'research evidence given in the user message. Do not invent statistics, dates, ' +
   'prices, names or claims, and do not cite any source that was not given. ' +
-  'Structure the article with the outline headings given.';
+  'Structure the article with the outline headings given, using ## (H2) ' +
+  'markdown headings for each outline section — never # or ### for section headings.';
 
-function buildLlmPrompt({ title, divisionName, outline, sources }) {
+function buildLlmPrompt({ title, divisionName, outline, sources, evidence }) {
   const lines = [
     `Write an article titled "${title}" for the ${divisionName} division.`,
     '',
@@ -32,13 +44,61 @@ function buildLlmPrompt({ title, divisionName, outline, sources }) {
     ...outline.map((h) => `- ${h}`),
     '',
   ];
+  if (evidence && evidence.length) {
+    lines.push('Research evidence — use ONLY the facts below, and cite the source URL where you use a fact:');
+    for (const e of evidence.slice(0, 5)) {
+      lines.push(`- [${e.sourceName || 'Source'}] ${e.title}${e.publishedAt ? ` (${e.publishedAt})` : ''} — ${e.url}`);
+      lines.push(`  Summary: ${String(e.evidenceText || e.summary || e.title || '').slice(0, 1200)}`);
+    }
+    lines.push('');
+  }
   if (sources.length) {
     lines.push('Sources (cite only these, by name or URL, where you use them):');
     lines.push(...sources.map((s) => `- ${s}`));
-  } else {
-    lines.push('No sources were supplied — write only general, non-factual guidance and state nothing that would need a source.');
   }
   return lines.join('\n');
+}
+
+/**
+ * Resolve each supplied source URL against the stored research items.
+ * Returns { resolved: [{ url, title, summary, evidenceText,
+ * publishedAt, researchItemId, sourceId, sourceName, isOutdated }],
+ * unresolved: [url, ...] }. Only stored research counts as evidence:
+ * a URL the system never fetched has no usable content (the LLM cannot
+ * open links), so it is reported unresolved — never passed off as
+ * research. Deduplicated by URL; at most one row per URL (latest fetch).
+ */
+export async function resolveEvidence(env, sources) {
+  const resolved = [];
+  const unresolved = [];
+  const seenUrls = new Set();
+  for (const s of sources || []) {
+    const text = String(s || '').trim();
+    if (!text) continue;
+    if (!/^https?:\/\//i.test(text)) { unresolved.push(text); continue; }
+    if (seenUrls.has(text)) continue;
+    seenUrls.add(text);
+    let items = [];
+    try {
+      items = await d1All(env,
+        'SELECT ri.id, ri.source_id, ri.title, ri.url, ri.published_at, ri.summary, ri.evidence_text, ri.is_outdated, rs.name AS source_name ' +
+        'FROM research_items ri LEFT JOIN research_sources rs ON rs.id = ri.source_id ' +
+        'WHERE ri.url = ? ORDER BY ri.fetched_at DESC LIMIT 1', [text]) || [];
+    } catch { items = []; }
+    if (items.length) {
+      const it = items[0];
+      resolved.push({
+        url: text, title: it.title, summary: it.summary || '',
+        evidenceText: it.evidence_text || it.summary || it.title,
+        publishedAt: it.published_at || null, researchItemId: it.id,
+        sourceId: it.source_id, sourceName: it.source_name || null,
+        isOutdated: it.is_outdated === 1,
+      });
+    } else {
+      unresolved.push(text);
+    }
+  }
+  return { resolved, unresolved };
 }
 
 function parsePayload(task) {
@@ -95,6 +155,10 @@ export async function runContentCreation(task, env) {
     ? payload.outline.filter((h) => typeof h === 'string').slice(0, 12)
     : headingsFromTitle(title, sources);
   const seoTitle = title.slice(0, 60);
+  // The meta description is derived from the generated body below (the
+  // old title-only text was 77 chars and could never pass the 120-160
+  // SEO check). Until the body exists, keep the title text as a
+  // placeholder — the SEO repair step fixes it from real content.
   const seoDescription = `A plain-language guide: ${title}`.slice(0, 160);
   const scaffold = {
     title,
@@ -110,6 +174,29 @@ export async function runContentCreation(task, env) {
     note: 'SCAFFOLD — full article body needs an LLM or the owner; no body was fabricated',
   };
 
+  // EVIDENCE FIRST (fixed 2026-11-20): resolve every supplied source
+  // URL against the stored research items. The LLM gets the actual
+  // stored research text — never a bare URL it cannot open. When no
+  // source resolves, do NOT call the LLM and do NOT write a sourceless
+  // draft: return no-op 'insufficient-evidence' so the owner/dashboard
+  // can see exactly which URLs had no stored research behind them.
+  const { resolved: evidence, unresolved } = await resolveEvidence(env, sources);
+  if (evidence.length === 0) {
+    return {
+      outcome: 'no-op',
+      scaffold: {
+        ...scaffold,
+        factCheckFlags: [
+          'No usable research evidence: none of the supplied sources resolves to a stored research item.',
+          ...(unresolved.length ? [`Unresolved source(s): ${unresolved.join(', ')}`] : ['No sources were supplied.']),
+          'Fetch the source through the research engine first, then generate.',
+        ],
+      },
+      reason: 'insufficient-evidence: no supplied source resolves to stored research — generation paused, no sourceless draft written.',
+      unresolved,
+    };
+  }
+
   // First try the free LLM layer. Any failure is honest: fall back to
   // the scaffold with outcome 'no-op' — never fabricate a body.
   const disclaimer = disclaimerForDivision(division);
@@ -117,13 +204,19 @@ export async function runContentCreation(task, env) {
     ? ` End with this exact disclaimer sentence: "${disclaimer}"`
     : '');
   const llm = await generateText({
-    prompt: buildLlmPrompt({ title, divisionName: row.name, outline, sources }),
+    prompt: buildLlmPrompt({ title, divisionName: row.name, outline, sources, evidence }),
     system,
     maxTokens: 1500,
     purpose: 'content-creation',
   }, env);
   if (llm.ok && llm.text) {
     const body = sanitiseText(llm.text, 20000);
+    // Meta description from the real body text (120-160 chars); falls
+    // back to the title text when the body is too short to fill it —
+    // the SEO repair step then fixes it from real content.
+    const bodyDescription = deriveSeoDescription(body);
+    const finalSeoDescription = bodyDescription || seoDescription;
+    const sourceIds = evidence.map((e) => e.researchItemId);
     const draft = {
       title,
       division,
@@ -131,8 +224,10 @@ export async function runContentCreation(task, env) {
       body,
       outline,
       seoTitle,
-      seoDescription,
+      seoDescription: finalSeoDescription,
       sources,
+      evidence,
+      sourceIds,
       llmGenerated: true,
       provider: llm.provider,
       model: llm.model,
@@ -146,7 +241,7 @@ export async function runContentCreation(task, env) {
       // The scaffold carries the LLM body too, so the existing
       // convert endpoint (which reads detail.scaffold) stores the
       // real draft body instead of a placeholder.
-      scaffold: { ...scaffold, body, llmGenerated: true, provider: llm.provider, model: llm.model, needsFactCheck: true },
+      scaffold: { ...scaffold, body, seoDescription: finalSeoDescription, evidence, sourceIds, llmGenerated: true, provider: llm.provider, model: llm.model, needsFactCheck: true },
     };
   }
   return {
@@ -227,23 +322,59 @@ export async function convertScaffoldToDraft(env, scaffold) {
   if (!id) return { ok: false, status: 500, error: 'Article was not stored.' };
   // Record the cited sources as article_sources rows so the fact-checker
   // and the publish gate can verify them (the body text alone is not
-  // enough). URL sources get source_type 'rss' when they came from a
-  // fetched research item, otherwise 'web'; plain-text sources are
-  // stored as titles only.
+  // enough). source_type MUST use the values the table's CHECK allows
+  // ('official', 'news', 'research', 'manufacturer', 'other') — the old
+  // code wrote 'rss'/'web', which the CHECK rejects on real SQLite/D1,
+  // and the failure was silently swallowed (.catch(() => {})), so every
+  // generated draft recorded 0 sources (article #27, 2026-11-19).
+  // Fixed 2026-11-20: RSS research items -> 'research', other URLs ->
+  // 'other'; the research_items id is stored in research_item_id when
+  // known (from the scaffold's resolved evidence or a URL lookup).
+  // Inserts are idempotent (an existing row for the same article+URL is
+  // skipped) and failures are REPORTED, never swallowed.
+  const evidenceByUrl = new Map();
+  for (const e of Array.isArray(scaffold.evidence) ? scaffold.evidence : []) {
+    if (e && typeof e.url === 'string' && e.researchItemId) evidenceByUrl.set(e.url, e.researchItemId);
+  }
+  let sourcesRecorded = 0;
+  let sourcesDeduped = 0;
+  const sourceErrors = [];
   for (const s of sources) {
     const text = String(s || '').trim();
     if (!text) continue;
     const isUrl = /^https?:\/\//i.test(text);
-    let sourceType = isUrl ? 'web' : 'other';
-    if (isUrl) {
-      const fromRss = await d1First(env, 'SELECT id FROM research_items WHERE url = ? LIMIT 1', [text]);
-      if (fromRss) sourceType = 'rss';
+    let researchItemId = evidenceByUrl.get(text) || null;
+    let sourceType = isUrl ? 'other' : 'other';
+    if (isUrl && !researchItemId) {
+      try {
+        const fromRss = await d1First(env, 'SELECT id FROM research_items WHERE url = ? ORDER BY fetched_at DESC LIMIT 1', [text]);
+        if (fromRss) { researchItemId = fromRss.id; sourceType = 'research'; }
+      } catch { /* lookup failure: keep 'other' with no link */ }
+    } else if (researchItemId) {
+      sourceType = 'research';
     }
-    await d1Run(env,
-      'INSERT INTO article_sources (article_id, source_title, source_url, source_type, accessed_at) VALUES (?, ?, ?, ?, ?)',
-      [id, text, isUrl ? text : null, sourceType, now]).catch(() => {});
+    try {
+      // Idempotent: skip when the same article+URL (or, for non-URL
+      // sources, the same article+title) is already recorded. (NULL
+      // source_url never equals NULL in SQL, so title is the key there.)
+      const existing = isUrl
+        ? await d1First(env, 'SELECT id FROM article_sources WHERE article_id = ? AND source_url = ? LIMIT 1', [id, text])
+        : await d1First(env, 'SELECT id FROM article_sources WHERE article_id = ? AND source_title = ? AND source_url IS NULL LIMIT 1', [id, text]);
+      if (existing) { sourcesDeduped += 1; continue; }
+      await d1Run(env,
+        'INSERT INTO article_sources (article_id, source_title, source_url, source_type, research_item_id, accessed_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, text, isUrl ? text : null, sourceType, researchItemId, now]);
+      sourcesRecorded += 1;
+    } catch (err) {
+      sourceErrors.push(`${text}: ${String(err && err.message ? err.message : err).slice(0, 120)}`);
+    }
   }
   const article = await d1First(env,
     'SELECT a.*, d.slug AS division, d.name AS division_name FROM articles a JOIN business_divisions d ON d.id = a.division_id WHERE a.id = ? LIMIT 1', [id]);
-  return { ok: true, article };
+  return {
+    ok: true, article, sourcesRecorded, sourcesDeduped, sourceErrors,
+    ...(sources.length > 0 && sourcesRecorded === 0
+      ? { warning: `Article stored but none of its ${sources.length} source(s) could be recorded — the publish gate will treat it as unsourced. Errors: ${sourceErrors.join('; ') || 'unknown'}` }
+      : {}),
+  };
 }

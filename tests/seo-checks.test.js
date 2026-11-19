@@ -1,14 +1,17 @@
 // FS AI — SEO + quality checks tests.
 //
-// The SEO agent fills blank seo_title/seo_description only (never
-// overwrites owner-set values) and runs an 11-check suite: seo title,
-// meta description, unique slug, heading hierarchy, keyword relevance,
-// internal linking, image alt text, readability, duplicate detection
-// (5-word shingle overlap), broken-link checking (fetch capped at 5),
-// structured metadata. SEO never overrides factual accuracy — the
-// publish gate requires a fact-check pass first.
+// The SEO agent REPAIRS inadequate seo fields from the article's own
+// real content (2026-11-20: a short meta description is regenerated
+// from the body, H3s are promoted to H2s, a genuine internal link is
+// appended) and runs an 11-check suite: seo title, meta description,
+// unique slug, heading hierarchy, keyword relevance, internal linking,
+// image alt text, readability, duplicate detection (5-word shingle
+// overlap), broken-link checking (fetch capped at 5), structured
+// metadata. A value that already passes its check is never touched;
+// published articles are never modified. SEO never overrides factual
+// accuracy — the publish gate requires a fact-check pass first.
 //
-// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011).
+// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011/012).
 // Link checks use a stubbed fetch — no network in these tests.
 // Run: node --test tests/seo-checks.test.js (or: npm test)
 // Requires node:sqlite (Node >= 22.5; this repo runs Node 24).
@@ -95,6 +98,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -221,7 +225,7 @@ describe('runSeoCheckSuite', () => {
 });
 
 describe('runSeo (agent handler)', () => {
-  it('fills blank seo fields, stores a seo_checks row, never overwrites owner values', async () => {
+  it('fills blank seo fields, stores a seo_checks row, repairs an inadequate owner value, never touches a passing one', async () => {
     const { db, env } = freshEnv();
     env.__fetchImpl = okFetch;
     const id = insertArticle(db, { title: GOOD_TITLE, slug: 'seo-fill-fixture', body: GOOD_BODY });
@@ -237,13 +241,20 @@ describe('runSeo (agent handler)', () => {
     assert.equal(checks[0].verdict, r.verdict);
     assert.ok(checks[0].checks_json.includes('seo-title'));
 
-    // Second run: owner-set values must survive.
+    // Second run: a PASSING owner value must survive; an INADEQUATE
+    // one is repaired from real content (behaviour change 2026-11-20:
+    // the SEO agent repairs inadequate fields, not just blank ones).
+    // The owner description below is 101 chars — below the 120-160
+    // requirement — so the repair regenerates it; the owner title
+    // (35 chars, in range) is untouched.
     db.prepare('UPDATE articles SET seo_title = ?, seo_description = ? WHERE id = ?').run('Owner Custom SEO Title Here For Test', 'Owner custom description that is long enough to be a real meta description for this test article.', id);
     const r2 = await runSeo({ kind: 'seo', payload: { article_id: id } }, env);
     assert.equal(r2.outcome, 'done');
-    assert.deepEqual(r2.filled, [], 'nothing filled when owner values exist');
+    assert.ok(!r2.filled.includes('seo_title'), 'passing owner title untouched');
+    assert.ok(r2.filled.includes('seo_description'), 'inadequate owner description repaired');
     const row2 = db.prepare('SELECT seo_title, seo_description FROM articles WHERE id = ?').get(id);
     assert.equal(row2.seo_title, 'Owner Custom SEO Title Here For Test');
+    assert.ok(row2.seo_description.length >= 120 && row2.seo_description.length <= 160, 'repaired description in range');
   });
 
   it('returns a clean failure for a missing article', async () => {

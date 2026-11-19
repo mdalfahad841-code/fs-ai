@@ -4,29 +4,54 @@
  * No API key: the Worker calls it through the AI binding (env.AI).
  * Free tier: 10,000 Neurons/day, resets 00:00 UTC; on Workers Free an
  * over-cap request fails (no billing, no card). Error 3036 = free
- * allowance used up; 410 / 5028 = model retired (24 models are removed
- * on 20 Nov 2026 — the model list below contains only models that
- * survive that removal, per the official pricing page updated
- * 2026-11-12). Neuron rates are per 1M tokens, from the same page.
+ * allowance used up; 410 / 5028 = model retired.
+ *
+ * MODEL LIST — verified 2026-11-20 against the official Cloudflare
+ * changelog (5 Nov 2026 planned deprecations, effective 20 Nov 2026),
+ * the Workers AI model catalog and the pricing page
+ * (developers.cloudflare.com/changelog/post/2026-11-05-planned-model-deprecations/,
+ * /workers-ai/models/, /workers-ai/platform/pricing/ — all read
+ * 2026-11-19, i.e. the last snapshot before the cutoff; verdicts rest
+ * on the removal list + catalog + per-model pages, NOT on pricing-page
+ * presence alone, which is stale for removed models).
+ * Surviving free-tier text models, in fallback order:
+ *   1. @cf/openai/gpt-oss-20b — proven live 2026-11-19 (5 calls).
+ *   2. @cf/google/gemma-4-26b-a4b-it — Cloudflare-recommended small replacement.
+ *   3. @cf/zai-org/glm-4.7-flash — Cloudflare-recommended replacement.
+ *   4. @cf/openai/gpt-oss-120b — proven live 2026-11-19 (2 calls).
+ *   5. @cf/mistralai/mistral-small-3.1-24b-instruct.
+ *   6. @cf/meta/llama-3.3-70b-instruct-fp8-fast — last resort (24K context, costly output).
+ *   7. @cf/ibm-granite/granite-4.0-h-micro — emergency cheap fallback only.
+ * REMOVED from the list 2026-11-20: @cf/meta/llama-3.1-8b-instruct-fp8-fast
+ * — UNCONFIRMED (absent from the official catalog; the near-identical
+ * @cf/meta/llama-3.1-8b-instruct-fp8 IS on the 20 Nov removal list).
+ * Never add a model without a catalog + removal-list check: the
+ * recommended replacements @cf/deepseek-ai/deepseek-v4.1-flash-1017
+ * and @cf/zai-org/glm-5.3 are NOT free-tier (Paid plan / AI Gateway
+ * credits) and must stay out of this list.
+ * Neuron rates are per 1M tokens, derived from the official per-token
+ * dollar prices at $0.011 per 1,000 Neurons.
  */
 export const WORKERS_AI_MODELS = [
   '@cf/openai/gpt-oss-20b',
-  '@cf/openai/gpt-oss-120b',
   '@cf/google/gemma-4-26b-a4b-it',
-  '@cf/meta/llama-3.1-8b-instruct-fp8-fast',
   '@cf/zai-org/glm-4.7-flash',
+  '@cf/openai/gpt-oss-120b',
+  '@cf/mistralai/mistral-small-3.1-24b-instruct',
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  '@cf/ibm-granite/granite-4.0-h-micro',
 ];
 
 // Neurons per 1M tokens { in, out } — official Workers AI pricing page.
 export const NEURON_RATES = {
   '@cf/openai/gpt-oss-20b': { in: 18182, out: 27273 },
   '@cf/openai/gpt-oss-120b': { in: 31818, out: 68182 },
-  '@cf/meta/llama-3.1-8b-instruct-fp8-fast': { in: 4119, out: 34868 },
   '@cf/meta/llama-3.3-70b-instruct-fp8-fast': { in: 26668, out: 204805 },
   '@cf/qwen/qwen3.8-27b': { in: 40909, out: 290909 },
   '@cf/google/gemma-4-26b-a4b-it': { in: 9091, out: 27273 },
   '@cf/zai-org/glm-4.7-flash': { in: 5500, out: 36400 },
   '@cf/mistralai/mistral-small-3.1-24b-instruct': { in: 31876, out: 50488 },
+  '@cf/ibm-granite/granite-4.0-h-micro': { in: 1545, out: 10182 },
 };
 
 export function estimateNeurons(model, tokensIn, tokensOut) {

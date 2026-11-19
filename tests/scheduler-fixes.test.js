@@ -11,7 +11,7 @@
 //       tests/autonomy-scheduler.test.js; here we pin the E-Stop + retry
 //       interaction instead).
 //
-// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011).
+// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011/012).
 // Run: node --test tests/scheduler-fixes.test.js (or: npm test)
 // Requires node:sqlite (Node >= 22.5; this repo runs Node 24).
 'use strict';
@@ -98,6 +98,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -119,7 +120,8 @@ function taskRow(db, id) {
 
 const RESEARCH_AGENT_IDS = [
   'automotive-research', 'technology-research', 'gadget-research',
-  'finance-research', 'travel-research', 'health-research', 'education-research',
+  'finance-research', 'travel-research', 'digital-tools-agent',
+  'health-research', 'education-research',
 ];
 
 describe('research pause handling (fix 1)', () => {

@@ -123,6 +123,34 @@ export function disclaimerForDivision(slug) {
   return DISCLAIMER_DIVISIONS.has(slug) ? GENERAL_INFO_DISCLAIMER : null;
 }
 
+/**
+ * Derive a 120-160 character meta description from REAL article text.
+ * Pure function, no I/O. Strips markdown headings and the AI-DRAFT
+ * marker line, then cuts at a sentence end (preferred) or a word
+ * boundary inside the 120-160 window. Returns '' when the text is too
+ * short to fill the range — the caller must not invent filler text.
+ * (Added 2026-11-20: the old title-only description was 77 chars and
+ * could never pass the 120-160 SEO check.)
+ */
+export function deriveSeoDescription(text) {
+  // Heading lines are removed while newlines are intact; when the input
+  // is already a single line (whitespace collapsed), the line regex
+  // would eat the whole string, so strip only the '#' markers instead.
+  let plain = String(text || '').replace(/^AI-DRAFT[^\n]*\n?/im, '');
+  plain = plain.includes('\n')
+    ? plain.replace(/^#{1,6}\s+.*$/gm, ' ')
+    : plain.replace(/#{1,6}\s+/g, '');
+  plain = plain.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (plain.length < 120) return '';
+  if (plain.length <= 160) return plain;
+  const cut = plain.slice(0, 160);
+  const sentenceEnd = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  if (sentenceEnd >= 119) return cut.slice(0, sentenceEnd + 1);
+  const lastSpace = cut.lastIndexOf(' ');
+  if (lastSpace >= 119) return cut.slice(0, lastSpace);
+  return cut;
+}
+
 // Newsletter subscriber statuses allowed by the CHECK constraint.
 export const SUBSCRIBER_STATUSES = ['pending', 'subscribed', 'unsubscribed'];
 

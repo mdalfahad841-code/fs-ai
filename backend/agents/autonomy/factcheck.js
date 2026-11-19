@@ -3,8 +3,8 @@
  *
  * Genuine checking, not a rubber stamp. Claims are extracted from the
  * article body sentence by sentence, then each one is matched against
- * the fetched source material for the article's division
- * (research_items evidence text + article_sources rows). Verdicts:
+ * THE ARTICLE'S OWN recorded sources only (article_sources rows,
+ * each resolved to its stored research_items row). Verdicts:
  * VERIFIED / INCORRECT / UNSUPPORTED / OUTDATED / CONFLICTING /
  * UNVERIFIABLE. A claim is VERIFIED only when real evidence text
  * supports it — a model's own unsupported answer is never evidence.
@@ -13,13 +13,22 @@
  * available the deterministic verdict stands.
  *
  * Correction (kind 'correct'): for each failed claim, find better
- * evidence, rewrite the statement from that evidence (LLM) or remove
- * the unsupported sentence when no evidence exists; record original vs
- * corrected text, store the pre-edit body as a revision, and re-check
- * the modified claim. Max 3 attempts per claim; a claim that still
- * fails stays unpublished. Never auto-approves and never sets
- * fact_checked — the publish gate reads fact_checks and sets
+ * evidence FROM THE SAME article-specific pool, rewrite the statement
+ * from that evidence (LLM) or remove the unsupported sentence when no
+ * evidence exists; record original vs corrected text + the evidence
+ * URL that supported the change, store the pre-edit body as a
+ * revision, and re-check the modified claim. Max 3 attempts per claim;
+ * a claim that still fails stays unpublished. Never auto-approves and
+ * never sets fact_checked — the publish gate reads fact_checks and sets
  * fact_checked=1 only when it publishes.
+ *
+ * ISOLATION (fixed 2026-11-20): the evidence pool used to be ALL
+ * research_items of the division (up to 200 rows), so article #27's
+ * correction imported a motorcycle statistic from an unrelated
+ * Electrek article. The pool is now article-specific only; an article
+ * with no recorded sources gets an EMPTY pool, and correction then
+ * marks claims for human review instead of reaching for unrelated
+ * sources.
  */
 import { d1All, d1First, d1Run, DISCLAIMER_DIVISIONS } from '../../middleware/validation.js';
 import { generateText } from '../../llm/index.js';
@@ -133,8 +142,8 @@ function isTimeSensitive(claim) {
 export function judgeClaimDeterministic(claim, evidence, evidencePoolEmpty) {
   if (!evidence) {
     return evidencePoolEmpty
-      ? { verdict: 'UNVERIFIABLE', explanation: 'No source material was fetched for this division, so the claim cannot be checked.' }
-      : { verdict: 'UNSUPPORTED', explanation: 'No fetched source supports this claim.' };
+      ? { verdict: 'UNVERIFIABLE', explanation: 'No source material is recorded for this article, so the claim cannot be checked.' }
+      : { verdict: 'UNSUPPORTED', explanation: 'No recorded source for this article supports this claim.' };
   }
   if (evidence.conflicting) {
     return { verdict: 'CONFLICTING', explanation: `Evidence mentions the topic but states a different number than the claim (${evidence.quote}).` };
@@ -163,18 +172,50 @@ async function llmJudge(env, claim, evidence) {
   return { supported, reasoning: String(res.text || '').slice(0, 300) };
 }
 
+/**
+ * Load the evidence pool for ONE article only: its own recorded
+ * sources (article_sources), each resolved to the stored research_items
+ * row it came from (by research_item_id, else by source_url).
+ * (Fixed 2026-11-20 — the old pool was ALL research_items of the
+ * division, up to 200 rows, so article #27's correction imported a
+ * motorcycle statistic from an unrelated article. Unrelated evidence
+ * can no longer enter a fact-check or a correction.)
+ * Pool items: { url, title, text, isOutdated, researchItemId }. A
+ * recorded source with no stored research row contributes its title
+ * only (weak evidence, still article-specific). An article with no
+ * sources at all gets an EMPTY pool: its claims are UNVERIFIABLE and
+ * correction must mark them for review instead of borrowing evidence.
+ */
 async function loadEvidence(env, article) {
-  const items = await d1All(env,
-    'SELECT id, source_id, title, url, published_at, summary, evidence_text, is_outdated FROM research_items ' +
-    'WHERE division_id = ? ORDER BY fetched_at DESC LIMIT 200', [article.division_id]) || [];
-  const sources = await d1All(env, 'SELECT source_title, source_url FROM article_sources WHERE article_id = ?', [article.id]) || [];
-  const pool = items.map((it) => ({
-    url: it.url, title: it.title, isOutdated: it.is_outdated === 1,
-    text: [it.title, it.summary, it.evidence_text].filter(Boolean).join(' '),
-  }));
+  const sources = await d1All(env, 'SELECT * FROM article_sources WHERE article_id = ? ORDER BY id ASC', [article.id]) || [];
+  const pool = [];
+  const seenItemIds = new Set();
   for (const s of sources) {
-    if (s.source_url && !pool.some((p) => p.url === s.source_url)) {
-      pool.push({ url: s.source_url, title: s.source_title || '', text: s.source_title || '', isOutdated: false });
+    let items = [];
+    if (s.research_item_id) {
+      const row = await d1First(env,
+        'SELECT id, source_id, title, url, published_at, summary, evidence_text, is_outdated FROM research_items WHERE id = ? LIMIT 1',
+        [s.research_item_id]);
+      if (row) items = [row];
+    }
+    if (!items.length && s.source_url) {
+      items = await d1All(env,
+        'SELECT id, source_id, title, url, published_at, summary, evidence_text, is_outdated FROM research_items WHERE url = ? ORDER BY fetched_at DESC',
+        [s.source_url]) || [];
+    }
+    for (const it of items) {
+      if (seenItemIds.has(it.id)) continue;
+      seenItemIds.add(it.id);
+      pool.push({
+        url: it.url, title: it.title, isOutdated: it.is_outdated === 1,
+        text: [it.title, it.summary, it.evidence_text].filter(Boolean).join(' '),
+        researchItemId: it.id,
+      });
+    }
+    if (!items.length) {
+      // Recorded source, no stored research row: its title is the only
+      // evidence text, and it is still article-specific.
+      pool.push({ url: s.source_url || null, title: s.source_title || '', text: s.source_title || '', isOutdated: false, researchItemId: null });
     }
   }
   return pool;
@@ -299,6 +340,24 @@ export async function runCorrection(env, article) {
     return { outcome: 'no-op', reason: 'Latest fact-check has no failed claims to correct.', articleId: article.id };
   }
   const pool = await loadEvidence(env, article);
+  // NO article-specific evidence at all: correction cannot rewrite
+  // anything from evidence, and it must NOT reach for unrelated
+  // sources (fixed 2026-11-20). Mark every failed claim for human
+  // review and leave the body untouched. The re-check below still runs
+  // so the review state is recorded as a fresh fact-check row.
+  if (pool.length === 0) {
+    const results = failedClaims.map((failed) => ({
+      claim: failed.claim_text, action: 'skipped', evidenceUrl: null,
+      reason: 'No article-specific evidence on record — needs human review.',
+    }));
+    const recheck = await checkArticle(env, article);
+    return {
+      outcome: 'done', articleId: article.id, title: article.title, division: article.division,
+      corrected: 0, removed: 0, skipped: failedClaims.length, results,
+      recheckVerdict: recheck.verdict, recheck,
+      note: 'No article-specific evidence — nothing was corrected or removed; failed claims need human review.',
+    };
+  }
   let body = String(article.body || '');
   const originalBody = body;
   let corrected = 0;
@@ -371,9 +430,9 @@ export async function runCorrection(env, article) {
       ? judgeClaimDeterministic(correctedText, findEvidence(correctedText, pool), pool.length === 0)
       : null;
     await d1Run(env,
-      'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [article.id, failed.id, failed.claim_text, correctedText, attempts + 1, action === 'corrected' ? 'applied' : action, recheck ? recheck.verdict : null]);
-    results.push({ claim: failed.claim_text, action, correctedText, recheckVerdict: recheck ? recheck.verdict : null });
+      'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict, evidence_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [article.id, failed.id, failed.claim_text, correctedText, attempts + 1, action === 'corrected' ? 'applied' : action, recheck ? recheck.verdict : null, action === 'corrected' && evidence ? evidence.url : null]);
+    results.push({ claim: failed.claim_text, action, correctedText, evidenceUrl: action === 'corrected' && evidence ? evidence.url : null, recheckVerdict: recheck ? recheck.verdict : null });
   }
 
   if (body !== originalBody) {

@@ -21,6 +21,7 @@
  *   POST /api/autonomy/sources/:id/fetch
  *   POST /api/autonomy/sources/:id/toggle { is_active: 0|1 }
  *   GET  /api/autonomy/fact-checks?article_id=
+ *   GET  /api/autonomy/seo?article_id=        (latest SEO check + 11 checks)
  *   GET  /api/autonomy/gate?article_id=
  *   GET  /api/autonomy/analytics
  *
@@ -50,7 +51,8 @@ import {
 
 const RESEARCH_AGENT_IDS = [
   'automotive-research', 'technology-research', 'gadget-research',
-  'finance-research', 'travel-research', 'health-research', 'education-research',
+  'finance-research', 'travel-research', 'digital-tools-agent',
+  'health-research', 'education-research',
 ];
 
 const ROLE_LABELS = {
@@ -161,14 +163,14 @@ async function agentStatuses(env) {
   const agents = [];
   for (const id of QUEUE_AGENTS) {
     if (id === 'research') {
-      // research = the 7 division research agents collectively.
+      // research = the 8 division research agents collectively.
       const parts = RESEARCH_AGENT_IDS.map((rid) => ({ id: rid, status: statusOf(rid) }));
       const statuses = parts.map((p) => p.status);
       const status = statuses.every((s) => s === 'active') ? 'active'
         : statuses.some((s) => s === 'disabled') ? 'disabled' : 'paused';
       agents.push({
         id, role: ROLE_LABELS[id], status, registry: 'collective',
-        note: 'The 7 division research agents collectively (automotive, technology, gadget, finance, travel, health, education).',
+        note: 'The 8 division research agents collectively (automotive, technology, gadget, finance, travel, digital-tools, health, education).',
         agents: parts,
       });
       continue;
@@ -200,6 +202,26 @@ async function handleStatus(request, env) {
   const activeProvider = providers.find((p) => p.status === 'available');
   const lastBackup = await safeFirst(env,
     "SELECT * FROM backup_runs WHERE status = 'success' ORDER BY finished_at DESC, id DESC LIMIT 1");
+  // Last run per queue agent, for the dashboard's per-automation state
+  // (ON/OFF is the agent status above; this adds last run + last result
+  // + the failure reason when a run failed). One query: the newest run
+  // per agent. agent_runs.detail is a JSON blob — the reason/error lives
+  // there. (Added 2026-11-20.)
+  const lastRunRows = await d1All(env,
+    'SELECT * FROM agent_runs WHERE id IN (SELECT MAX(id) FROM agent_runs GROUP BY agent)') || [];
+  const lastRuns = {};
+  for (const r of lastRunRows) {
+    let reason = null;
+    try {
+      const detail = JSON.parse(r.detail || '{}');
+      reason = detail.reason || detail.error
+        || (detail.result && (detail.result.reason || detail.result.error)) || null;
+    } catch { reason = null; }
+    lastRuns[r.agent] = {
+      outcome: r.outcome, startedAt: r.started_at, finishedAt: r.finished_at,
+      reason: reason ? String(reason).slice(0, 200) : null,
+    };
+  }
   return jsonOk({
     autonomyLevel: settings.autonomy_level || '3',
     targetLevel: settings.autonomy_target || '3',
@@ -207,6 +229,7 @@ async function handleStatus(request, env) {
     emergencyStopKey: EMERGENCY_STOP_KEY,
     tasks,
     agents: await agentStatuses(env),
+    lastRuns,
     revenue: '$0.00',
     traffic: 'Data unavailable',
     publishingMode: settings.publishing_mode || 'approved_only',
@@ -459,11 +482,19 @@ async function handleRunDaily(request, env) {
   if (await getEmergencyStop(env)) {
     // runDailyWorkflow logs the skip itself; answer 423 as specified.
     await runDailyWorkflow(env, { force });
-    return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { skipped: true });
+    return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { skipped: true, status: 'blocked' });
   }
   const result = await runDailyWorkflow(env, { force });
-  if (!result.ok) return jsonError(result.error || 'Daily workflow failed.', 500);
-  return jsonOk({ ok: true, ...result });
+  if (!result.ok) return jsonError(result.error || 'Daily workflow failed.', 500, { status: 'failed' });
+  // Real execution status, never a bare success: 'completed' (the
+  // workflow ran), 'already_completed' (it already ran today and force
+  // was NOT requested — a no-op, not a success), 'blocked' (E-Stop).
+  // The dashboard button always sends force:true (an explicit manual
+  // re-run), so a button click reports 'completed'; the
+  // 'already_completed' status is for non-force callers (e.g. the
+  // scheduled run firing twice).
+  const status = result.skipped ? 'blocked' : result.duplicate ? 'already_completed' : 'completed';
+  return jsonOk({ ok: true, status, ...result });
 }
 
 async function handleRetryTask(request, env, id) {
@@ -560,6 +591,30 @@ async function handleGate(request, env) {
 }
 
 /**
+ * GET /api/autonomy/seo?article_id= — the latest SEO check for one
+ * article, with the individual 11-check results parsed from checks_json
+ * so the dashboard can show which check failed and why (mirrors
+ * handleFactChecks; added 2026-11-20 for the per-article SEO view).
+ */
+async function handleSeoChecks(request, env) {
+  if (!env.DB) return jsonError('SEO checks require the D1 database', 503);
+  const q = new URL(request.url).searchParams;
+  const articleId = Number(q.get('article_id'));
+  if (!Number.isInteger(articleId) || articleId <= 0) return jsonError('article_id is required.', 400);
+  const latest = await safeFirst(env,
+    'SELECT * FROM seo_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [articleId]);
+  if (!latest) return jsonOk({ articleId, seoCheck: null, checks: [], source: 'd1' });
+  let checks = [];
+  try {
+    const parsed = JSON.parse(latest.checks_json || '[]');
+    if (Array.isArray(parsed)) checks = parsed;
+  } catch {
+    checks = [];
+  }
+  return jsonOk({ articleId, seoCheck: latest, checks, source: 'd1' });
+}
+
+/**
  * GET /api/autonomy/analytics — first-party D1 analytics only. GA4 has
  * no Data API connection, so traffic stays 'Data unavailable' and
  * revenue stays $0.00; everything else is counted from real D1 rows.
@@ -622,7 +677,13 @@ async function handleScaffoldConvert(request, env, runId) {
   if (!detail.scaffold) return jsonError('This run has no scaffold to convert.', 400);
   const res = await convertScaffoldToDraft(env, detail.scaffold);
   if (!res.ok) return jsonError(res.error || 'Draft could not be created.', res.status || 500);
-  return jsonOk({ article: res.article }, 201);
+  return jsonOk({
+    article: res.article,
+    sourcesRecorded: res.sourcesRecorded,
+    sourcesDeduped: res.sourcesDeduped,
+    sourceErrors: res.sourceErrors,
+    ...(res.warning ? { warning: res.warning } : {}),
+  }, 201);
 }
 
 export async function handleAutonomy(request, env, ctx, auth) {
@@ -657,6 +718,7 @@ export async function handleAutonomy(request, env, ctx, auth) {
     return handleToggleSource(request, env, parts[3]);
   }
   if (method === 'GET' && path === '/api/autonomy/fact-checks') return handleFactChecks(request, env);
+  if (method === 'GET' && path === '/api/autonomy/seo') return handleSeoChecks(request, env);
   if (method === 'GET' && path === '/api/autonomy/gate') return handleGate(request, env);
   if (method === 'GET' && path === '/api/autonomy/analytics') return handleAnalytics(request, env);
   if (method === 'POST' && parts.length === 5 && parts[2] === 'scaffolds' && parts[4] === 'convert') {

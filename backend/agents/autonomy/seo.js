@@ -11,11 +11,16 @@
  * the latest verdict. SEO never overrides factual accuracy — the gate
  * requires a fact-check pass first.
  *
- * Fills seo_title / seo_description only when they are blank — never
- * overwrites owner-set values. Returns internal-link suggestions (real
- * published slugs in the same division) and a heading count.
+ * REPAIR (added 2026-11-20): runSeo() now REPAIRS inadequate fields
+ * from the article's own content instead of filling blanks only — a
+ * short meta description is regenerated from the body (120-160 chars),
+ * H3 headings are promoted to H2 when the body has fewer than 2 H2s,
+ * and a genuine internal link is appended when a real published sibling
+ * exists. Nothing is invented: no heading or link is created from
+ * nothing, and published articles are never modified. Every repair is
+ * recorded as an article_revisions row first.
  */
-import { d1All, d1First, d1Run, nowIso } from '../../middleware/validation.js';
+import { d1All, d1First, d1Run, nowIso, deriveSeoDescription } from '../../middleware/validation.js';
 
 function parsePayload(task) {
   if (!task) return {};
@@ -79,12 +84,16 @@ export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
   // 1. SEO title 30-60 chars.
   const seoTitle = String(article.seo_title || '').trim();
   push('seo-title', seoTitle.length >= 30 && seoTitle.length <= 60, seoTitle ? 'needs-review' : 'failed',
-    seoTitle ? `SEO title is ${seoTitle.length} characters (target 30-60).` : 'SEO title is missing.');
+    seoTitle
+      ? `SEO title is ${seoTitle.length} characters (target 30-60). Fix: shorten it to 30-60 characters — the SEO repair truncates an over-long title at a word boundary.`
+      : 'SEO title is missing. Fix: set it from the article title (30-60 characters).');
 
   // 2. Meta description 120-160 chars.
   const seoDescription = String(article.seo_description || '').trim();
   push('meta-description', seoDescription.length >= 120 && seoDescription.length <= 160, seoDescription ? 'needs-review' : 'failed',
-    seoDescription ? `Meta description is ${seoDescription.length} characters (target 120-160).` : 'Meta description is missing.');
+    seoDescription
+      ? `Meta description is ${seoDescription.length} characters (target 120-160). Fix: regenerate it from the article text to 120-160 characters — the SEO repair does this automatically.`
+      : 'Meta description is missing. Fix: write one from the article text (120-160 characters).');
 
   // 3. Unique slug.
   const slugDupes = await d1All(env, 'SELECT id FROM articles WHERE slug = ? AND id != ?', [article.slug, article.id]) || [];
@@ -96,7 +105,7 @@ export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
   const h2Count = (body.match(/^##\s.+$/gm) || []).length + (body.match(/<h2[\s>]/gi) || []).length;
   const h3Count = (body.match(/^###\s.+$/gm) || []).length + (body.match(/<h3[\s>]/gi) || []).length;
   push('heading-hierarchy', h1Count === 0 && h2Count >= 2, 'needs-review',
-    `Body headings: ${h1Count} H1, ${h2Count} H2, ${h3Count} H3. Title is the page H1; body needs at least 2 H2s and no H1 of its own.`);
+    `Body headings: ${h1Count} H1, ${h2Count} H2, ${h3Count} H3. Title is the page H1; body needs at least 2 H2s and no H1 of its own. Fix: write section headings with ## (H2) — the SEO repair promotes H3s to H2s when at least 2 exist.`);
 
   // 5. Keyword relevance: title keywords present in the body.
   const keywords = titleKeywords(article.title);
@@ -116,7 +125,7 @@ export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
   }));
   const linksInternally = internalLinks.some((l) => body.includes(l.url) || body.includes(`id=${l.id}`) || body.includes(l.slug));
   push('internal-links', linksInternally, 'needs-review',
-    linksInternally ? 'Body links to at least one other published article.' : `${siblings.length} related published article(s) available to link — none linked yet.`);
+    linksInternally ? 'Body links to at least one other published article.' : `${siblings.length} related published article(s) available to link — none linked yet. Fix: add a link to one of them — the SEO repair appends a Related reading link to the newest published sibling in the same division.`);
 
   // 7. Image alt text when images exist.
   const imgs = [...body.matchAll(/<img[^>]*>/gi)].map((m) => m[0]);
@@ -179,6 +188,112 @@ export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
   return { checks, verdict, failed: failed.map((c) => c.name), needsReview: needsReview.map((c) => c.name) };
 }
 
+/**
+ * Repair inadequate SEO fields on a DRAFT article from its own real
+ * content. (Added 2026-11-20 — the old code filled BLANK fields only,
+ * so a 77-char meta description, 0 H2s and no internal link could
+ * never pass the SEO checks.)
+ * - meta description: regenerated from the body when missing or
+ *   outside 120-160 chars (deriveSeoDescription — real text only).
+ * - seo title: truncated at a word boundary when over 60 chars.
+ * - headings: the first H3s are promoted to H2s when the body has
+ *   fewer than 2 H2s but at least 2 H3s (formatting only — no content
+ *   invented; a body with fewer than 2 headings total cannot be
+ *   repaired and keeps failing with an actionable detail).
+ * - internal link: a "Related reading" line is appended linking the
+ *   newest published sibling in the same division, when the body
+ *   links none and one exists (a real link — never faked).
+ * Published articles are NEVER modified (report only). Every repair
+ * stores a pre-edit article_revisions row first. Returns
+ * { repaired, repairs: [human-readable strings],
+ *   repairedFields: [field names changed, e.g. 'seo_description'],
+ *   article (fresh row or the input) }.
+ */
+export async function repairSeoFields(env, article) {
+  const repairs = [];
+  const repairedFields = [];
+  const isDraft = String(article.status || '') !== 'published';
+  if (!isDraft) return { repaired: false, repairs, repairedFields, article };
+
+  const body = String(article.body || '');
+  const plainBody = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  let newBody = body;
+  let newSeoTitle = String(article.seo_title || '').trim();
+  let newSeoDescription = String(article.seo_description || '').trim();
+
+  // Meta description: regenerate from the body when missing or out of range.
+  // Pass the RAW body (newlines intact) — deriveSeoDescription strips
+  // heading lines, which only works before whitespace is collapsed.
+  if (newSeoDescription.length < 120 || newSeoDescription.length > 160) {
+    const derived = deriveSeoDescription(body);
+    if (derived) {
+      newSeoDescription = derived;
+      repairedFields.push('seo_description');
+      repairs.push(`meta-description regenerated from the article text (${derived.length} characters).`);
+    }
+  }
+  // SEO title: fill a blank title from the article title; truncate an
+  // over-long title at a word boundary (never lengthen a short one —
+  // a short title cannot be fixed from nothing).
+  if (!newSeoTitle && article.title) {
+    newSeoTitle = String(article.title).slice(0, 60);
+    repairedFields.push('seo_title');
+    repairs.push('seo-title filled from the article title.');
+  }
+  // SEO title: truncate an over-long title at a word boundary (never
+  // lengthen — a short title cannot be fixed from nothing).
+  if (newSeoTitle.length > 60) {
+    const cut = newSeoTitle.slice(0, 60);
+    const lastSpace = cut.lastIndexOf(' ');
+    newSeoTitle = lastSpace >= 30 ? cut.slice(0, lastSpace) : cut;
+    repairedFields.push('seo_title');
+    repairs.push(`seo-title truncated to ${newSeoTitle.length} characters.`);
+  }
+  // Headings: promote H3s to H2s when the body has <2 H2s but >=2 H3s.
+  const h2Count = (newBody.match(/^##\s.+$/gm) || []).length + (newBody.match(/<h2[\s>]/gi) || []).length;
+  const h3Count = (newBody.match(/^###\s.+$/gm) || []).length + (newBody.match(/<h3[\s>]/gi) || []).length;
+  if (h2Count < 2 && h3Count >= 2) {
+    let toPromote = 2 - h2Count;
+    newBody = newBody.replace(/^###\s/gm, () => (toPromote-- > 0 ? '## ' : '### '));
+    if (toPromote > 0) {
+      // HTML headings: promote openings, then the same number of closings.
+      let promotedHtml = 0;
+      newBody = newBody.replace(/<h3([\s>])/gi, (m, g) => {
+        if (toPromote > 0) { toPromote -= 1; promotedHtml += 1; return `<h2${g}`; }
+        return m;
+      });
+      let closingLeft = promotedHtml;
+      newBody = newBody.replace(/<\/h3>/gi, (m) => (closingLeft-- > 0 ? '</h2>' : m));
+    }
+    repairs.push(`promoted ${2 - h2Count} H3 heading(s) to H2 (formatting only — no content changed).`);
+  }
+  // Internal link: append a Related reading line to a real sibling.
+  const siblings = await d1All(env,
+    'SELECT id, title, slug FROM articles WHERE division_id = ? AND status = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT 5',
+    [article.division_id, 'published', article.id]) || [];
+  const internalLinks = siblings.map((s) => ({
+    id: s.id, title: s.title, slug: s.slug,
+    url: `https://fs-ai-5w5.pages.dev/pages/article.html?id=${s.id}`,
+  }));
+  const linksInternally = internalLinks.some((l) => newBody.includes(l.url) || newBody.includes(`id=${l.id}`) || newBody.includes(l.slug));
+  if (!linksInternally && internalLinks.length) {
+    const target = internalLinks[0];
+    newBody = `${newBody.replace(/\s+$/, '')}\n\nRelated reading: [${target.title}](${target.url})`;
+    repairs.push(`added a Related reading link to published article #${target.id} ("${target.title}").`);
+  }
+
+  if (!repairs.length) return { repaired: false, repairs, repairedFields, article };
+  await d1Run(env,
+    'INSERT INTO article_revisions (article_id, title, excerpt, body, status, revised_by) VALUES (?, ?, ?, ?, ?, ?)',
+    [article.id, article.title, article.excerpt || null, body, article.status, 'seo-repair']);
+  await d1Run(env, 'UPDATE articles SET body = ?, seo_title = ?, seo_description = ?, updated_at = ? WHERE id = ?',
+    [newBody, newSeoTitle, newSeoDescription, nowIso(), article.id]);
+  const fresh = await d1First(env,
+    'SELECT a.*, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id WHERE a.id = ? LIMIT 1',
+    [article.id]);
+  return { repaired: true, repairs, repairedFields, article: fresh || { ...article, body: newBody, seo_title: newSeoTitle, seo_description: newSeoDescription } };
+}
+
 export async function runSeo(task, env) {
   const payload = parsePayload(task);
   const articleId = Number(payload.article_id);
@@ -190,29 +305,19 @@ export async function runSeo(task, env) {
     [articleId]);
   if (!article) return { outcome: 'failed', error: `Article ${articleId} not found.` };
 
-  const body = String(article.body || '');
+  // Repair first (drafts only — published articles are never modified),
+  // then measure. The old code filled BLANK fields only; a short meta
+  // description, H3-only headings or a missing internal link could
+  // never pass. Repairs use the article's own real content only.
+  const repair = await repairSeoFields(env, article);
+  const fresh = repair.article;
+  const body = String(fresh.body || '');
   const plainBody = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  const seoTitle = String(article.title || '').slice(0, 60);
-  const seoDescription = String(article.excerpt || '').trim()
-    ? String(article.excerpt).slice(0, 160)
-    : plainBody.slice(0, 160);
+  const seoTitle = String(fresh.seo_title || '');
+  const seoDescription = String(fresh.seo_description || '');
   const markdownHeadings = (body.match(/^#{1,6}\s.+$/gm) || []).length;
   const htmlHeadings = (body.match(/<h[1-6][^>]*>/gi) || []).length;
   const headingCount = markdownHeadings + htmlHeadings;
-
-  // Fill blanks only — never overwrite owner-set values.
-  const filled = [];
-  if (!article.seo_title && seoTitle) {
-    await d1Run(env, 'UPDATE articles SET seo_title = ?, updated_at = ? WHERE id = ?', [seoTitle, nowIso(), articleId]);
-    filled.push('seo_title');
-  }
-  if (!article.seo_description && seoDescription) {
-    await d1Run(env, 'UPDATE articles SET seo_description = ?, updated_at = ? WHERE id = ?', [seoDescription, nowIso(), articleId]);
-    filled.push('seo_description');
-  }
-  const fresh = await d1First(env,
-    'SELECT a.*, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id WHERE a.id = ? LIMIT 1',
-    [articleId]);
 
   const suite = await runSeoCheckSuite(env, fresh);
   await d1Run(env, 'INSERT INTO seo_checks (article_id, verdict, checks_json) VALUES (?, ?, ?)',
@@ -229,17 +334,18 @@ export async function runSeo(task, env) {
   return {
     outcome: 'done',
     articleId,
-    title: article.title,
-    division: article.division,
+    title: fresh.title,
+    division: fresh.division,
     seoTitle,
     seoDescription,
     headingCount,
     internalLinks,
-    filled,
+    filled: repair.repairedFields,
+    repairs: repair.repairs,
     verdict: suite.verdict,
     checks: suite.checks,
-    note: filled.length
-      ? `Filled blank field(s): ${filled.join(', ')} — owner-set values were not touched.`
-      : 'SEO fields already set — nothing overwritten.',
+    note: repair.repaired
+      ? `SEO repaired from the article's own content: ${repair.repairs.join(' ')}`
+      : 'SEO fields already adequate — nothing repaired, nothing overwritten.',
   };
 }

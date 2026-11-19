@@ -7,7 +7,7 @@
 // throwaway local SQLite database via scripts/restore-backup.js —
 // production is never touched.
 //
-// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011).
+// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011/012).
 // Run: node --test tests/backup-runs.test.js (or: npm test)
 // Requires node:sqlite (Node >= 22.5; this repo runs Node 24).
 'use strict';
@@ -92,6 +92,7 @@ const FULL_FILES = [
   'database/migrations/009_factcheck.sql',
   'database/migrations/010_pipeline.sql',
   'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
 ];
 
 function freshEnv(files = FULL_FILES) {

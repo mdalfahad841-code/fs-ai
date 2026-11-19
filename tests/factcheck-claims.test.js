@@ -7,7 +7,7 @@
 // Correction rewrites from evidence or removes the unsupported sentence.
 // No claim is VERIFIED without real supporting evidence.
 //
-// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011).
+// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011/012).
 // The LLM is stubbed through env.AI (the Workers AI binding shape) —
 // generateText never touches the network here.
 // Run: node --test tests/factcheck-claims.test.js (or: npm test)
@@ -96,6 +96,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -270,6 +271,9 @@ describe('checkArticle (real DB)', () => {
     const { db, env } = freshEnv();
     insertResearchItem(db, { title: 'Home charging', summary: 'Home charging adds range per hour.', evidence: 'A home charger typically adds about 40 kilometres of range per hour of charging.' });
     const id = insertArticle(db, 'Home charging adds range and the charger costs less than public fast charging, saving money every month.');
+    // Evidence isolation (2026-11-20): the article must record its own
+    // source — the checker no longer reads the whole division pool.
+    addArticleSource(db, id, 'https://example.com/source-1');
     const r = await checkArticle(env, loadArticle(db, id));
     assert.equal(r.claimsTotal, 1);
     assert.equal(r.claims[0].verdict, 'UNSUPPORTED', 'score 0.38 < 0.5 and no provider — deterministic verdict stands');
@@ -279,6 +283,7 @@ describe('checkArticle (real DB)', () => {
     const { db, env } = freshEnv();
     insertResearchItem(db, { title: 'Home charging', summary: 'Home charging adds range per hour.', evidence: 'A home charger typically adds about 40 kilometres of range per hour of charging.' });
     const id = insertArticle(db, 'Home charging adds range and the charger costs less than public fast charging, saving money every month.');
+    addArticleSource(db, id, 'https://example.com/source-1');
     stubAi(env, 'SUPPORTED\nThe evidence states the same charging rate.');
     const r = await checkArticle(env, loadArticle(db, id));
     assert.equal(r.claimsTotal, 1);
@@ -294,6 +299,7 @@ describe('runCorrection (real DB)', () => {
     const { db, env } = freshEnv();
     insertResearchItem(db, { title: 'EV Sales 2023', summary: 'EV sales reached 14 million units worldwide in 2023.', evidence: 'EV sales reached 14 million units worldwide in 2023, according to the International Energy Agency.' });
     const id = insertArticle(db, 'EV sales reached 20 million units worldwide in 2023, according to industry reports.');
+    addArticleSource(db, id, 'https://example.com/source-1');
     const first = await checkArticle(env, loadArticle(db, id));
     assert.notEqual(first.verdict, 'pass');
     assert.equal(first.claims[0].verdict, 'CONFLICTING');
@@ -322,6 +328,7 @@ describe('runCorrection (real DB)', () => {
     const { db, env } = freshEnv();
     insertResearchItem(db, { title: 'EV Sales 2023', summary: 'EV sales reached 14 million units worldwide in 2023.', evidence: 'EV sales reached 14 million units worldwide in 2023, according to the International Energy Agency.' });
     const id = insertArticle(db, 'EV sales reached 14 million units worldwide in 2023.\n\nEvery car on Earth will be electric by next Tuesday, scientists confirmed.');
+    addArticleSource(db, id, 'https://example.com/source-1');
     await checkArticle(env, loadArticle(db, id));
     stubAi(env, 'I cannot verify this claim.');
     const r = await runCorrection(env, loadArticle(db, id));
@@ -338,6 +345,7 @@ describe('runCorrection (real DB)', () => {
     const { db, env } = freshEnv();
     insertResearchItem(db, { title: 'EV Sales 2023', summary: 'EV sales reached 14 million units worldwide in 2023.', evidence: 'EV sales reached 14 million units worldwide in 2023, according to the International Energy Agency.' });
     const id = insertArticle(db, 'EV sales reached 20 million units worldwide in 2023, according to industry reports.');
+    addArticleSource(db, id, 'https://example.com/source-1');
     await checkArticle(env, loadArticle(db, id));
     // The "LLM" offers a rewrite with a NEW invented number (77 million) —
     // it must be rejected even though the year 2023 matches.
@@ -347,14 +355,21 @@ describe('runCorrection (real DB)', () => {
     assert.ok(!db.prepare('SELECT body FROM articles WHERE id = ?').get(id).body.includes('77 million'));
   });
 
-  it('corrects an UNVERIFIABLE claim (no evidence at all) by removing it', async () => {
+  it('marks an UNVERIFIABLE claim (no evidence at all) for human review instead of removing it', async () => {
+    // Behaviour change 2026-11-20 (evidence isolation): with no
+    // article-specific evidence on record, correction must NOT borrow
+    // unrelated sources and must NOT delete content it cannot judge —
+    // the claim is marked for human review and the body is untouched.
     const { db, env } = freshEnv();
     const id = insertArticle(db, 'Every car on Earth will be electric by next Tuesday, scientists confirmed.');
     await checkArticle(env, loadArticle(db, id));
     const r = await runCorrection(env, loadArticle(db, id));
     assert.equal(r.outcome, 'done');
-    assert.equal(r.removed, 1, 'unverifiable claim removed, not left in the article');
-    assert.ok(!db.prepare('SELECT body FROM articles WHERE id = ?').get(id).body.includes('next Tuesday'));
+    assert.equal(r.skipped, 1, 'claim skipped for human review, not removed');
+    assert.equal(r.removed, 0);
+    assert.equal(r.results[0].action, 'skipped');
+    assert.match(r.results[0].reason, /human review/);
+    assert.ok(db.prepare('SELECT body FROM articles WHERE id = ?').get(id).body.includes('next Tuesday'), 'body untouched without evidence');
   });
 
   it('is a no-op when the latest fact-check already passes', async () => {

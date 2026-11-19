@@ -2,7 +2,7 @@
 //
 // The owner-only orchestrator endpoints for research sources, fact-check
 // reads, the publish gate and task retry, against a REAL SQLite database
-// (schema + seed + migrations 005/006/008/009/010/011). Feed validation
+// (schema + seed + migrations 005/006/008/009/010/011/012). Feed validation
 // uses a stubbed global fetch — no network in these tests.
 //
 // Run: node --test tests/sources-api.test.js (or: npm test)
@@ -93,6 +93,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }

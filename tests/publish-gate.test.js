@@ -9,7 +9,7 @@
 // fully eligible. When it does approve, it sets fact_checked=1 and
 // records a pre-approval revision — the fact-checker itself never sets it.
 //
-// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011).
+// Real SQLite database (schema + seed + migrations 005/006/008/009/010/011/012).
 // Run: node --test tests/publish-gate.test.js (or: npm test)
 // Requires node:sqlite (Node >= 22.5; this repo runs Node 24).
 'use strict';
@@ -93,6 +93,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }

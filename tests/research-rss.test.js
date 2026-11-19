@@ -2,7 +2,7 @@
 //
 // The RSS/Atom parser, the fetch wrapper, D1-backed source storage and
 // the division research-agent pause mapping, against a REAL SQLite
-// database (schema + seed + migrations 005/006/008/009/010/011).
+// database (schema + seed + migrations 005/006/008/009/010/011/012).
 // No test here touches the network: fetch is always stubbed with canned
 // XML. The 24 seeded sources themselves were verified live by curl on
 // 2026-11-19 (see docs/AUTONOMY-MASTER-2026-11-19.md); these tests pin
@@ -111,6 +111,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -271,21 +272,24 @@ describe('research sources in D1', () => {
 });
 
 describe('division research-agent pause mapping', () => {
-  it('maps all 7 research divisions; digital-tools has no research agent', () => {
+  it('maps all 8 research divisions, including digital-tools', () => {
+    // Behaviour change 2026-11-20: digital-tools now has a registry
+    // entry (its research is governed by the Tools agent), so pausing
+    // that agent blocks digital-tools research tasks.
     assert.deepEqual(Object.keys(DIVISION_RESEARCH_REGISTRY).sort(), [
-      'ai-technology', 'automotive', 'education-learning', 'finance-money',
-      'gadgets-electronics', 'health-wellness', 'travel-lifestyle',
+      'ai-technology', 'automotive', 'digital-tools', 'education-learning',
+      'finance-money', 'gadgets-electronics', 'health-wellness', 'travel-lifestyle',
     ]);
     assert.equal(DIVISION_RESEARCH_REGISTRY.automotive, 'automotive-research');
     assert.equal(DIVISION_RESEARCH_REGISTRY['ai-technology'], 'technology-research');
-    assert.equal(DIVISION_RESEARCH_REGISTRY['digital-tools'], undefined);
+    assert.equal(DIVISION_RESEARCH_REGISTRY['digital-tools'], 'digital-tools-agent');
   });
 
   it('registryIdForTask resolves research by division and other agents 1:1', () => {
     assert.equal(registryIdForTask({ agent: 'research', payload: { division: 'automotive' } }), 'automotive-research');
     assert.equal(registryIdForTask({ agent: 'research', payload: JSON.stringify({ division: 'finance-money' }) }), 'finance-research');
     assert.equal(registryIdForTask({ agent: 'research', payload: {} }), null, 'division-less research has no single governor');
-    assert.equal(registryIdForTask({ agent: 'research', payload: { division: 'digital-tools' } }), null);
+    assert.equal(registryIdForTask({ agent: 'research', payload: { division: 'digital-tools' } }), 'digital-tools-agent');
     assert.equal(registryIdForTask({ agent: 'content-creation', payload: {} }), 'content-creation');
     assert.equal(registryIdForTask({ agent: 'security-monitoring', payload: {} }), 'security');
     assert.equal(registryIdForTask(null), null);

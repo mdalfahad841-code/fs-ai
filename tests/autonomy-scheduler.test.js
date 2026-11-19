@@ -2,7 +2,7 @@
 //
 // runDailyWorkflow / runWeeklyWorkflow / runTask against a REAL SQLite
 // database built from database/schema.sql + migrations 005 + 006 +
-// database/seed.sql + migrations 008 + 009 + 010 + 011 via node:sqlite
+// database/seed.sql + migrations 008 + 009 + 010 + 011 + 012 via node:sqlite
 // (same pattern as tests/real-db.test.js). Each test asserts real DB
 // state. Migrations 008-011 run AFTER seed.sql so migration 008's
 // research-source seeds (which select divisions by slug) find the
@@ -99,7 +99,7 @@ function makeRealD1(db) {
   };
 }
 
-// Fresh real DB per test: schema + autonomy migrations 005/006 + seed + 008/009/010/011.
+// Fresh real DB per test: schema + autonomy migrations 005/006 + seed + 008/009/010/011/012.
 // Migration 004 is deliberately NOT applied (see the header note).
 function freshEnv() {
   const db = buildDb([
@@ -111,6 +111,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }

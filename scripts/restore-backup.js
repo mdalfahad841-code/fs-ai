@@ -241,6 +241,7 @@ function applySchemaAndSeed(db) {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]) {
     const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
     for (const stmt of splitSqlStatements(text)) db.exec(stmt);

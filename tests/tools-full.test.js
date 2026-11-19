@@ -346,7 +346,7 @@ describe('boundary values', () => {
       [/Next service by date: 31 Jan 2027/]],
     ['maintenance-planner', { lastDate: '2026-05-11', lastKm: 0, intervalKm: 10000, intervalMonths: 6 },
       [/Next service by distance: 10000 km/]], // brand-new car, odometer 0
-    ['age-calculator', { dob: (() => { const y = new Date(); y.setDate(y.getDate() - 1); return y.toISOString().slice(0, 10); })() },
+    ['age-calculator', { dob: (() => { const y = new Date(); y.setDate(y.getDate() - 1); return `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`; })() }, // local-date format (NOT toISOString: UTC conversion shifts the day back between 00:00–06:00 Dhaka)
       [/Age: 0 years, 0 months, 1 days/, /Total days lived: 1/]],
     ['date-calculator', { mode: 'Days between two dates', from: '2026-11-01', to: '2026-11-01', days: 30 },
       [/0 days/]],

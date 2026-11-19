@@ -2,7 +2,7 @@
 //
 // Every one of the 10 queue-agent handlers is exercised against a REAL
 // SQLite database built from database/schema.sql + migrations 005 + 006
-// + database/seed.sql + migrations 008 + 009 + 010 + 011 via node:sqlite
+// + database/seed.sql + migrations 008 + 009 + 010 + 011 + 012 via node:sqlite
 // (same pattern as tests/real-db.test.js). Each test asserts real DB
 // state, not just the returned shape: nothing publishes, posts, spends
 // or fabricates. Migrations 008-011 run AFTER seed.sql so migration
@@ -90,7 +90,7 @@ function makeRealD1(db) {
   };
 }
 
-// Fresh real DB per test: schema + autonomy migrations 005/006 + seed + 008/009/010/011.
+// Fresh real DB per test: schema + autonomy migrations 005/006 + seed + 008/009/010/011/012.
 // Migration 004 is deliberately NOT applied (see the header note).
 function freshEnv() {
   const db = buildDb([
@@ -102,6 +102,7 @@ function freshEnv() {
     'database/migrations/009_factcheck.sql',
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -125,6 +126,23 @@ function insertArticle(db, opts) {
 
 function articleRow(db, id) {
   return db.prepare('SELECT * FROM articles WHERE id = ?').get(id);
+}
+
+// Evidence for the content-creation tests (2026-11-20): generation is
+// evidence-grounded — the agent only writes a draft when a supplied
+// source URL resolves to a stored research item.
+const CONTENT_EVIDENCE_URL = 'https://example.com/fake-ai-draft-evidence';
+function seedContentEvidence(db) {
+  const src = db.prepare("INSERT INTO research_sources (division_id, name, url, source_type) VALUES (1, 'Test Auto News', 'https://example.com/auto-news', 'rss')").run();
+  db.prepare('INSERT INTO research_items (source_id, division_id, title, url, summary, evidence_text, published_at, fetched_at, is_outdated) VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0)').run(
+    Number(src.lastInsertRowid),
+    'How to Test a Fake AI Draft',
+    CONTENT_EVIDENCE_URL,
+    'Testing guidance for a fake AI draft.',
+    'Testing guidance for a fake AI draft. It is general guidance only.',
+    '2026-11-19T00:00:00.000Z',
+    new Date().toISOString(),
+  );
 }
 
 describe('research agent', () => {
@@ -151,8 +169,11 @@ describe('research agent', () => {
 describe('content-creation agent', () => {
   it('scaffold no-op without an LLM: outline + SEO fields, no fabricated body, no article row', async () => {
     const { db, env } = freshEnv();
+    // Evidence IS seeded, so the no-op below is genuinely "no LLM
+    // provider available" — not missing evidence (2026-11-20).
+    seedContentEvidence(db);
     const result = await runAutonomyTask(
-      { agent: 'content-creation', kind: 'draft', payload: { title: 'How to Test a Fake AI Draft', division: 'automotive', sources: [] } }, env);
+      { agent: 'content-creation', kind: 'draft', payload: { title: 'How to Test a Fake AI Draft', division: 'automotive', sources: [CONTENT_EVIDENCE_URL] } }, env);
     assert.equal(result.outcome, 'no-op');
     assert.match(result.reason, /All free LLM providers unavailable/);
     assert.ok(result.scaffold, 'scaffold is returned');
@@ -208,23 +229,38 @@ describe('fact-checking agent', () => {
 });
 
 describe('SEO agent', () => {
-  it('fills only blank seo fields from the real text and writes them to D1', async () => {
+  it('fills blank seo fields from the real text and writes them to D1', async () => {
+    // Behaviour change 2026-11-20: published articles are never
+    // modified by the SEO repair, so this uses a DRAFT with blank fields
+    // (the old test used seeded published article 1, which the repair
+    // now leaves untouched).
     const { db, env } = freshEnv();
-    const seeded = articleRow(db, 1);
-    assert.equal(seeded.seo_title, null, 'seeded article 1 starts with a blank seo_title');
-    assert.equal(seeded.seo_description, null, 'seeded article 1 starts with a blank seo_description');
+    const body = [
+      '## How home charging works', '',
+      'Charging an electric car at home is usually the cheapest option for most drivers. A home charger plugs into the car overnight and fills the battery while you sleep. Most drivers find that home charging covers daily driving with ease.',
+      '', '## Charger types and costs', '',
+      'A complete beginner guide should explain the two main charger types. A slow charger uses a normal wall outlet and adds range slowly. A faster wall charger needs a dedicated circuit and an electrician to install it safely.',
+    ].join('\n');
+    const id = insertArticle(db, {
+      title: 'EV Charging at Home: A Complete Beginner\'s Guide', slug: 'seo-fill-draft',
+      status: 'draft', body,
+    });
+    const seeded = articleRow(db, id);
+    assert.equal(seeded.seo_title, null, 'draft starts with a blank seo_title');
+    assert.equal(seeded.seo_description, null, 'draft starts with a blank seo_description');
 
     const result = await runAutonomyTask(
-      { agent: 'seo', kind: 'seo-pass', payload: { article_id: 1 } }, env);
+      { agent: 'seo', kind: 'seo-pass', payload: { article_id: id } }, env);
     assert.equal(result.outcome, 'done');
     assert.ok(result.filled.includes('seo_title'));
     assert.ok(result.filled.includes('seo_description'));
     assert.ok(result.headingCount >= 0);
     assert.ok(Array.isArray(result.internalLinks));
 
-    const after = articleRow(db, 1);
-    assert.equal(after.seo_title, seeded.title.slice(0, 60), 'seo_title written from the real title');
-    assert.ok(after.seo_description && after.seo_description.length > 0, 'seo_description written from the real text');
+    const after = articleRow(db, id);
+    assert.equal(after.seo_title, 'EV Charging at Home: A Complete Beginner\'s Guide', 'seo_title written from the real title');
+    assert.ok(after.seo_description && after.seo_description.length >= 120 && after.seo_description.length <= 160,
+      'seo_description repaired into the 120-160 range from the real text');
   });
 
   it('never overwrites owner-set seo values', async () => {

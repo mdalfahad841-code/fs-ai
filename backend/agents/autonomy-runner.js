@@ -8,9 +8,9 @@
  *
  * Queue agent ids (10 functional roles) mapped honestly to the 16-agent
  * registry (backend/agents/registry.js):
- *   research          = the 7 division research agents collectively
+ *   research          = the 8 division research agents collectively
  *                       (automotive/technology/gadget/finance/travel/
- *                        health/education-research) — no single registry id.
+ *                        digital-tools/health/education-research) — no single registry id.
  *   content-creation  = content-creation (1:1)
  *   fact-checking     = fact-checking (1:1)
  *   seo               = seo (1:1)
@@ -64,15 +64,17 @@ export const QUEUE_TO_REGISTRY = {
 // is collective, so pausing a division's research agent must still make
 // that division's queued research tasks skip — runTask resolves the
 // division from the task payload through this map (see scheduler.js).
-// Digital Tools has no division research agent: its research is covered
-// by the Tools agent (digital-tools-agent), so it has no entry here and
-// a paused Tools agent does not block digital-tools research.
+// Digital Tools IS present (added 2026-11-20): its research is governed
+// by the Tools agent (digital-tools-agent), so pausing that agent blocks
+// digital-tools research tasks. Before this fix the entry was missing
+// and a paused Tools agent could not block digital-tools research.
 export const DIVISION_RESEARCH_REGISTRY = {
   automotive: 'automotive-research',
   'ai-technology': 'technology-research',
   'gadgets-electronics': 'gadget-research',
   'finance-money': 'finance-research',
   'travel-lifestyle': 'travel-research',
+  'digital-tools': 'digital-tools-agent',
   'health-wellness': 'health-research',
   'education-learning': 'education-research',
 };

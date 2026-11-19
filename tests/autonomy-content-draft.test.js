@@ -111,8 +111,32 @@ function freshEnv(extra = {}) {
     'database/migrations/005_autonomy.sql',
     'database/migrations/006_llm_usage.sql',
     'database/seed.sql',
+    'database/migrations/008_research.sql',
+    'database/migrations/009_factcheck.sql',
+    'database/migrations/010_pipeline.sql',
+    'database/migrations/011_backup.sql',
+    'database/migrations/012_source_links.sql',
   ]);
+  seedMissionEvidence(db);
   return { db, env: { DB: makeRealD1(db), ...extra } };
+}
+
+// Evidence for the mission (2026-11-20): generation is evidence-grounded
+// — the content agent only writes a draft when a supplied source URL
+// resolves to a stored research item. The mission source is seeded here
+// so every run of the mission has real evidence behind it.
+const MISSION_SOURCE_URL = 'https://example.com/ai-everyday-life';
+function seedMissionEvidence(db) {
+  const src = db.prepare("INSERT INTO research_sources (division_id, name, url, source_type) VALUES (2, 'Test AI News', 'https://example.com/ai-news', 'rss')").run();
+  db.prepare('INSERT INTO research_items (source_id, division_id, title, url, summary, evidence_text, published_at, fetched_at, is_outdated) VALUES (?, 2, ?, ?, ?, ?, ?, ?, 0)').run(
+    Number(src.lastInsertRowid),
+    'How AI Is Changing Everyday Life',
+    MISSION_SOURCE_URL,
+    'Artificial intelligence is now part of everyday routines, from phone keyboards to music recommendations.',
+    'Artificial intelligence is now part of everyday routines, from the keyboard on a phone to the recommendations in a music app. Most everyday AI is pattern-finding software.',
+    '2026-11-19T00:00:00.000Z',
+    new Date().toISOString(),
+  );
 }
 
 function autonomyReq(method, pathName, body) {
@@ -140,7 +164,7 @@ function fakeWorkersAI(text = CANNED_DRAFT) {
 function missionPayload() {
   return {
     agent: 'content-creation', kind: 'article-draft',
-    payload: { title: MISSION_TITLE, division: 'ai-technology', sources: [] },
+    payload: { title: MISSION_TITLE, division: 'ai-technology', sources: [MISSION_SOURCE_URL] },
     division_id: 2, idempotency_key: MISSION_IDEMPOTENCY,
   };
 }
@@ -171,6 +195,11 @@ describe('first real AI article — end-to-end mission path (fake Workers AI)', 
     const converted = await callAutonomy(env, 'POST', `/api/autonomy/scaffolds/${run.runId}/convert`);
     assert.equal(converted.status, 201, JSON.stringify(converted.body));
     const article = converted.body.article;
+    assert.equal(converted.body.sourcesRecorded, 1, 'the cited source was recorded (2026-11-20 source-persistence fix)');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM article_sources WHERE article_id = ?').get(article.id).n, 1, 'one article_sources row');
+    const srcRow = db.prepare('SELECT * FROM article_sources WHERE article_id = ?').get(article.id);
+    assert.equal(srcRow.source_type, 'research', 'RSS research item maps to the allowed source_type');
+    assert.ok(srcRow.research_item_id, 'linked to the stored research item');
     assert.equal(article.slug, MISSION_SLUG);
     assert.equal(article.title, MISSION_TITLE);
     assert.equal(article.status, 'draft', 'stored as draft, never published');
@@ -236,9 +265,11 @@ describe('convertScaffoldToDraft — no fake AI drafts', () => {
     const { db, env } = freshEnv({
       AI: { run: async () => { throw new Error('Workers AI is down'); } },
     });
+    // The mission source IS seeded, so the LLM is genuinely reached and
+    // fails — the no-op below is an LLM failure, not missing evidence.
     const result = await runContentCreation({
       agent: 'content-creation', kind: 'draft',
-      payload: { title: MISSION_TITLE, division: 'ai-technology', sources: [] },
+      payload: { title: MISSION_TITLE, division: 'ai-technology', sources: [MISSION_SOURCE_URL] },
     }, env);
     assert.equal(result.outcome, 'no-op', 'LLM failure is an honest no-op, not a fake draft');
     assert.equal(result.draft, undefined, 'no draft without a real model response');
@@ -249,6 +280,25 @@ describe('convertScaffoldToDraft — no fake AI drafts', () => {
     assert.ok(!res.article.body.includes('AI-DRAFT'));
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM llm_usage WHERE outcome = 'ok'").get().n, 0,
       'no successful generation was recorded');
+  });
+
+  it('a task whose source does not resolve to stored research returns no-op insufficient-evidence and never calls the LLM', async () => {
+    // Regression 2026-11-20 (repair A): article #27's first draft was an
+    // LLM refusal because generation passed only a bare URL. A sourceless
+    // draft must never be written — generation pauses instead.
+    const calls = [];
+    const { db, env } = freshEnv({
+      AI: { run: async (...args) => { calls.push(args); return { response: 'Should never be used.', usage: {} }; } },
+    });
+    const result = await runContentCreation({
+      agent: 'content-creation', kind: 'draft',
+      payload: { title: MISSION_TITLE, division: 'ai-technology', sources: ['https://example.com/never-fetched'] },
+    }, env);
+    assert.equal(result.outcome, 'no-op');
+    assert.match(result.reason, /insufficient-evidence/);
+    assert.equal(result.draft, undefined, 'no draft without evidence');
+    assert.equal(calls.length, 0, 'the LLM was never called');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM llm_usage").get().n, 0, 'no usage recorded');
   });
 });
 
