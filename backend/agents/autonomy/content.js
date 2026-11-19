@@ -57,7 +57,7 @@ function headingsFromTitle(title, sources) {
   if (/best|top|review|compare/.test(words)) headings.push('What to look for', 'Comparison');
   if (/cost|price|budget|save|money/.test(words)) headings.push('Costs and budgeting');
   if (Array.isArray(sources) && sources.length) headings.push('Sources and further reading');
-  headings.push('Key takeaways');
+  headings.push('Conclusion', 'Key takeaways');
   return [...new Set(headings)];
 }
 

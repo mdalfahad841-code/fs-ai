@@ -73,6 +73,18 @@
 
   function mark(state) { return state ? '✓' : '—'; }
 
+  /* Division slug -> D1 id (seed order). Used only by the create-content
+     form so the task carries the same division_id the API validates. */
+  var DIVISION_IDS = {
+    automotive: 1, 'ai-technology': 2, 'gadgets-electronics': 3,
+    'finance-money': 4, 'travel-lifestyle': 5, 'digital-tools': 6,
+    'health-wellness': 7, 'education-learning': 8,
+  };
+
+  function slugifyTitle(t) {
+    return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'article';
+  }
+
   /* Facebook, WhatsApp Business and Business Email are paused by the
      owner — not created, pending his authorization (same standing fact
      dashboard.js records). Whatever the API reports, those three rows
@@ -120,6 +132,25 @@
       '“Run Daily Workflow Now” runs the full daily workflow on demand; it is blocked (423) while the Emergency Stop is ON.</p>' +
       '<p id="autonomyControlStatus" aria-live="polite"></p>' +
       '<p id="autonomyRunDailyStatus" aria-live="polite"></p>' +
+      '<h3>Create a content draft task</h3>' +
+      '<p class="muted">Creates a queued content-creation task for one article. Run it below; when it finishes with an AI draft, convert its scaffold (run ID) to a CMS draft for owner review. AI drafts are marked “AI-DRAFT — needs fact-check + owner approval” and are never published automatically.</p>' +
+      '<div class="field"><label for="autonomyContentTitle">Article title</label>' +
+      '<input id="autonomyContentTitle" type="text" placeholder="e.g. How Artificial Intelligence Is Changing Everyday Life"></div>' +
+      '<div class="field"><label for="autonomyContentDivision">Division</label>' +
+      '<select id="autonomyContentDivision">' +
+      '<option value="automotive">Automotive</option>' +
+      '<option value="ai-technology" selected>AI &amp; Technology</option>' +
+      '<option value="gadgets-electronics">Gadgets &amp; Electronics</option>' +
+      '<option value="finance-money">Finance &amp; Money</option>' +
+      '<option value="travel-lifestyle">Travel &amp; Lifestyle</option>' +
+      '<option value="digital-tools">Digital Tools</option>' +
+      '<option value="health-wellness">Health &amp; Wellness</option>' +
+      '<option value="education-learning">Education &amp; Learning</option>' +
+      '</select></div>' +
+      '<div class="field"><label for="autonomyContentSources">Sources (optional, one per line)</label>' +
+      '<textarea id="autonomyContentSources" rows="3" placeholder="One source per line — name or URL. Leave empty for general guidance only."></textarea></div>' +
+      '<p><button class="btn btn-primary" type="button" id="autonomyCreateContentBtn">Create content task</button></p>' +
+      '<p id="autonomyCreateContentStatus" aria-live="polite"></p>' +
       '<h3>Run a task manually</h3>' +
       '<p class="muted">Only queued tasks can be run. A run that finds nothing to do reports a no-op with the server’s reason — never a fake success.</p>' +
       '<div class="field"><label for="autonomyTaskSelect">Queued task</label>' +
@@ -304,12 +335,18 @@
     setText(statusElId, 'Running task ' + id + '…');
     api('/api/autonomy/tasks/' + encodeURIComponent(id) + '/run', { method: 'POST' }).then(function (r) {
       if (!r.ok) { setText(statusElId, apiError(r)); return; }
-      var task = r.data.task || {};
       var result = r.data.result || {};
-      var outcome = task.status || result.status || 'done';
+      var outcome = r.data.outcome || result.outcome || 'done';
       var detail = result.reason || result.error || result.message || result.note || '';
       if (result && result.noop) detail = result.reason || result.message || 'nothing to do';
-      setText(statusElId, 'Task ' + id + ': ' + outcome + (detail ? ' — ' + detail : '') +
+      // The run ID is shown so the owner can copy it into "Convert a
+      // content scaffold to a draft" below; an AI draft is flagged so the
+      // owner knows the run produced a draft (never auto-published).
+      var runPart = r.data.runId != null ? ' (run #' + r.data.runId + ')' : '';
+      var draftPart = (result && result.draft)
+        ? ' — AI draft ready. Convert run #' + r.data.runId + ' to a CMS draft below.'
+        : '';
+      setText(statusElId, 'Task ' + id + ': ' + outcome + runPart + (detail ? ' — ' + detail : '') + draftPart +
         (result && result.articleId ? ' (article #' + result.articleId + ')' : ''));
       loadTasks();
       loadStatus();
@@ -500,6 +537,29 @@
           loadTasks();
           loadReports();
         }).catch(function () { setText('autonomyRunDailyStatus', 'Could not reach the FS AI server.'); });
+      });
+    }
+
+    var createContentBtn = el('autonomyCreateContentBtn');
+    if (createContentBtn) {
+      createContentBtn.addEventListener('click', function () {
+        var titleEl = el('autonomyContentTitle');
+        var divEl = el('autonomyContentDivision');
+        var srcEl = el('autonomyContentSources');
+        var title = titleEl ? titleEl.value.trim() : '';
+        var division = divEl ? divEl.value : '';
+        if (title.length < 5) { setText('autonomyCreateContentStatus', 'Enter an article title of at least 5 characters.'); return; }
+        if (!DIVISION_IDS[division]) { setText('autonomyCreateContentStatus', 'Choose a division.'); return; }
+        var sources = srcEl ? srcEl.value.split('\n').map(function (s) { return s.trim(); }).filter(function (s) { return s; }).slice(0, 10) : [];
+        var key = 'manual-content-' + slugifyTitle(title) + '-' + new Date().toISOString().slice(0, 10);
+        setText('autonomyCreateContentStatus', 'Creating content task…');
+        api('/api/autonomy/tasks', { method: 'POST', body: { agent: 'content-creation', kind: 'article-draft', payload: { title: title, division: division, sources: sources }, division_id: DIVISION_IDS[division], idempotency_key: key } }).then(function (r) {
+          if (!r.ok) { setText('autonomyCreateContentStatus', apiError(r)); return; }
+          var task = r.data.task || {};
+          setText('autonomyCreateContentStatus', 'Content task created (task #' + task.id + ')' + (r.data.duplicate ? ' — this task already existed (same title today).' : '') + ' — run it under “Run a task manually”, then convert its scaffold (run ID) to a draft.');
+          loadTasks();
+          loadStatus();
+        }).catch(function () { setText('autonomyCreateContentStatus', 'Could not reach the FS AI server.'); });
       });
     }
 
