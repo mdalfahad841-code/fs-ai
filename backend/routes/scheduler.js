@@ -17,6 +17,27 @@ import { runFactChecking } from '../agents/autonomy/factcheck.js';
 import { runSeo } from '../agents/autonomy/seo.js';
 import { evaluatePublishGate, publishGatePassed } from '../publishing/gate.js';
 
+/**
+ * Protected test articles — the owner's standing order (2026-11-19/20):
+ * articles #26 and #27 are verification test artifacts whose content must
+ * never be overwritten. The automatic daily workflow must never SELECT
+ * them for a step that modifies an article (SEO repair, correction).
+ * Manual per-article actions (an explicit dashboard/API call on one
+ * article, e.g. runSeo / runFactChecking for a named article_id) are NOT
+ * blocked — only the automatic draft selection below.
+ * Fact-checking is advisory only (it never writes the body) and content
+ * generation creates new articles, so neither needs this guard.
+ */
+export const PROTECTED_TEST_ARTICLES = [26, 27];
+
+// SQL fragment + bound params that exclude the protected test articles
+// from an automatic draft selection. Exclusion happens in the query, not
+// after fetching, so LIMIT still counts only eligible drafts.
+function protectedExclusion(column) {
+  const placeholders = PROTECTED_TEST_ARTICLES.map(() => '?').join(', ');
+  return { clause: `${column} NOT IN (${placeholders})`, params: [...PROTECTED_TEST_ARTICLES] };
+}
+
 export function todayStr(date = new Date()) {
   return date.toISOString().slice(0, 10);
 }
@@ -438,11 +459,13 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
 
   steps.correctionRun = await step(env, 'fact-checking', 'correction-run', async () => {
     if (flags.auto_correction !== 'on') return { outcome: 'no-op', reason: 'auto_correction is off.' };
+    // Protected test articles #26/#27 are never auto-corrected (owner order).
+    const guard = protectedExclusion('fc.article_id');
     const rows = await d1All(env,
       'SELECT DISTINCT fc.article_id AS id FROM fact_checks fc ' +
-      "WHERE fc.verdict IN ('needs-review', 'failed') AND fc.created_at >= datetime('now', '-7 days') " +
+      "WHERE fc.verdict IN ('needs-review', 'failed') AND fc.created_at >= datetime('now', '-7 days') AND " + guard.clause + ' ' +
       "AND EXISTS (SELECT 1 FROM articles a WHERE a.id = fc.article_id AND a.status IN ('draft', 'pending_approval')) " +
-      'ORDER BY fc.created_at DESC LIMIT 3') || [];
+      'ORDER BY fc.created_at DESC LIMIT 3', guard.params) || [];
     const results = [];
     for (const r of rows) {
       const res = await runFactChecking({ agent: 'fact-checking', kind: 'correct', payload: { article_id: r.id } }, env);
@@ -452,7 +475,9 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
   });
 
   steps.seoRun = await step(env, 'seo', 'seo-run', async () => {
-    const rows = await d1All(env, "SELECT id FROM articles WHERE status IN ('draft', 'pending_approval') ORDER BY updated_at ASC LIMIT 3") || [];
+    // Protected test articles #26/#27 are never auto-repaired (owner order).
+    const guard = protectedExclusion('id');
+    const rows = await d1All(env, "SELECT id FROM articles WHERE status IN ('draft', 'pending_approval') AND " + guard.clause + ' ORDER BY updated_at ASC LIMIT 3', guard.params) || [];
     const results = [];
     for (const r of rows) {
       const res = await runSeo({ agent: 'seo', kind: 'seo-pass', payload: { article_id: r.id } }, env);

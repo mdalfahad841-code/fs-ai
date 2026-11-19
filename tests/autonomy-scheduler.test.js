@@ -353,3 +353,138 @@ describe('weekly workflow', () => {
     assert.equal(summary.failedTasks[0].agent, 'fact-checking');
   });
 });
+
+describe('daily workflow — protected test articles #26/#27', () => {
+  // Owner order (2026-11-19/20): articles #26 and #27 are verification
+  // test artifacts whose content must never be overwritten. The nightly
+  // seoRun step (which has no auto_* gate) repaired them live on 20 Nov
+  // 2026 — the parent restored them exactly from article_revisions.
+  // These tests pin the guard: the automatic seoRun and correctionRun
+  // draft selections must skip #26/#27 and still process other drafts.
+  // Manual per-article actions are NOT blocked (different code path).
+
+  // Insert a draft with an explicit id (26/27/28, matching the live IDs).
+  function insertDraftWithId(db, id, title, slug, body) {
+    const divisionId = db.prepare("SELECT id FROM business_divisions WHERE slug = 'automotive'").get().id;
+    db.prepare(
+      'INSERT INTO articles (id, division_id, title, slug, excerpt, body, author, status, fact_checked, published_at, publish_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)',
+    ).run(id, divisionId, title, slug, 'Excerpt.', body, 'FS AI', 'draft', null);
+    return id;
+  }
+
+  function setFlag(db, key, value) {
+    db.prepare(
+      "INSERT INTO autonomy_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(key, value);
+  }
+
+  function seedFailedFactCheck(db, articleId) {
+    const now = new Date().toISOString();
+    const fc = db.prepare(
+      "INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, created_at) VALUES (?, 'needs-review', 1, 0, 1, ?)",
+    ).run(articleId, now);
+    db.prepare(
+      "INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url) VALUES (?, ?, 'UNSUPPORTED', NULL)",
+    ).run(Number(fc.lastInsertRowid), 'The test article claims one unsupported thing about the topic.');
+  }
+
+  // Long enough (plain text >= 120 chars) for deriveSeoDescription, with
+  // no internal link and no headings — WITHOUT the guard, repairSeoFields
+  // would rewrite the description, fill the SEO title and append a
+  // Related reading link to every one of these drafts.
+  const bodyFor = (n) =>
+    `Protected test article number ${n} has a plain body about the topic, with enough words to derive a meta description from the article text itself. ` +
+    `A second sentence adds more real content here for the description. A third sentence keeps the text long enough to repair.`;
+
+  function stepResults(db, agent, stepName) {
+    const rows = db.prepare('SELECT detail FROM agent_runs WHERE agent = ?').all(agent);
+    for (const r of rows) {
+      try {
+        const detail = JSON.parse(r.detail || '{}');
+        if (detail.step === stepName) return detail.results || [];
+      } catch { /* not JSON — ignore */ }
+    }
+    return null;
+  }
+
+  it('seoRun skips #26/#27 (bodies byte-identical, no seo_checks) and repairs #28', async () => {
+    const { db, env } = freshEnv();
+    const before = {};
+    for (const id of [26, 27, 28]) {
+      insertDraftWithId(db, id, `Guard Test Article ${id}`, `guard-test-${id}`, bodyFor(id));
+      before[id] = db.prepare('SELECT body, seo_title, seo_description FROM articles WHERE id = ?').get(id);
+    }
+
+    const result = await runDailyWorkflow(env);
+    assert.equal(result.ok, true);
+    assert.equal(result.counts.seoRun, 1, 'seoRun checked exactly one draft (the unprotected one)');
+
+    const seoResults = stepResults(db, 'seo', 'seo-run');
+    assert.ok(seoResults, 'the seo-run step recorded its results');
+    assert.deepEqual(seoResults.map((r) => r.articleId), [28], 'only #28 was selected for SEO');
+
+    for (const id of [26, 27]) {
+      const after = db.prepare('SELECT body, seo_title, seo_description FROM articles WHERE id = ?').get(id);
+      assert.deepEqual(after, before[id], `protected article #${id} is byte-identical after the daily run`);
+      assert.equal(
+        db.prepare('SELECT COUNT(*) AS n FROM seo_checks WHERE article_id = ?').get(id).n, 0,
+        `no seo_checks row was written for protected article #${id}`);
+      assert.equal(
+        db.prepare('SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?').get(id).n, 0,
+        `no revision row was written for protected article #${id}`);
+    }
+
+    const after28 = db.prepare('SELECT body, seo_title, seo_description FROM articles WHERE id = ?').get(28);
+    assert.ok(after28.body.includes('Related reading:'), '#28 got the Related reading link');
+    assert.ok(after28.seo_description && after28.seo_description.length >= 120 && after28.seo_description.length <= 160,
+      '#28 meta description was repaired into 120-160 characters');
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS n FROM seo_checks WHERE article_id = 28').get().n, 1,
+      'one seo_checks row was written for #28');
+  });
+
+  it('correctionRun skips #26/#27 (no correction rows) and processes #28', async () => {
+    const { db, env } = freshEnv();
+    setFlag(db, 'auto_correction', 'on');
+    const before = {};
+    for (const id of [26, 27, 28]) {
+      insertDraftWithId(db, id, `Guard Correct Article ${id}`, `guard-correct-${id}`, bodyFor(id));
+      seedFailedFactCheck(db, id);
+      before[id] = db.prepare('SELECT body FROM articles WHERE id = ?').get(id).body;
+    }
+
+    const result = await runDailyWorkflow(env);
+    assert.equal(result.ok, true);
+    assert.equal(result.counts.correctionsRun, 1, 'correctionRun processed exactly one article');
+
+    const corrResults = stepResults(db, 'fact-checking', 'correction-run');
+    assert.ok(corrResults, 'the correction-run step recorded its results');
+    assert.deepEqual(corrResults.map((r) => r.articleId), [28], 'only #28 was selected for correction');
+
+    for (const id of [26, 27]) {
+      assert.equal(
+        db.prepare('SELECT body FROM articles WHERE id = ?').get(id).body, before[id],
+        `protected article #${id} body is unchanged after the daily run`);
+      assert.equal(
+        db.prepare('SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = ?').get(id).n, 0,
+        `no correction rows were written for protected article #${id}`);
+    }
+    // #28 was selected (no article-specific evidence, so its failed claim
+    // was skipped for human review and the correction wrote nothing).
+    // Note: the same daily run's seoRun step legitimately appends a
+    // Related reading link to unprotected #28 — the correction itself
+    // must not change the body, so allow exactly that SEO append.
+    const after28Body = db.prepare('SELECT body FROM articles WHERE id = 28').get().body;
+    assert.ok(after28Body === before[28] || after28Body.startsWith(before[28] + '\n\nRelated reading:'),
+      '#28 body was changed only by the SEO step (Related reading link), not by the correction');
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = 28').get().n, 0,
+      'the no-evidence correction wrote no correction rows for #28');
+  });
+
+  it('PROTECTED_TEST_ARTICLES lists exactly the two protected test articles', async () => {
+    const { PROTECTED_TEST_ARTICLES } = require('../backend/routes/scheduler.js');
+    assert.deepEqual([...PROTECTED_TEST_ARTICLES].sort((a, b) => a - b), [26, 27]);
+  });
+});
