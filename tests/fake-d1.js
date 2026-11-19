@@ -357,10 +357,14 @@ function makeFakeD1() {
       const rows = [...tables.website_analytics].sort((a, b) => (a.recorded_date < b.recorded_date ? 1 : -1));
       return { results: rows.length ? [{ ...rows[0] }] : [] };
     }
-    const backup = /^SELECT \* FROM ([a-z_]+) ORDER BY id DESC LIMIT \?$/.exec(q);
+    // Backup export: ORDER BY id DESC (all id tables) or ORDER BY rowid
+    // DESC (autonomy_settings has no id column — its PK is `key`).
+    const backup = /^SELECT \* FROM ([a-z_]+) ORDER BY (?:id|rowid) DESC LIMIT \?$/.exec(q);
     if (backup) {
-      const rows = [...(tables[backup[1]] || [])].sort((a, b) => b.id - a.id).slice(0, params[0]);
-      return { results: rows.map((r) => ({ ...r })) };
+      const rows = [...(tables[backup[1]] || [])];
+      const hasId = rows.length > 0 && typeof rows[0].id === 'number';
+      const sorted = hasId ? rows.sort((a, b) => b.id - a.id) : rows.reverse();
+      return { results: sorted.slice(0, params[0]).map((r) => ({ ...r })) };
     }
     throw new Error('fake D1: unsupported SELECT: ' + q);
   }

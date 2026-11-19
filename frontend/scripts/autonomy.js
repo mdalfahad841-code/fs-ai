@@ -117,6 +117,40 @@
       '<h3>Article generation (LLM)</h3>' +
       '<p id="autonomyLlmStatus" aria-live="polite">Loading LLM provider status…</p>' +
       '<div class="kpi-grid" id="autonomyKpiGrid"></div>' +
+      '<h3>Research sources</h3>' +
+      '<p class="muted">Free public RSS/Atom feeds, 3 per division (24 total). The daily workflow fetches them when auto-research is on. A failed feed is recorded here with its last error — never treated as checked.</p>' +
+      '<p id="autonomySourceStatus" aria-live="polite"></p>' +
+      '<div class="table-scroll"><table><thead><tr><th>Source</th><th>Division</th><th>Status</th><th>Last fetch</th><th>Last error</th><th>Discovered</th><th>Duplicates</th><th>Actions</th></tr></thead><tbody id="autonomySourceList"></tbody></table></div>' +
+      '<h3>Add a research source</h3>' +
+      '<p class="muted">The URL is fetched and validated live before it is stored — only a URL that returns valid RSS/Atom XML becomes a source.</p>' +
+      '<div class="field"><label for="autonomySourceDivision">Division</label>' +
+      '<select id="autonomySourceDivision">' +
+      '<option value="automotive">Automotive</option>' +
+      '<option value="ai-technology">AI &amp; Technology</option>' +
+      '<option value="gadgets-electronics">Gadgets &amp; Electronics</option>' +
+      '<option value="finance-money">Finance &amp; Money</option>' +
+      '<option value="travel-lifestyle">Travel &amp; Lifestyle</option>' +
+      '<option value="digital-tools">Digital Tools</option>' +
+      '<option value="health-wellness">Health &amp; Wellness</option>' +
+      '<option value="education-learning">Education &amp; Learning</option>' +
+      '</select></div>' +
+      '<div class="field"><label for="autonomySourceName">Source name</label>' +
+      '<input id="autonomySourceName" type="text" placeholder="e.g. BBC News - Technology"></div>' +
+      '<div class="field"><label for="autonomySourceUrl">Feed URL (https)</label>' +
+      '<input id="autonomySourceUrl" type="text" placeholder="https://example.com/feed.xml"></div>' +
+      '<p><button class="btn btn-primary" type="button" id="autonomyAddSourceBtn">Add source</button></p>' +
+      '<p id="autonomyAddSourceStatus" aria-live="polite"></p>' +
+      '<h3>Fact-check queue &amp; publish gate</h3>' +
+      '<p class="muted">Every draft shows its publish-gate result. “Ready” means the content checks pass and the article waits for owner approval — nothing auto-publishes while publishing mode is “approved only”. Fact-check runs claim by claim against fetched source material; correction rewrites from evidence or removes the unsupported sentence.</p>' +
+      '<p id="autonomyPipelineStatus" aria-live="polite"></p>' +
+      '<div class="table-scroll"><table><thead><tr><th>Draft</th><th>Status</th><th>Gate</th><th>Blocked by</th><th>Actions</th></tr></thead><tbody id="autonomyPipelineList"></tbody></table></div>' +
+      '<p id="autonomyFactCheckDetail" aria-live="polite"></p>' +
+      '<h3>Operations analytics</h3>' +
+      '<p class="muted">First-party numbers from the live database only. GA4 reporting is not connected, so traffic stays “Data unavailable” and revenue stays $0.00.</p>' +
+      '<div class="kpi-grid" id="autonomyAnalyticsGrid"></div>' +
+      '<h3>Backup</h3>' +
+      '<p id="autonomyBackupStatus" aria-live="polite"></p>' +
+      '<p><button class="btn btn-outline" type="button" id="autonomyBackupBtn">Run backup now</button> <span class="muted">Exports the database as JSON and records the run. Restore is manual — see the backup docs.</span></p>' +
       '<h3>Agents</h3>' +
       '<ul class="clean" id="autonomyAgentList"></ul>' +
       '<h3>Controls</h3>' +
@@ -192,8 +226,19 @@
       '<select id="autonomyPublishingMode"><option value="approved_only">Approved only</option></select></div>' +
       '<div class="field"><label for="autonomySocialAutoPost">Social auto-post</label>' +
       '<select id="autonomySocialAutoPost"><option value="off">Off</option></select></div>' +
+      '<div class="field"><label for="autonomyAutoResearch">Auto-research</label>' +
+      '<select id="autonomyAutoResearch"><option value="off">Off</option><option value="on">On</option></select></div>' +
+      '<div class="field"><label for="autonomyAutoGeneration">Auto-generation</label>' +
+      '<select id="autonomyAutoGeneration"><option value="off">Off</option><option value="on">On</option></select></div>' +
+      '<div class="field"><label for="autonomyAutoFactcheck">Auto-fact-check</label>' +
+      '<select id="autonomyAutoFactcheck"><option value="off">Off</option><option value="on">On</option></select></div>' +
+      '<div class="field"><label for="autonomyAutoCorrection">Auto-correction</label>' +
+      '<select id="autonomyAutoCorrection"><option value="off">Off</option><option value="on">On</option></select></div>' +
+      '<div class="field"><label for="autonomyAutoPublishing">Auto-publishing</label>' +
+      '<select id="autonomyAutoPublishing"><option value="off">Off</option><option value="on">On</option></select></div>' +
       '<div class="form-span"><button class="btn btn-primary" type="submit">Save publishing rules</button></div>' +
       '</form>' +
+      '<p class="muted">Auto switches are off by default. Turning auto-publishing on only arms the gate — nothing publishes while publishing mode is “approved only”.</p>' +
       '<p id="autonomySettingsStatus" aria-live="polite"></p>' +
       '<h3>Account Management Center</h3>' +
       '<p class="muted">Real account states from the API. A check (✓) means that step is done; a dash (—) means it is not. ' +
@@ -242,6 +287,7 @@
         { label: 'Tasks skipped', value: num(tasks.skipped), note: 'Skipped by the workflow' },
         { label: 'Revenue', value: d.revenue != null ? String(d.revenue) : '$0.00', note: 'Zero-cost platform — no paid services, no sales yet' },
         { label: 'Traffic', value: d.traffic != null ? String(d.traffic) : 'Data unavailable', note: 'No GA4 Data API is authorized yet' },
+        { label: 'Last backup', value: d.lastBackup ? fmtDate(d.lastBackup.finishedAt) : 'Never', note: d.lastBackup ? (d.lastBackup.rowsExported + ' row(s) in ' + d.lastBackup.tablesExported + ' table(s)') : 'No successful backup recorded yet — use “Run backup now” below' },
       ];
       if (grid) {
         grid.innerHTML = cards.map(function (c) {
@@ -310,10 +356,13 @@
         var runBtn = t.status === 'queued'
           ? '<button class="btn btn-small" type="button" data-autonomy-run="' + esc(String(t.id)) + '">Run</button>'
           : '';
+        var retryBtn = t.status === 'failed'
+          ? '<button class="btn btn-small" type="button" data-autonomy-retry="' + esc(String(t.id)) + '">Retry</button>'
+          : '';
         return '<tr><td>' + esc(String(t.id)) + '</td><td>' + esc(t.agent || '') + '</td><td>' + esc(t.kind || '') + '</td>' +
           '<td>' + esc(t.priority == null ? '' : String(t.priority)) + '</td><td>' + statusPill(t.status) + '</td>' +
           '<td>' + esc((t.attempts == null ? '0' : String(t.attempts)) + ' / ' + (t.max_attempts == null ? '—' : String(t.max_attempts))) + '</td>' +
-          '<td>' + fmtDate(t.scheduled_for) + '</td><td>' + fmtDate(t.created_at) + '</td><td>' + runBtn + '</td></tr>';
+          '<td>' + fmtDate(t.scheduled_for) + '</td><td>' + fmtDate(t.created_at) + '</td><td>' + runBtn + retryBtn + '</td></tr>';
       }).join('') || '<tr><td colspan="9">No tasks found.</td></tr>';
     }).catch(function () { setText('autonomyTaskStatus', 'Could not reach the FS AI server.'); });
   }
@@ -348,6 +397,17 @@
         : '';
       setText(statusElId, 'Task ' + id + ': ' + outcome + runPart + (detail ? ' — ' + detail : '') + draftPart +
         (result && result.articleId ? ' (article #' + result.articleId + ')' : ''));
+      loadTasks();
+      loadStatus();
+    }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
+  }
+
+  function retryTask(id, statusElId) {
+    if (!id) return;
+    setText(statusElId, 'Retrying task ' + id + '…');
+    api('/api/autonomy/tasks/' + encodeURIComponent(id) + '/retry', { method: 'POST' }).then(function (r) {
+      if (!r.ok) { setText(statusElId, apiError(r)); return; }
+      setText(statusElId, 'Task ' + id + ' is queued again (attempts reset).');
       loadTasks();
       loadStatus();
     }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
@@ -406,6 +466,11 @@
       set('autonomyMaxArticles', s.max_articles_per_day);
       set('autonomyPublishingMode', s.publishing_mode);
       set('autonomySocialAutoPost', s.social_auto_post);
+      set('autonomyAutoResearch', s.auto_research);
+      set('autonomyAutoGeneration', s.auto_generation);
+      set('autonomyAutoFactcheck', s.auto_factcheck);
+      set('autonomyAutoCorrection', s.auto_correction);
+      set('autonomyAutoPublishing', s.auto_publishing);
     }).catch(function () { setText('autonomySettingsStatus', 'Could not reach the FS AI server.'); });
   }
 
@@ -419,12 +484,22 @@
       { key: 'max_articles_per_day', value: max ? max.value : '' },
       { key: 'publishing_mode', value: mode ? mode.value : '' },
       { key: 'social_auto_post', value: social ? social.value : '' },
+      { key: 'auto_research', value: el('autonomyAutoResearch') ? el('autonomyAutoResearch').value : '' },
+      { key: 'auto_generation', value: el('autonomyAutoGeneration') ? el('autonomyAutoGeneration').value : '' },
+      { key: 'auto_factcheck', value: el('autonomyAutoFactcheck') ? el('autonomyAutoFactcheck').value : '' },
+      { key: 'auto_correction', value: el('autonomyAutoCorrection') ? el('autonomyAutoCorrection').value : '' },
+      { key: 'auto_publishing', value: el('autonomyAutoPublishing') ? el('autonomyAutoPublishing').value : '' },
     ];
     var allowed = {
       autonomy_level: ['1', '2', '3'],
       max_articles_per_day: ['0', '1', '2', '3'],
       publishing_mode: ['approved_only'],
       social_auto_post: ['off'],
+      auto_research: ['on', 'off'],
+      auto_generation: ['on', 'off'],
+      auto_factcheck: ['on', 'off'],
+      auto_correction: ['on', 'off'],
+      auto_publishing: ['on', 'off'],
     };
     var bad = pairs.filter(function (p) { return allowed[p.key].indexOf(String(p.value)) === -1; });
     if (bad.length) {
@@ -480,6 +555,106 @@
           '<td>' + esc(note) + '</td></tr>';
       }).join('') || '<tr><td colspan="8">No accounts reported by the API.</td></tr>';
     }).catch(function () { setText('autonomyAccountStatus', 'Could not reach the FS AI server.'); });
+  }
+
+  /* --- Research sources (GET/POST /api/autonomy/sources) --- */
+  function loadSources() {
+    setText('autonomySourceStatus', 'Loading research sources…');
+    api('/api/autonomy/sources').then(function (r) {
+      var list = el('autonomySourceList');
+      if (!r.ok) {
+        setText('autonomySourceStatus', apiError(r));
+        if (list) list.innerHTML = '';
+        return;
+      }
+      var sources = r.data.sources || [];
+      var active = sources.filter(function (s) { return s.is_active; }).length;
+      setText('autonomySourceStatus', sources.length + ' source(s), ' + active + ' active. A source that fails keeps its last error here.');
+      if (!list) return;
+      list.innerHTML = sources.map(function (s) {
+        var fetchBtn = '<button class="btn btn-small" type="button" data-autonomy-source-fetch="' + esc(String(s.id)) + '">Fetch now</button>';
+        var toggleBtn = '<button class="btn btn-small" type="button" data-autonomy-source-toggle="' + esc(String(s.id)) + '" data-autonomy-source-active="' + (s.is_active ? '1' : '0') + '">' + (s.is_active ? 'Disable' : 'Enable') + '</button>';
+        return '<tr><td><strong>' + esc(s.name || '') + '</strong><br><span class="muted">' + esc(s.url || '') + '</span></td>' +
+          '<td>' + esc(s.division || '') + '</td><td>' + statusPill(s.is_active ? (s.last_status || 'active') : 'disabled') + '</td>' +
+          '<td>' + fmtDate(s.last_fetched_at) + '</td><td>' + esc(s.last_error || '—') + '</td>' +
+          '<td>' + esc(s.items_discovered == null ? '—' : String(s.items_discovered)) + '</td>' +
+          '<td>' + esc(s.duplicates_found == null ? '—' : String(s.duplicates_found)) + '</td>' +
+          '<td>' + fetchBtn + ' ' + toggleBtn + '</td></tr>';
+      }).join('') || '<tr><td colspan="8">No research sources configured.</td></tr>';
+    }).catch(function () { setText('autonomySourceStatus', 'Could not reach the FS AI server.'); });
+  }
+
+  /* --- Fact-check queue, publish gate + operations analytics --- */
+  function loadPipeline() {
+    setText('autonomyPipelineStatus', 'Loading drafts and gate results…');
+    api('/api/autonomy/analytics').then(function (r) {
+      var list = el('autonomyPipelineList');
+      var grid = el('autonomyAnalyticsGrid');
+      if (!r.ok) {
+        setText('autonomyPipelineStatus', apiError(r));
+        if (list) list.innerHTML = '';
+        if (grid) grid.innerHTML = '';
+        return;
+      }
+      var d = r.data || {};
+      var drafts = d.drafts || [];
+      setText('autonomyPipelineStatus', drafts.length + ' draft(s) awaiting review. “Ready” = content checks pass; the article still waits for owner approval.');
+      if (list) {
+        list.innerHTML = drafts.map(function (a) {
+          var gate = a.contentReady ? 'Ready' : 'Blocked';
+          var blocked = (a.blockedBy || []).slice(0, 2).join('; ');
+          var fcBtn = '<button class="btn btn-small" type="button" data-autonomy-factcheck="' + esc(String(a.id)) + '">Fact-check</button>';
+          var corrBtn = '<button class="btn btn-small" type="button" data-autonomy-correct="' + esc(String(a.id)) + '">Correct</button>';
+          var detailBtn = '<button class="btn btn-small" type="button" data-autonomy-fc-detail="' + esc(String(a.id)) + '">Details</button>';
+          return '<tr><td><strong>' + esc(a.title || '') + '</strong><br><span class="muted">#' + esc(String(a.id)) + ' · ' + esc(a.division || '') + '</span></td>' +
+            '<td>' + statusPill(a.status) + '</td><td>' + statusPill(gate) + '</td>' +
+            '<td>' + esc(blocked || '—') + '</td><td>' + fcBtn + ' ' + corrBtn + ' ' + detailBtn + '</td></tr>';
+        }).join('') || '<tr><td colspan="5">No drafts — nothing waiting for review.</td></tr>';
+      }
+      if (grid) {
+        var byStatus = d.articlesByStatus || {};
+        var cards = [
+          { label: 'Articles published', value: String(byStatus.published || 0), note: 'Live on the site' },
+          { label: 'Drafts', value: String(byStatus.draft || 0), note: 'Awaiting review' },
+          { label: 'Published today', value: String(d.publishedToday != null ? d.publishedToday : '—'), note: 'UTC day, from D1' },
+          { label: 'LLM calls today', value: String((d.llmToday && d.llmToday.calls) || 0), note: ((d.llmToday && d.llmToday.neurons) || 0) + ' Neurons today (free allowance 10,000/day)' },
+          { label: 'LLM calls (7 days)', value: String((d.llm7d && d.llm7d.calls) || 0), note: ((d.llm7d && d.llm7d.neurons) || 0) + ' Neurons in 7 days' },
+          { label: 'Failed tasks', value: String((d.failedTasks || []).length), note: 'Retry them from the task queue' },
+          { label: 'Research sources', value: String((d.research && d.research.activeSources) || 0), note: ((d.research && d.research.itemsDiscovered) || 0) + ' items discovered in total' },
+          { label: 'Traffic', value: 'Data unavailable', note: 'GA4: Tracking Connected — Reporting API Not Connected' },
+        ];
+        grid.innerHTML = cards.map(function (c) {
+          return '<div class="card kpi-card"><div class="kpi-value">' + esc(c.value) + '</div><div class="kpi-label">' + esc(c.label) + '</div><p class="muted">' + esc(c.note) + '</p></div>';
+        }).join('');
+      }
+      setText('autonomyBackupStatus', 'Backup status comes from the status section above. “Run backup now” exports the database and records the run.');
+    }).catch(function () { setText('autonomyPipelineStatus', 'Could not reach the FS AI server.'); });
+  }
+
+  function loadFactCheckDetail(articleId) {
+    setText('autonomyFactCheckDetail', 'Loading fact-check detail for article #' + articleId + '…');
+    api('/api/autonomy/fact-checks?article_id=' + encodeURIComponent(articleId)).then(function (r) {
+      if (!r.ok) { setText('autonomyFactCheckDetail', apiError(r)); return; }
+      var fc = r.data.factCheck;
+      if (!fc) { setText('autonomyFactCheckDetail', 'No fact-check on record for article #' + articleId + ' yet.'); return; }
+      var claims = r.data.claims || [];
+      var lines = claims.map(function (c) {
+        return '[' + c.verdict + '] ' + (c.claim_text || '').slice(0, 120) + (c.evidence_url ? ' — evidence: ' + c.evidence_url : ' — no evidence');
+      });
+      setText('autonomyFactCheckDetail', 'Article #' + articleId + ' — latest fact-check: ' + fc.verdict +
+        ' (' + fc.claims_verified + '/' + fc.claims_total + ' claims verified, ' + fc.claims_failed + ' failed). ' + lines.join(' | '));
+    }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
+  }
+
+  function enqueueAgentTask(agent, kind, articleId, statusElId) {
+    setText(statusElId, 'Creating ' + kind + ' task for article #' + articleId + '…');
+    var key = 'manual-' + kind + '-' + articleId + '-' + new Date().toISOString().slice(0, 10);
+    api('/api/autonomy/tasks', { method: 'POST', body: { agent: agent, kind: kind, payload: { article_id: Number(articleId) }, idempotency_key: key } }).then(function (r) {
+      if (!r.ok) { setText(statusElId, apiError(r)); return; }
+      var task = r.data.task || {};
+      setText(statusElId, kind + ' task created (task #' + task.id + ')' + (r.data.duplicate ? ' — already existed.' : '') + ' — run it from the task queue.');
+      loadTasks();
+    }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
   }
 
   /* --- Controls --- */
@@ -598,9 +773,84 @@
     var taskList = el('autonomyTaskList');
     if (taskList) {
       taskList.addEventListener('click', function (e) {
-        var btn = e.target.closest('[data-autonomy-run]');
-        if (!btn) return;
-        runTask(btn.getAttribute('data-autonomy-run'), 'autonomyRunTaskStatus');
+        var runBtn = e.target.closest('[data-autonomy-run]');
+        if (runBtn) { runTask(runBtn.getAttribute('data-autonomy-run'), 'autonomyRunTaskStatus'); return; }
+        var retryBtn = e.target.closest('[data-autonomy-retry]');
+        if (retryBtn) { retryTask(retryBtn.getAttribute('data-autonomy-retry'), 'autonomyRunTaskStatus'); }
+      });
+    }
+
+    var sourceList = el('autonomySourceList');
+    if (sourceList) {
+      sourceList.addEventListener('click', function (e) {
+        var fetchBtn = e.target.closest('[data-autonomy-source-fetch]');
+        if (fetchBtn) {
+          var sid = fetchBtn.getAttribute('data-autonomy-source-fetch');
+          setText('autonomySourceStatus', 'Fetching source #' + sid + '…');
+          api('/api/autonomy/sources/' + encodeURIComponent(sid) + '/fetch', { method: 'POST' }).then(function (r) {
+            if (!r.ok) { setText('autonomySourceStatus', apiError(r)); return; }
+            var s = r.data.source || {};
+            setText('autonomySourceStatus', 'Source #' + sid + ': ' + (s.ok ? ('fetched ' + s.fetched + ' item(s), ' + s.added + ' new, ' + s.duplicates + ' duplicate(s).') : ('failed — ' + (s.error || 'unknown error') + '.')));
+            loadSources();
+          }).catch(function () { setText('autonomySourceStatus', 'Could not reach the FS AI server.'); });
+          return;
+        }
+        var toggleBtn = e.target.closest('[data-autonomy-source-toggle]');
+        if (toggleBtn) {
+          var tid = toggleBtn.getAttribute('data-autonomy-source-toggle');
+          var currentlyActive = toggleBtn.getAttribute('data-autonomy-source-active') === '1';
+          api('/api/autonomy/sources/' + encodeURIComponent(tid) + '/toggle', { method: 'POST', body: { is_active: currentlyActive ? 0 : 1 } }).then(function (r) {
+            if (!r.ok) { setText('autonomySourceStatus', apiError(r)); return; }
+            setText('autonomySourceStatus', 'Source #' + tid + (currentlyActive ? ' disabled.' : ' enabled.'));
+            loadSources();
+          }).catch(function () { setText('autonomySourceStatus', 'Could not reach the FS AI server.'); });
+        }
+      });
+    }
+
+    var addSourceBtn = el('autonomyAddSourceBtn');
+    if (addSourceBtn) {
+      addSourceBtn.addEventListener('click', function () {
+        var divEl = el('autonomySourceDivision');
+        var nameEl = el('autonomySourceName');
+        var urlEl = el('autonomySourceUrl');
+        var division = divEl ? divEl.value : '';
+        var name = nameEl ? nameEl.value.trim() : '';
+        var url = urlEl ? urlEl.value.trim() : '';
+        if (!name || !url) { setText('autonomyAddSourceStatus', 'Enter a source name and a feed URL.'); return; }
+        setText('autonomyAddSourceStatus', 'Validating the feed…');
+        api('/api/autonomy/sources', { method: 'POST', body: { division: division, name: name, url: url } }).then(function (r) {
+          if (!r.ok) { setText('autonomyAddSourceStatus', apiError(r)); return; }
+          setText('autonomyAddSourceStatus', 'Source added — feed validated live (' + (r.data.itemsFound != null ? r.data.itemsFound : '—') + ' item(s) found, ' + (r.data.feedType || 'rss') + ').');
+          if (nameEl) nameEl.value = '';
+          if (urlEl) urlEl.value = '';
+          loadSources();
+        }).catch(function () { setText('autonomyAddSourceStatus', 'Could not reach the FS AI server.'); });
+      });
+    }
+
+    var pipelineList = el('autonomyPipelineList');
+    if (pipelineList) {
+      pipelineList.addEventListener('click', function (e) {
+        var fcBtn = e.target.closest('[data-autonomy-factcheck]');
+        if (fcBtn) { enqueueAgentTask('fact-checking', 'fact-check', fcBtn.getAttribute('data-autonomy-factcheck'), 'autonomyPipelineStatus'); return; }
+        var corrBtn = e.target.closest('[data-autonomy-correct]');
+        if (corrBtn) { enqueueAgentTask('fact-checking', 'correct', corrBtn.getAttribute('data-autonomy-correct'), 'autonomyPipelineStatus'); return; }
+        var detailBtn = e.target.closest('[data-autonomy-fc-detail]');
+        if (detailBtn) { loadFactCheckDetail(detailBtn.getAttribute('data-autonomy-fc-detail')); }
+      });
+    }
+
+    var backupBtn = el('autonomyBackupBtn');
+    if (backupBtn) {
+      backupBtn.addEventListener('click', function () {
+        setText('autonomyBackupStatus', 'Running backup…');
+        api('/api/admin/backup/run', { method: 'POST' }).then(function (r) {
+          if (!r.ok) { setText('autonomyBackupStatus', apiError(r)); return; }
+          var d = r.data || {};
+          setText('autonomyBackupStatus', 'Backup ' + (d.status || 'done') + ' — ' + (d.rowsExported != null ? d.rowsExported : '—') + ' row(s) in ' + (d.tablesExported != null ? d.tablesExported : '—') + ' table(s), ' + (d.bytesExported != null ? d.bytesExported : '—') + ' bytes.' + (d.warnings && d.warnings.length ? ' Warnings: ' + d.warnings.join(' ') : ''));
+          loadStatus();
+        }).catch(function () { setText('autonomyBackupStatus', 'Could not reach the FS AI server.'); });
       });
     }
 
@@ -633,6 +883,8 @@
   function loadAll() {
     loadStatus();
     loadLlm();
+    loadSources();
+    loadPipeline();
     loadTasks();
     loadReports();
     loadSettings();

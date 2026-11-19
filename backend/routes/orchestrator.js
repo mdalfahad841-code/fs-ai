@@ -7,14 +7,22 @@
  *   GET  /api/autonomy/tasks?status=&agent=&limit=
  *   POST /api/autonomy/tasks
  *   POST /api/autonomy/tasks/:id/run
+ *   POST /api/autonomy/tasks/:id/retry
  *   POST /api/autonomy/control            { action: start-all|pause-all|resume-all }
  *   GET  /api/autonomy/settings
  *   POST /api/autonomy/settings           { key, value }
  *   GET  /api/autonomy/reports?kind=&limit=
  *   POST /api/autonomy/reports/generate   { kind: daily|weekly } (snapshot only)
  *   GET  /api/autonomy/accounts
- *   POST /api/autonomy/run-daily
+ *   POST /api/autonomy/run-daily          { force?: boolean }
  *   POST /api/autonomy/scaffolds/:runId/convert
+ *   GET  /api/autonomy/sources
+ *   POST /api/autonomy/sources            { division, name, url } (feed is validated live first)
+ *   POST /api/autonomy/sources/:id/fetch
+ *   POST /api/autonomy/sources/:id/toggle { is_active: 0|1 }
+ *   GET  /api/autonomy/fact-checks?article_id=
+ *   GET  /api/autonomy/gate?article_id=
+ *   GET  /api/autonomy/analytics
  *
  * All endpoints: 503 without D1, 400 on bad input, never invent data.
  * Revenue is $0.00 and traffic is 'Data unavailable' until a real source
@@ -32,8 +40,11 @@ import { persistAgentStatus } from '../agents/business-manager.js';
 import { QUEUE_AGENTS, QUEUE_TO_REGISTRY } from '../agents/autonomy-runner.js';
 import { convertScaffoldToDraft } from '../agents/autonomy/content.js';
 import { providerStatus, getProviderOrder } from '../llm/registry.js';
+import { fetchFeed } from '../rss/rss.js';
+import { loadAllSources, loadSource, fetchSource } from '../rss/sources.js';
+import { evaluatePublishGate } from '../publishing/gate.js';
 import {
-  runTask, runDailyWorkflow, runWeeklyWorkflow, enqueueTask,
+  runTask, retryTask, runDailyWorkflow, runWeeklyWorkflow, enqueueTask,
   generateReportSnapshot, normaliseTaskRow, todayStr,
 } from './scheduler.js';
 
@@ -108,7 +119,24 @@ const SETTING_RULES = {
     return Number.isInteger(n) && n >= 0 && n <= 3 ? null : 'max_articles_per_day must be an integer from 0 to 3.';
   },
   social_auto_post: (v) => String(v) === 'off' ? null : "social_auto_post must be 'off' — auto-posting is not allowed (no social API auth exists).",
+  // Auto-pipeline switches. All default to 'off' (migration 010). Turning
+  // auto_publishing 'on' only arms the gate's eligibility reporting —
+  // nothing publishes while publishing_mode is 'approved_only'.
+  auto_research: (v) => ['on', 'off'].includes(String(v)) ? null : "auto_research must be 'on' or 'off'.",
+  auto_generation: (v) => ['on', 'off'].includes(String(v)) ? null : "auto_generation must be 'on' or 'off'.",
+  auto_factcheck: (v) => ['on', 'off'].includes(String(v)) ? null : "auto_factcheck must be 'on' or 'off'.",
+  auto_correction: (v) => ['on', 'off'].includes(String(v)) ? null : "auto_correction must be 'on' or 'off'.",
+  auto_publishing: (v) => ['on', 'off'].includes(String(v)) ? null : "auto_publishing must be 'on' or 'off'.",
 };
+
+/** Read that degrades to null when a table does not exist yet (pre-migration DBs). */
+async function safeFirst(env, sql, params = []) {
+  try {
+    return await d1First(env, sql, params);
+  } catch {
+    return null;
+  }
+}
 
 async function getSettings(env) {
   const rows = await d1All(env, 'SELECT key, value FROM autonomy_settings ORDER BY key ASC') || [];
@@ -170,6 +198,8 @@ async function handleStatus(request, env) {
   const providers = await providerStatus(env);
   const generationPaused = !providers.some((p) => p.status === 'available');
   const activeProvider = providers.find((p) => p.status === 'available');
+  const lastBackup = await safeFirst(env,
+    "SELECT * FROM backup_runs WHERE status = 'success' ORDER BY finished_at DESC, id DESC LIMIT 1");
   return jsonOk({
     autonomyLevel: settings.autonomy_level || '3',
     targetLevel: settings.autonomy_target || '3',
@@ -182,6 +212,18 @@ async function handleStatus(request, env) {
     publishingMode: settings.publishing_mode || 'approved_only',
     maxArticlesPerDay: settings.max_articles_per_day || '1',
     socialAutoPost: settings.social_auto_post || 'off',
+    autoFlags: {
+      auto_research: settings.auto_research || 'off',
+      auto_generation: settings.auto_generation || 'off',
+      auto_factcheck: settings.auto_factcheck || 'off',
+      auto_correction: settings.auto_correction || 'off',
+      auto_publishing: settings.auto_publishing || 'off',
+    },
+    lastBackup: lastBackup ? {
+      id: lastBackup.id, finishedAt: lastBackup.finished_at,
+      tablesExported: lastBackup.tables_exported, rowsExported: lastBackup.rows_exported,
+      bytesExported: lastBackup.bytes_exported,
+    } : null,
     llmProvider: settings.llm_provider || 'none',
     llm: {
       provider: activeProvider ? activeProvider.id : 'none',
@@ -407,14 +449,166 @@ async function handleAccounts() {
 
 async function handleRunDaily(request, env) {
   if (!env.DB) return jsonError('Daily workflow requires the D1 database', 503);
+  let force = false;
+  try {
+    const body = await readJsonBody(request);
+    force = Boolean(body && body.force === true);
+  } catch {
+    force = false;
+  }
   if (await getEmergencyStop(env)) {
     // runDailyWorkflow logs the skip itself; answer 423 as specified.
-    await runDailyWorkflow(env);
+    await runDailyWorkflow(env, { force });
     return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { skipped: true });
   }
-  const result = await runDailyWorkflow(env);
+  const result = await runDailyWorkflow(env, { force });
   if (!result.ok) return jsonError(result.error || 'Daily workflow failed.', 500);
   return jsonOk({ ok: true, ...result });
+}
+
+async function handleRetryTask(request, env, id) {
+  if (!env.DB) return jsonError('Task retry requires the D1 database', 503);
+  const result = await retryTask(env, id);
+  if (!result.ok) return jsonError(result.error || 'Task could not be retried.', result.status || 500);
+  return jsonOk({ taskId: result.taskId, agent: result.agent, status: 'queued' });
+}
+
+async function handleListSources(request, env) {
+  if (!env.DB) return jsonError('Sources require the D1 database', 503);
+  const sources = await loadAllSources(env).catch(() => null);
+  if (sources === null) return jsonError('Research sources are not available — migration 008 has not been applied yet.', 503);
+  return jsonOk({ sources, total: sources.length, source: 'd1' });
+}
+
+async function handleCreateSource(request, env) {
+  if (!env.DB) return jsonError('Sources require the D1 database', 503);
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch {
+    return jsonError('Invalid JSON body.', 400);
+  }
+  const division = typeof body.division === 'string' ? body.division.trim() : '';
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const url = typeof body.url === 'string' ? body.url.trim() : '';
+  if (!division || !isValidSlug(division)) return jsonError('division must be a valid division slug.', 400);
+  if (!name) return jsonError('name is required.', 400);
+  if (!url) return jsonError('url is required.', 400);
+  const div = await d1First(env, 'SELECT id, slug FROM business_divisions WHERE slug = ? LIMIT 1', [division]);
+  if (!div) return jsonError(`Unknown division slug: ${division}.`, 400);
+  const existing = await d1First(env, 'SELECT id FROM research_sources WHERE url = ? LIMIT 1', [url]);
+  if (existing) return jsonError('A source with this URL already exists.', 409);
+  // Validate the feed live before storing it: only a URL that returns
+  // valid RSS/Atom XML becomes a source. Nothing unverified is stored.
+  const checked = await fetchFeed(url);
+  if (!checked.ok) {
+    return jsonError(`Feed validation failed: ${checked.error}. The source was not added.`, 400);
+  }
+  const inserted = await d1Run(env,
+    'INSERT INTO research_sources (division_id, name, url, source_type, is_active, last_status) VALUES (?, ?, ?, ?, 1, ?)',
+    [div.id, name, url, checked.feedType || 'rss', 'validated']);
+  const id = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  const source = id ? await loadSource(env, id) : null;
+  return jsonOk({ source, itemsFound: checked.items.length, feedType: checked.feedType }, 201);
+}
+
+async function handleFetchSource(request, env, id) {
+  if (!env.DB) return jsonError('Sources require the D1 database', 503);
+  const source = await loadSource(env, id);
+  if (!source) return jsonError('Source not found.', 404);
+  const result = await fetchSource(env, source);
+  return jsonOk({ source: result });
+}
+
+async function handleToggleSource(request, env, id) {
+  if (!env.DB) return jsonError('Sources require the D1 database', 503);
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch {
+    return jsonError('Invalid JSON body.', 400);
+  }
+  const isActive = body && (body.is_active === 1 || body.is_active === true) ? 1
+    : (body && (body.is_active === 0 || body.is_active === false) ? 0 : null);
+  if (isActive === null) return jsonError('is_active must be 0/1 or true/false.', 400);
+  const source = await loadSource(env, id);
+  if (!source) return jsonError('Source not found.', 404);
+  await d1Run(env, "UPDATE research_sources SET is_active = ?, updated_at = datetime('now') WHERE id = ?", [isActive, id]);
+  return jsonOk({ ok: true, id: Number(id), is_active: isActive });
+}
+
+async function handleFactChecks(request, env) {
+  if (!env.DB) return jsonError('Fact-checks require the D1 database', 503);
+  const q = new URL(request.url).searchParams;
+  const articleId = Number(q.get('article_id'));
+  if (!Number.isInteger(articleId) || articleId <= 0) return jsonError('article_id is required.', 400);
+  const latest = await safeFirst(env,
+    'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [articleId]);
+  if (!latest) return jsonOk({ articleId, factCheck: null, claims: [], corrections: [], source: 'd1' });
+  const claims = await d1All(env, 'SELECT * FROM claim_checks WHERE fact_check_id = ? ORDER BY id ASC', [latest.id]) || [];
+  const corrections = await d1All(env, 'SELECT * FROM article_corrections WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 20', [articleId]) || [];
+  return jsonOk({ articleId, factCheck: latest, claims, corrections, source: 'd1' });
+}
+
+async function handleGate(request, env) {
+  if (!env.DB) return jsonError('Publish gate requires the D1 database', 503);
+  const q = new URL(request.url).searchParams;
+  const articleId = Number(q.get('article_id'));
+  if (!Number.isInteger(articleId) || articleId <= 0) return jsonError('article_id is required.', 400);
+  const gate = await evaluatePublishGate(env, articleId);
+  return jsonOk({ ...gate, source: 'd1' });
+}
+
+/**
+ * GET /api/autonomy/analytics — first-party D1 analytics only. GA4 has
+ * no Data API connection, so traffic stays 'Data unavailable' and
+ * revenue stays $0.00; everything else is counted from real D1 rows.
+ */
+async function handleAnalytics(request, env) {
+  if (!env.DB) return jsonError('Analytics requires the D1 database', 503);
+  const articlesByStatus = await d1All(env, 'SELECT status, COUNT(*) AS n FROM articles GROUP BY status') || [];
+  const articlesByDivision = await d1All(env,
+    'SELECT d.slug AS division, d.name, COUNT(a.id) AS total, ' +
+    "SUM(CASE WHEN a.status = 'published' THEN 1 ELSE 0 END) AS published " +
+    'FROM business_divisions d LEFT JOIN articles a ON a.division_id = d.id GROUP BY d.id, d.slug, d.name ORDER BY published ASC, total ASC') || [];
+  const publishedToday = await d1First(env,
+    "SELECT COUNT(*) AS n FROM articles WHERE status = 'published' AND published_at >= datetime('now', 'start of day')");
+  const drafts = await d1All(env,
+    "SELECT a.id, a.title, a.status, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id " +
+    "WHERE a.status IN ('draft', 'pending_approval') ORDER BY a.updated_at DESC LIMIT 20") || [];
+  const draftGates = [];
+  for (const d of drafts) {
+    const gate = await evaluatePublishGate(env, d.id);
+    draftGates.push({ id: d.id, title: d.title, status: d.status, division: d.division, contentReady: gate.contentReady, eligible: gate.eligible, blockedBy: gate.blockedBy });
+  }
+  const llmToday = await safeFirst(env,
+    "SELECT COUNT(*) AS calls, COALESCE(SUM(neurons), 0) AS neurons FROM llm_usage WHERE date(created_at) = date('now')");
+  const llm7d = await safeFirst(env,
+    "SELECT COUNT(*) AS calls, COALESCE(SUM(neurons), 0) AS neurons FROM llm_usage WHERE created_at >= datetime('now', '-7 days')");
+  const taskOutcomes7d = await d1All(env,
+    "SELECT outcome, COUNT(*) AS n FROM agent_runs WHERE started_at >= datetime('now', '-7 days') GROUP BY outcome") || [];
+  const failedTasks = await d1All(env,
+    "SELECT id, agent, kind, attempts, max_attempts, updated_at FROM agent_tasks WHERE status = 'failed' ORDER BY updated_at DESC LIMIT 20") || [];
+  const latestReport = await d1First(env, 'SELECT * FROM daily_reports ORDER BY date DESC, id DESC LIMIT 1');
+  let latestSummary = null;
+  if (latestReport) { try { latestSummary = JSON.parse(latestReport.summary_json || '{}'); } catch { latestSummary = null; } }
+  const researchTotals = await safeFirst(env, 'SELECT COUNT(*) AS sources, COALESCE(SUM(items_discovered), 0) AS items FROM research_sources WHERE is_active = 1');
+  return jsonOk({
+    articlesByStatus: Object.fromEntries(articlesByStatus.map((r) => [r.status, Number(r.n || 0)])),
+    articlesByDivision: articlesByDivision.map((r) => ({ division: r.division, name: r.name, total: Number(r.total || 0), published: Number(r.published || 0) })),
+    publishedToday: Number(publishedToday ? publishedToday.n : 0),
+    drafts: draftGates,
+    llmToday: { calls: Number(llmToday ? llmToday.calls : 0), neurons: Number(llmToday ? llmToday.neurons : 0) },
+    llm7d: { calls: Number(llm7d ? llm7d.calls : 0), neurons: Number(llm7d ? llm7d.neurons : 0) },
+    taskOutcomes7d: Object.fromEntries(taskOutcomes7d.map((r) => [r.outcome, Number(r.n || 0)])),
+    failedTasks: failedTasks.map((t) => ({ id: t.id, agent: t.agent, kind: t.kind, attempts: t.attempts, maxAttempts: t.max_attempts, updatedAt: t.updated_at })),
+    latestReport: latestReport ? { ...latestReport, summary: latestSummary } : null,
+    research: { activeSources: Number(researchTotals ? researchTotals.sources : 0), itemsDiscovered: Number(researchTotals ? researchTotals.items : 0) },
+    ga4: { status: 'Tracking Connected — Reporting API Not Connected' },
+    traffic: 'Data unavailable',
+    revenue: '$0.00',
+    source: 'd1',
+  });
 }
 
 async function handleScaffoldConvert(request, env, runId) {
@@ -444,6 +638,9 @@ export async function handleAutonomy(request, env, ctx, auth) {
   if (method === 'POST' && parts.length === 5 && parts[2] === 'tasks' && parts[4] === 'run') {
     return handleRunTask(request, env, parts[3]);
   }
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'tasks' && parts[4] === 'retry') {
+    return handleRetryTask(request, env, parts[3]);
+  }
   if (method === 'POST' && path === '/api/autonomy/control') return handleControl(request, env);
   if (method === 'GET' && path === '/api/autonomy/settings') return handleGetSettings(request, env);
   if (method === 'POST' && path === '/api/autonomy/settings') return handlePostSettings(request, env);
@@ -451,6 +648,17 @@ export async function handleAutonomy(request, env, ctx, auth) {
   if (method === 'POST' && path === '/api/autonomy/reports/generate') return handleGenerateReport(request, env);
   if (method === 'GET' && path === '/api/autonomy/accounts') return handleAccounts();
   if (method === 'POST' && path === '/api/autonomy/run-daily') return handleRunDaily(request, env);
+  if (method === 'GET' && path === '/api/autonomy/sources') return handleListSources(request, env);
+  if (method === 'POST' && path === '/api/autonomy/sources') return handleCreateSource(request, env);
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'sources' && parts[4] === 'fetch') {
+    return handleFetchSource(request, env, parts[3]);
+  }
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'sources' && parts[4] === 'toggle') {
+    return handleToggleSource(request, env, parts[3]);
+  }
+  if (method === 'GET' && path === '/api/autonomy/fact-checks') return handleFactChecks(request, env);
+  if (method === 'GET' && path === '/api/autonomy/gate') return handleGate(request, env);
+  if (method === 'GET' && path === '/api/autonomy/analytics') return handleAnalytics(request, env);
   if (method === 'POST' && parts.length === 5 && parts[2] === 'scaffolds' && parts[4] === 'convert') {
     return handleScaffoldConvert(request, env, parts[3]);
   }

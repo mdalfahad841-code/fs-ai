@@ -2,8 +2,11 @@
 //
 // runDailyWorkflow / runWeeklyWorkflow / runTask against a REAL SQLite
 // database built from database/schema.sql + migrations 005 + 006 +
-// database/seed.sql via node:sqlite (same pattern as
-// tests/real-db.test.js). Each test asserts real DB state.
+// database/seed.sql + migrations 008 + 009 + 010 + 011 via node:sqlite
+// (same pattern as tests/real-db.test.js). Each test asserts real DB
+// state. Migrations 008-011 run AFTER seed.sql so migration 008's
+// research-source seeds (which select divisions by slug) find the
+// seeded divisions.
 //
 // NOTE (pre-existing condition, local test DBs only): migration 004 is
 // NOT applied here. database/schema.sql already contains 004's changes
@@ -11,13 +14,13 @@
 // schema.sql fails with a duplicate-column error. The live D1 database
 // is unaffected — it was built by the incremental migration chain.
 //
-// KNOWN ISSUE (documented, not fixed here — scheduler.js is owned by
-// another worker): runDailyWorkflow writes one daily_reports row per
-// invocation and re-runs its steps each time, so an hourly cron would
-// write 24 rows/day. The integration patch
-// (docs/AUTONOMY-INTEGRATION-PATCH.md) guards the daily call to
-// 00:00 UTC. The test below pins the current behaviour: task enqueues
-// are idempotent across runs, but the report row is NOT deduplicated.
+// FIXED 2026-11-19 (master implementation): runDailyWorkflow now
+// refuses a second run on the same UTC date (returns { duplicate: true }
+// with the existing report id) and upserts its daily_reports row, so a
+// forced re-run ({ force: true }) updates the existing row instead of
+// writing a duplicate. The integration patch
+// (docs/AUTONOMY-INTEGRATION-PATCH.md) still guards the daily call to
+// 00:00 UTC as a second layer.
 //
 // Run: node --test tests/autonomy-scheduler.test.js (or: npm test)
 // Requires node:sqlite (Node >= 22.5; this repo runs Node 24).
@@ -96,7 +99,7 @@ function makeRealD1(db) {
   };
 }
 
-// Fresh real DB per test: schema + autonomy migrations 005/006 + seed.
+// Fresh real DB per test: schema + autonomy migrations 005/006 + seed + 008/009/010/011.
 // Migration 004 is deliberately NOT applied (see the header note).
 function freshEnv() {
   const db = buildDb([
@@ -104,6 +107,10 @@ function freshEnv() {
     'database/migrations/005_autonomy.sql',
     'database/migrations/006_llm_usage.sql',
     'database/seed.sql',
+    'database/migrations/008_research.sql',
+    'database/migrations/009_factcheck.sql',
+    'database/migrations/010_pipeline.sql',
+    'database/migrations/011_backup.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -159,13 +166,14 @@ describe('daily workflow', () => {
       'research tasks carry per-day idempotency keys');
   });
 
-  it('running it twice does not duplicate tasks for the same day (but writes a second report row — known issue)', async () => {
+  it('running it twice does not duplicate tasks or the report row for the same day', async () => {
     const { db, env } = freshEnv();
     const first = await runDailyWorkflow(env);
     assert.equal(first.ok, true);
     const tasksAfterFirst = db.prepare('SELECT COUNT(*) AS n FROM agent_tasks').get().n;
     const second = await runDailyWorkflow(env);
     assert.equal(second.ok, true);
+    assert.equal(second.duplicate, true, 'second run reports itself as a duplicate');
     const tasksAfterSecond = db.prepare('SELECT COUNT(*) AS n FROM agent_tasks').get().n;
 
     assert.equal(
@@ -173,13 +181,17 @@ describe('daily workflow', () => {
       2, 'research tasks are idempotent: still 2 after the second run');
     assert.equal(tasksAfterSecond, tasksAfterFirst,
       'total task count is stable across the two runs');
-    // KNOWN ISSUE: the report row is NOT deduplicated — the second run
-    // writes a second daily_reports row. The integration patch guards
-    // the daily call to 00:00 UTC so this happens once a day, not 24
-    // times. If scheduler.js ever deduplicates the row, this assertion
-    // must be updated to expect 1 — do not weaken it silently.
-    assert.equal(countDailyReports(db, 'daily'), 2,
-      'KNOWN ISSUE: second run writes a second daily report row (see header note)');
+    // FIXED (2026-11-19 master implementation): the report row IS now
+    // deduplicated — the second run returns the existing row instead of
+    // writing a second one. A forced re-run ({ force: true }) updates
+    // the existing row in place.
+    assert.equal(countDailyReports(db, 'daily'), 1,
+      'second run writes no second daily report row');
+    assert.equal(second.reportId, first.reportId, 'second run returns the same report row id');
+    const forced = await runDailyWorkflow(env, { force: true });
+    assert.equal(forced.ok, true);
+    assert.equal(forced.duplicate, undefined, 'forced re-run is not a duplicate');
+    assert.equal(countDailyReports(db, 'daily'), 1, 'forced re-run still leaves exactly one row');
   });
 
   it('publishes only approved+due articles inside the daily run; draft/pending_approval untouched', async () => {

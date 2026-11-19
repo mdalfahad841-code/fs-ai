@@ -1,10 +1,19 @@
 /**
- * FS AI — Autonomy: SEO agent handler.
+ * FS AI — Autonomy: SEO + quality agent handler.
  *
- * Computes SEO fields from the article's REAL text. Fills seo_title /
- * seo_description only when they are blank — never overwrites owner-set
- * values. Returns internal-link suggestions (real published slugs in the
- * same division) and a heading count.
+ * Computes SEO fields from the article's REAL text and runs a checks
+ * suite: seo title, meta description, unique slug, H1/H2/H3 hierarchy,
+ * keyword relevance + natural placement, internal linking, image alt
+ * text when images exist, readability estimate, duplicate detection
+ * (word-shingle overlap vs other published articles), broken-link
+ * checking (live fetch, capped at 5 links), and structured-metadata
+ * presence. Every run stores a seo_checks row; the publish gate reads
+ * the latest verdict. SEO never overrides factual accuracy — the gate
+ * requires a fact-check pass first.
+ *
+ * Fills seo_title / seo_description only when they are blank — never
+ * overwrites owner-set values. Returns internal-link suggestions (real
+ * published slugs in the same division) and a heading count.
  */
 import { d1All, d1First, d1Run, nowIso } from '../../middleware/validation.js';
 
@@ -15,6 +24,159 @@ function parsePayload(task) {
     try { return JSON.parse(task.payload); } catch { return {}; }
   }
   return {};
+}
+
+const STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'are', 'was', 'were',
+  'has', 'have', 'can', 'will', 'you', 'your', 'when', 'what', 'how', 'why',
+  'not', 'but', 'also', 'more', 'than', 'then', 'them', 'they', 'its', 'into',
+  'about', 'after', 'before', 'over', 'under', 'between', 'while', 'which',
+  'there', 'here', 'should', 'would', 'could', 'much', 'many', 'most', 'some',
+]);
+
+export function titleKeywords(title) {
+  return String(title || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/).filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+}
+
+export function shingles(text, n = 5) {
+  const words = String(text || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  const out = new Set();
+  for (let i = 0; i + n <= words.length; i += 1) out.add(words.slice(i, i + n).join(' '));
+  return out;
+}
+
+export function extractExternalLinks(body) {
+  const urls = new Set();
+  const text = String(body || '');
+  for (const m of text.matchAll(/https?:\/\/[^\s)'"`<>]+/g)) urls.add(m[0].replace(/[.,;]+$/, ''));
+  return [...urls].filter((u) => u.startsWith('https://')).slice(0, 5);
+}
+
+async function checkBrokenLinks(urls, fetchImpl) {
+  const results = [];
+  for (const url of urls) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetchImpl(url, { method: 'HEAD', signal: controller.signal, redirect: 'follow' });
+      results.push({ url, ok: res.ok || (res.status >= 200 && res.status < 400), status: res.status });
+    } catch (err) {
+      results.push({ url, ok: false, status: 0, error: err && err.name === 'AbortError' ? 'timeout' : 'unreachable' });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return results;
+}
+
+export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
+  const body = String(article.body || '');
+  const plainBody = body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const checks = [];
+  const push = (name, ok, level, detail) => checks.push({ name, ok, level, detail });
+
+  // 1. SEO title 30-60 chars.
+  const seoTitle = String(article.seo_title || '').trim();
+  push('seo-title', seoTitle.length >= 30 && seoTitle.length <= 60, seoTitle ? 'needs-review' : 'failed',
+    seoTitle ? `SEO title is ${seoTitle.length} characters (target 30-60).` : 'SEO title is missing.');
+
+  // 2. Meta description 120-160 chars.
+  const seoDescription = String(article.seo_description || '').trim();
+  push('meta-description', seoDescription.length >= 120 && seoDescription.length <= 160, seoDescription ? 'needs-review' : 'failed',
+    seoDescription ? `Meta description is ${seoDescription.length} characters (target 120-160).` : 'Meta description is missing.');
+
+  // 3. Unique slug.
+  const slugDupes = await d1All(env, 'SELECT id FROM articles WHERE slug = ? AND id != ?', [article.slug, article.id]) || [];
+  push('slug-unique', slugDupes.length === 0, 'failed',
+    slugDupes.length ? `Slug is used by ${slugDupes.length} other article(s).` : 'Slug is unique.');
+
+  // 4. Heading hierarchy: title is the H1; body should have H2s, no H1 of its own.
+  const h1Count = (body.match(/^#\s.+$/gm) || []).length + (body.match(/<h1[\s>]/gi) || []).length;
+  const h2Count = (body.match(/^##\s.+$/gm) || []).length + (body.match(/<h2[\s>]/gi) || []).length;
+  const h3Count = (body.match(/^###\s.+$/gm) || []).length + (body.match(/<h3[\s>]/gi) || []).length;
+  push('heading-hierarchy', h1Count === 0 && h2Count >= 2, 'needs-review',
+    `Body headings: ${h1Count} H1, ${h2Count} H2, ${h3Count} H3. Title is the page H1; body needs at least 2 H2s and no H1 of its own.`);
+
+  // 5. Keyword relevance: title keywords present in the body.
+  const keywords = titleKeywords(article.title);
+  const bodyLower = plainBody.toLowerCase();
+  const present = keywords.filter((k) => bodyLower.includes(k));
+  const coverage = keywords.length ? present.length / keywords.length : 0;
+  push('keyword-relevance', coverage >= 0.5, 'needs-review',
+    keywords.length ? `${present.length}/${keywords.length} title keywords appear in the body (${Math.round(coverage * 100)}%).` : 'No keywords could be derived from the title.');
+
+  // 6. Internal linking: body links to another real article, or suggestions exist.
+  const siblings = await d1All(env,
+    'SELECT id, title, slug FROM articles WHERE division_id = ? AND status = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT 5',
+    [article.division_id, 'published', article.id]) || [];
+  const internalLinks = siblings.map((s) => ({
+    id: s.id, title: s.title, slug: s.slug,
+    url: `https://fs-ai-5w5.pages.dev/pages/article.html?id=${s.id}`,
+  }));
+  const linksInternally = internalLinks.some((l) => body.includes(l.url) || body.includes(`id=${l.id}`) || body.includes(l.slug));
+  push('internal-links', linksInternally, 'needs-review',
+    linksInternally ? 'Body links to at least one other published article.' : `${siblings.length} related published article(s) available to link — none linked yet.`);
+
+  // 7. Image alt text when images exist.
+  const imgs = [...body.matchAll(/<img[^>]*>/gi)].map((m) => m[0]);
+  const mdImgs = [...body.matchAll(/!\[[^\]]*\]\([^)]+\)/g)].map((m) => m[0]);
+  const missingAlt = imgs.filter((img) => !/alt=["'][^"']+["']/i.test(img)).length
+    + mdImgs.filter((img) => /^!\[\s*\]/.test(img)).length;
+  push('image-alt', missingAlt === 0, 'needs-review',
+    imgs.length + mdImgs.length === 0
+      ? 'No images in the body — nothing to check.'
+      : `${imgs.length + mdImgs.length} image(s), ${missingAlt} missing alt text.`);
+
+  // 8. Readability estimate (rough: average sentence length + word length).
+  const sentences = plainBody.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 0);
+  const words = plainBody.split(/\s+/).filter(Boolean);
+  const avgSentence = sentences.length ? words.length / sentences.length : 0;
+  const avgWord = words.length ? words.reduce((a, w) => a + w.length, 0) / words.length : 0;
+  push('readability', avgSentence >= 8 && avgSentence <= 25 && avgWord < 6.5, 'needs-review',
+    `Estimate: ${words.length} words, ${sentences.length} sentences, avg sentence ${avgSentence.toFixed(1)} words, avg word ${avgWord.toFixed(1)} chars.`);
+
+  // 9. Duplicate detection vs other published articles (5-word shingles).
+  const mine = shingles(plainBody);
+  const others = await d1All(env, "SELECT id, body FROM articles WHERE status = 'published' AND id != ?", [article.id]) || [];
+  let maxOverlap = 0;
+  let closestId = null;
+  for (const other of others) {
+    const theirs = shingles(other.body || '');
+    if (!mine.size || !theirs.size) continue;
+    let common = 0;
+    for (const s of mine) if (theirs.has(s)) common += 1;
+    const overlap = common / mine.size;
+    if (overlap > maxOverlap) { maxOverlap = overlap; closestId = other.id; }
+  }
+  push('duplicate', maxOverlap < 0.25, maxOverlap >= 0.5 ? 'failed' : 'needs-review',
+    others.length
+      ? `Highest 5-word shingle overlap with another published article: ${Math.round(maxOverlap * 100)}%${closestId ? ` (article ${closestId})` : ''}.`
+      : 'No other published articles to compare against.');
+
+  // 10. Broken-link check (live fetch, capped at 5 links).
+  const externalLinks = extractExternalLinks(body);
+  if (!externalLinks.length) {
+    push('broken-links', true, 'needs-review', 'No external links in the body.');
+  } else {
+    const impl = fetchImpl || (env && env.__fetchImpl) || fetch;
+    const linkResults = await checkBrokenLinks(externalLinks, impl);
+    const broken = linkResults.filter((r) => !r.ok);
+    push('broken-links', broken.length === 0, 'failed',
+      broken.length
+        ? `${broken.length}/${linkResults.length} external link(s) failed: ${broken.map((b) => `${b.url} (${b.error || b.status})`).join('; ')}`
+        : `All ${linkResults.length} external link(s) responded.`);
+  }
+
+  // 11. Structured metadata presence.
+  const metaOk = Boolean(article.title) && Boolean(article.excerpt) && Boolean(article.slug) && Boolean(article.division_id);
+  push('structured-metadata', metaOk, 'needs-review',
+    metaOk ? 'Title, excerpt, slug and division are set (per-article meta is JS-injected on the live site).' : 'Title, excerpt, slug or division is missing.');
+
+  const failed = checks.filter((c) => !c.ok && c.level === 'failed');
+  const needsReview = checks.filter((c) => !c.ok && c.level === 'needs-review');
+  const verdict = failed.length ? 'failed' : (needsReview.length ? 'needs-review' : 'pass');
+  return { checks, verdict, failed: failed.map((c) => c.name), needsReview: needsReview.map((c) => c.name) };
 }
 
 export async function runSeo(task, env) {
@@ -38,14 +200,6 @@ export async function runSeo(task, env) {
   const htmlHeadings = (body.match(/<h[1-6][^>]*>/gi) || []).length;
   const headingCount = markdownHeadings + htmlHeadings;
 
-  const siblings = await d1All(env,
-    'SELECT id, title, slug FROM articles WHERE division_id = ? AND status = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT 5',
-    [article.division_id, 'published', articleId]) || [];
-  const internalLinks = siblings.map((s) => ({
-    id: s.id, title: s.title, slug: s.slug,
-    url: `https://fs-ai-5w5.pages.dev/pages/article.html?id=${s.id}`,
-  }));
-
   // Fill blanks only — never overwrite owner-set values.
   const filled = [];
   if (!article.seo_title && seoTitle) {
@@ -56,6 +210,21 @@ export async function runSeo(task, env) {
     await d1Run(env, 'UPDATE articles SET seo_description = ?, updated_at = ? WHERE id = ?', [seoDescription, nowIso(), articleId]);
     filled.push('seo_description');
   }
+  const fresh = await d1First(env,
+    'SELECT a.*, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id WHERE a.id = ? LIMIT 1',
+    [articleId]);
+
+  const suite = await runSeoCheckSuite(env, fresh);
+  await d1Run(env, 'INSERT INTO seo_checks (article_id, verdict, checks_json) VALUES (?, ?, ?)',
+    [articleId, suite.verdict, JSON.stringify(suite.checks)]);
+
+  const siblings = await d1All(env,
+    'SELECT id, title, slug FROM articles WHERE division_id = ? AND status = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT 5',
+    [article.division_id, 'published', articleId]) || [];
+  const internalLinks = siblings.map((s) => ({
+    id: s.id, title: s.title, slug: s.slug,
+    url: `https://fs-ai-5w5.pages.dev/pages/article.html?id=${s.id}`,
+  }));
 
   return {
     outcome: 'done',
@@ -67,6 +236,8 @@ export async function runSeo(task, env) {
     headingCount,
     internalLinks,
     filled,
+    verdict: suite.verdict,
+    checks: suite.checks,
     note: filled.length
       ? `Filled blank field(s): ${filled.join(', ')} — owner-set values were not touched.`
       : 'SEO fields already set — nothing overwritten.',

@@ -2,9 +2,12 @@
 //
 // Every one of the 10 queue-agent handlers is exercised against a REAL
 // SQLite database built from database/schema.sql + migrations 005 + 006
-// + database/seed.sql via node:sqlite (same pattern as
-// tests/real-db.test.js). Each test asserts real DB state, not just the
-// returned shape: nothing publishes, posts, spends or fabricates.
+// + database/seed.sql + migrations 008 + 009 + 010 + 011 via node:sqlite
+// (same pattern as tests/real-db.test.js). Each test asserts real DB
+// state, not just the returned shape: nothing publishes, posts, spends
+// or fabricates. Migrations 008-011 run AFTER seed.sql so migration
+// 008's research-source seeds (which select divisions by slug) find
+// the seeded divisions.
 //
 // NOTE (pre-existing condition, local test DBs only): migration 004 is
 // NOT applied here. database/schema.sql already contains 004's changes
@@ -87,7 +90,7 @@ function makeRealD1(db) {
   };
 }
 
-// Fresh real DB per test: schema + autonomy migrations 005/006 + seed.
+// Fresh real DB per test: schema + autonomy migrations 005/006 + seed + 008/009/010/011.
 // Migration 004 is deliberately NOT applied (see the header note).
 function freshEnv() {
   const db = buildDb([
@@ -95,6 +98,10 @@ function freshEnv() {
     'database/migrations/005_autonomy.sql',
     'database/migrations/006_llm_usage.sql',
     'database/seed.sql',
+    'database/migrations/008_research.sql',
+    'database/migrations/009_factcheck.sql',
+    'database/migrations/010_pipeline.sql',
+    'database/migrations/011_backup.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -123,6 +130,9 @@ function articleRow(db, id) {
 describe('research agent', () => {
   it('no-op without sources, with the gap reason and the real division gap', async () => {
     const { db, env } = freshEnv();
+    // The seeded sources exist by default (migration 008); this test's
+    // condition is "no source configured", so disable them first.
+    db.prepare('UPDATE research_sources SET is_active = 0').run();
     const result = await runAutonomyTask(
       { agent: 'research', kind: 'daily-research', payload: { division: 'automotive', sources: [] } }, env);
     assert.equal(result.outcome, 'no-op');

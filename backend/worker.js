@@ -110,7 +110,7 @@ async function route(request, env, ctx) {
     if (!auth.ok) return auth.response;
     return handleAdminSubscribers(request, env, ctx, auth);
   }
-  if (path === '/api/admin/emergency-stop' || path === '/api/admin/backup') {
+  if (path === '/api/admin/emergency-stop' || path === '/api/admin/backup' || path === '/api/admin/backup/run') {
     const auth = await requireOwner(request, env);
     if (!auth.ok) return auth.response;
     return handleAdmin(request, env, ctx, auth);
@@ -160,9 +160,16 @@ export default {
   // runDailyWorkflow writes one daily_reports row per invocation, so
   // calling it on every hourly tick would write 24 rows/day.
   async scheduled(event, env, ctx) {
+    // Failure isolation: a publishDueArticles exception must never
+    // silently prevent the daily/weekly workflows, so each stage runs
+    // in its own try/catch and logs its own error.
     try {
       const result = await publishDueArticles(env);
       console.log('FS AI scheduled publish:', JSON.stringify(result));
+    } catch (err) {
+      console.error('FS AI scheduled publish error:', err);
+    }
+    try {
       const now = new Date(event && event.scheduledTime ? event.scheduledTime : Date.now());
       if (now.getUTCHours() === 0) {
         const daily = await runDailyWorkflow(env);
@@ -172,9 +179,8 @@ export default {
           console.log('FS AI scheduled weekly workflow:', JSON.stringify(weekly));
         }
       }
-      return result;
     } catch (err) {
-      console.error('FS AI scheduled publish error:', err);
+      console.error('FS AI scheduled workflow error:', err);
     }
   },
 };

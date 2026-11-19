@@ -55,6 +55,8 @@ INSERT OR IGNORE INTO business_divisions (id, name, slug, tagline, description, 
 (8, 'Education & Learning', 'education-learning', 'Learn a new skill.',
  'Practical guides for learning digital skills in 30 days and more.', 8);
 
+
+
 -- ---------------------------------------------------------------------------
 -- Categories (one or two per division to start)
 -- ---------------------------------------------------------------------------

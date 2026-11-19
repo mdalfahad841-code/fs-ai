@@ -60,6 +60,41 @@ export const QUEUE_TO_REGISTRY = {
   'security-monitoring': 'security',
 };
 
+// Division slug -> registry research agent id. The research queue agent
+// is collective, so pausing a division's research agent must still make
+// that division's queued research tasks skip — runTask resolves the
+// division from the task payload through this map (see scheduler.js).
+// Digital Tools has no division research agent: its research is covered
+// by the Tools agent (digital-tools-agent), so it has no entry here and
+// a paused Tools agent does not block digital-tools research.
+export const DIVISION_RESEARCH_REGISTRY = {
+  automotive: 'automotive-research',
+  'ai-technology': 'technology-research',
+  'gadgets-electronics': 'gadget-research',
+  'finance-money': 'finance-research',
+  'travel-lifestyle': 'travel-research',
+  'health-wellness': 'health-research',
+  'education-learning': 'education-research',
+};
+
+/** Resolve the registry agent id that governs a task (for pause checks). */
+export function registryIdForTask(task) {
+  if (!task || typeof task !== 'object') return null;
+  if (task.agent === 'research') {
+    let division = null;
+    try {
+      const payload = typeof task.payload === 'string' ? JSON.parse(task.payload) : task.payload;
+      division = payload && typeof payload.division === 'string' ? payload.division : null;
+    } catch { division = null; }
+    // A division-specific research task is governed by its division agent;
+    // a division-less research task (all divisions) is governed by all of
+    // them only when every one is paused — the scheduler checks that case
+    // separately via DIVISION_RESEARCH_REGISTRY.
+    return division ? (DIVISION_RESEARCH_REGISTRY[division] || null) : null;
+  }
+  return QUEUE_TO_REGISTRY[task.agent] || null;
+}
+
 const HANDLERS = {
   research: runResearch,
   'content-creation': runContentCreation,

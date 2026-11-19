@@ -79,6 +79,18 @@ export async function runContentCreation(task, env) {
   if (!row) {
     return { outcome: 'failed', error: `Unknown division slug: ${division}.` };
   }
+  // Duplicate avoidance: never generate a second article on a topic we
+  // already cover (same slug or same title, case-insensitive).
+  const dup = await d1First(env,
+    'SELECT id, title, slug, status FROM articles WHERE slug = ? OR lower(title) = lower(?) LIMIT 1',
+    [slugify(title), title]);
+  if (dup) {
+    return {
+      outcome: 'no-op',
+      reason: `An article already covers this topic: "${dup.title}" (id ${dup.id}, status ${dup.status}) — generation skipped to avoid a duplicate.`,
+      duplicateArticleId: dup.id,
+    };
+  }
   const outline = Array.isArray(payload.outline) && payload.outline.length
     ? payload.outline.filter((h) => typeof h === 'string').slice(0, 12)
     : headingsFromTitle(title, sources);
@@ -213,6 +225,24 @@ export async function convertScaffoldToDraft(env, scaffold) {
     ]);
   const id = result && result.meta ? result.meta.last_row_id : null;
   if (!id) return { ok: false, status: 500, error: 'Article was not stored.' };
+  // Record the cited sources as article_sources rows so the fact-checker
+  // and the publish gate can verify them (the body text alone is not
+  // enough). URL sources get source_type 'rss' when they came from a
+  // fetched research item, otherwise 'web'; plain-text sources are
+  // stored as titles only.
+  for (const s of sources) {
+    const text = String(s || '').trim();
+    if (!text) continue;
+    const isUrl = /^https?:\/\//i.test(text);
+    let sourceType = isUrl ? 'web' : 'other';
+    if (isUrl) {
+      const fromRss = await d1First(env, 'SELECT id FROM research_items WHERE url = ? LIMIT 1', [text]);
+      if (fromRss) sourceType = 'rss';
+    }
+    await d1Run(env,
+      'INSERT INTO article_sources (article_id, source_title, source_url, source_type, accessed_at) VALUES (?, ?, ?, ?, ?)',
+      [id, text, isUrl ? text : null, sourceType, now]).catch(() => {});
+  }
   const article = await d1First(env,
     'SELECT a.*, d.slug AS division, d.name AS division_name FROM articles a JOIN business_divisions d ON d.id = a.division_id WHERE a.id = ? LIMIT 1', [id]);
   return { ok: true, article };

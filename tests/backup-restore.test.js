@@ -78,7 +78,8 @@ function req(method, pathName, token, body) {
 }
 
 function dumpTable(db, table) {
-  return db.prepare(`SELECT * FROM "${table}" ORDER BY id ASC`).all();
+  // ORDER BY rowid: autonomy_settings has no id column (key is its PK).
+  return db.prepare(`SELECT * FROM "${table}" ORDER BY rowid ASC`).all();
 }
 
 describe('backup -> restore round-trip (local SQLite)', () => {
@@ -89,7 +90,16 @@ describe('backup -> restore round-trip (local SQLite)', () => {
   let origRows;
 
   before(async () => {
-    origDb = buildDb(['database/schema.sql', 'database/seed.sql']);
+    origDb = buildDb([
+      'database/schema.sql',
+      'database/seed.sql',
+      'database/migrations/005_autonomy.sql',
+      'database/migrations/006_llm_usage.sql',
+      'database/migrations/008_research.sql',
+      'database/migrations/009_factcheck.sql',
+      'database/migrations/010_pipeline.sql',
+      'database/migrations/011_backup.sql',
+    ]);
     // schema.sql turns FK enforcement ON for this connection; D1 does not
     // enforce ON DELETE CASCADE (see deleteArticle), so switch it OFF to
     // mimic the live database faithfully.
@@ -184,7 +194,8 @@ describe('backup -> restore round-trip (local SQLite)', () => {
       'the seed already holds the same ids, so plain INSERT conflicts');
   });
 
-  it('restore round-trip: all 11 tables deep-equal to the original', () => {
+  it('restore round-trip: all backed-up tables deep-equal to the original', () => {
+    assert.equal(BACKUP_TABLES.length, 25, 'RESTORE_ORDER covers the 11 original tables + 14 autonomy/pipeline tables');
     const fresh = new DatabaseSync(':memory:');
     applySchemaAndSeed(fresh);
     const { counts, fkViolations } = restoreBackup(fresh, backup);

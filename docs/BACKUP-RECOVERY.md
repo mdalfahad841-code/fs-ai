@@ -6,17 +6,27 @@
 the CMS and agent data:
 
 - `exported_at` — UTC timestamp of the export.
-- `tables` — full rows (every column) for: `articles`,
-  `article_revisions`, `business_divisions`, `categories`, `article_tags`,
-  `newsletter_subscribers`, `ai_agents`, `agent_activity_logs`,
-  `automation_jobs`, `revenue_records`, `website_settings`.
+- `tables` — full rows (every column) for 25 tables: `articles`,
+  `article_revisions`, `article_sources`, `business_divisions`,
+  `categories`, `article_tags`, `newsletter_subscribers`, `ai_agents`,
+  `agent_activity_logs`, `agent_tasks`, `agent_runs`, `agent_logs`,
+  `daily_reports`, `automation_jobs`, `autonomy_settings`, `llm_usage`,
+  `research_sources`, `research_items`, `fact_checks`, `claim_checks`,
+  `article_corrections`, `seo_checks`, `backup_runs`, `revenue_records`,
+  `website_settings`.
+  (Added 2026-11-19, master implementation: the 14 autonomy tables —
+  sources, research items, fact-checks, claims, corrections, SEO checks,
+  agent tasks/runs/logs, daily reports, autonomy settings, LLM usage,
+  and the backup-runs history itself. `article_sources` was previously
+  listed as not backed up; it is backed up now.)
 - `counts` — the number of rows exported per table.
 - `warnings` — per-table read problems, if any (a table that could not be
   read exports as an empty array instead of failing the whole export).
 
-Row caps: 1000 rows per table, except `agent_activity_logs` and
-`automation_jobs`, which are capped at the latest 500 rows each. Rows
-beyond the cap are NOT in the backup and are NOT restored.
+Row caps: 1000 rows per table, except `agent_activity_logs`,
+`automation_jobs` and `agent_logs`, which are capped at the latest 500
+rows each. Rows beyond the cap are NOT in the backup and are NOT
+restored.
 
 **This export is JSON, not a D1-native backup.** There is no automatic
 restore, no scheduled backup, and no point-in-time recovery on the free
@@ -25,6 +35,26 @@ tier. The restore below is manual, driven by
 SQLite copy of the schema (see "Verification" below). It has NOT been
 tested live against D1 — test it on a throwaway D1 database before
 relying on it.
+
+## Recording a backup run ("Run backup now")
+
+`POST /api/admin/backup/run` (owner session required) runs the same
+export and records it in `backup_runs` (migration 011): started/finished
+timestamps, status (`success` / `failed`), tables/rows/bytes exported,
+and the error if it failed. The dashboard's Backup section has a **Run
+backup now** button for it, and `GET /api/autonomy/status` reports the
+last successful run as `lastBackup` — before any run it is honestly
+`null`, not "unknown".
+
+If `backup_runs` does not exist yet (migration 011 not applied), the
+export still succeeds; the run is simply not recorded and the response
+carries a warning saying so. A run is marked `failed` only when
+warnings exist AND zero rows were exported.
+
+The export itself is still downloaded separately via
+`GET /api/admin/backup` (see "How to download the export" below) —
+"Run backup now" records the run; "Download backup (JSON)" saves the
+file. Both are owner-only.
 
 ## How the restore works
 
@@ -85,23 +115,45 @@ If the D1 database `fs-ai-db` is lost or corrupted:
    file's contents and run it):
    1. `database/schema.sql`
    2. `database/seed.sql`
+   3. `database/migrations/005_autonomy.sql`
+   4. `database/migrations/006_llm_usage.sql`
+   5. `database/migrations/008_research.sql` (console chunk:
+      `database/console-chunks/migration-008_research.sql`)
+   6. `database/migrations/009_factcheck.sql` (console chunk:
+      `database/console-chunks/migration-009_factcheck.sql`)
+   7. `database/migrations/010_pipeline.sql` (console chunk:
+      `database/console-chunks/migration-010_pipeline.sql`)
+   8. `database/migrations/011_backup.sql` (console chunk:
+      `database/console-chunks/migration-011_backup.sql`)
 
-   Do NOT also apply `database/console-chunks/migration-003-sessions.sql`
-   or `migration-004-cms-newsletter.sql`: `schema.sql` already contains
-   the `sessions` table, `article_revisions`, `articles.publish_at`,
-   `ai_agents.status`, and `rate_limits`, and re-applying 004 fails
-   with `duplicate column name: publish_at` (verified). Migrations
-   001–004 are for upgrading an existing database, not for a fresh
-   recovery. (The incremental path — 001+002+003+004+seed — is tested
-   in `tests/real-db.test.js` and stays valid for that purpose.)
+   Apply 008–011 AFTER the seed: migration 008's research-source seeds
+   look divisions up by slug, so they insert 0 rows if the divisions
+   are not seeded yet. The local restore script
+   (`scripts/restore-backup.js`, `applySchemaAndSeed`) uses exactly
+   this order.
+
+   Do NOT also apply `database/console-chunks/migration-003-sessions.sql`,
+   `migration-004-cms-newsletter.sql`, or `migration-007-newsletter-consent.sql`:
+   `schema.sql` already contains the `sessions` table,
+   `article_revisions`, `articles.publish_at`, `ai_agents.status`,
+   `rate_limits`, and the newsletter `consent_given_at` column, and
+   re-applying 004 fails with `duplicate column name: publish_at`
+   (verified). Migrations 001–004 and 007 are for upgrading an existing
+   database, not for a fresh recovery. (The incremental path —
+   001+002+003+004+seed — is tested in `tests/real-db.test.js` and stays
+   valid for that purpose.)
 4. Generate the restore SQL locally (no network, no wrangler needed):
    `node scripts/restore-backup.js fs-ai-backup-YYYY-MM-DD.json --sql restore.sql`
    This writes `restore.sql`: the stale-row DELETEs plus one upsert per
    exported row, in dependency order
    (`website_settings` → `business_divisions` → `categories` →
-   `ai_agents` → `articles` → `article_revisions` → `article_tags` →
-   `newsletter_subscribers` → `agent_activity_logs` →
-   `automation_jobs` → `revenue_records`).
+   `ai_agents` → `articles` → `article_revisions` →
+   `article_sources` → `article_tags` → `newsletter_subscribers` →
+   `agent_activity_logs` → `automation_jobs` → `revenue_records` →
+   `autonomy_settings` → `llm_usage` → `research_sources` →
+   `research_items` → `agent_tasks` → `agent_runs` → `agent_logs` →
+   `daily_reports` → `fact_checks` → `claim_checks` →
+   `article_corrections` → `seo_checks` → `backup_runs`).
 5. Apply `restore.sql` to the fresh D1 database — preferred:
    `wrangler d1 execute fs-ai-db --file=restore.sql`
    (run from the repo; uses the `database_id` in `config/wrangler.toml`).
@@ -117,7 +169,7 @@ If the D1 database `fs-ai-db` is lost or corrupted:
    revision is the only thing lost.
 6. Verify before anything else:
    - Per-table counts match the backup's `counts` exactly. Check with
-     `SELECT COUNT(*) FROM <table>;` for each of the 11 tables above,
+     `SELECT COUNT(*) FROM <table>;` for each of the 25 tables above,
      or locally: `node scripts/restore-backup.js <backup.json> <check.sqlite>`
      builds a fresh local database, restores, and prints the verified
      counts (refuses to overwrite an existing file unless `--force`).
@@ -138,7 +190,7 @@ If the D1 database `fs-ai-db` is lost or corrupted:
 - `owner_accounts`, `user_sessions`, `sessions` (login accounts and
   sessions — the owner account is re-created by the secure setup flow).
 - `security_events`, `approval_records`, `research_records`,
-  `agent_permissions`, `keywords`, `article_sources`,
+  `agent_permissions`, `keywords`,
   `monetization_accounts`, `affiliate_links`, `expense_records`,
   `website_analytics`, `digital_tools` — these tables are not in the
   export yet. If any of them start holding data the owner cares about,
@@ -153,6 +205,24 @@ rows, `website_analytics` 1 row ("Data unavailable"),
 `agent_permissions` 42 rows, `owner_accounts` the placeholder row. Any
 live rows added to them after seeding are LOST by a restore. The
 restore never deletes or alters a row in a table it does not back up.
+
+## Verification (local, 2026-11-19)
+
+`tests/backup-runs.test.js` (7 tests) covers the master-implementation
+changes against a real SQLite database:
+
+- `runBackupExport()` exports all **25 tables** and records a
+  `backup_runs` row (status `success`, tables/rows/bytes, finished_at);
+  a second run records a second row — history is kept, not overwritten.
+- Without migration 011 the export still succeeds but warns it was not
+  recorded (`backupRunId` null).
+- `POST /api/admin/backup/run` returns the summary (200) and records
+  the run; `GET /api/autonomy/status` reports `lastBackup: null` before
+  any run and the real run afterwards.
+- Round-trip: the live `GET /api/admin/backup` dump restores into a
+  fresh local database via `scripts/restore-backup.js` — 25 articles,
+  24 research sources, `auto_publishing` still `off`,
+  `publishing_mode` still `approved_only`.
 
 ## Verification (local, 2026-11-13)
 
@@ -193,9 +263,9 @@ schema+seed database with `scripts/restore-backup.js`, and checks:
 - Analytics in the export is whatever is in D1. Traffic is
   "Data unavailable" unless a real analytics source is connected —
   the export never invents visitors, clicks, or earnings.
-- Row caps: `agent_activity_logs` and `automation_jobs` keep only the
-  latest 500 rows each; every other backed-up table keeps 1000. Older
-  rows are gone from the backup and cannot be restored from it.
+- Row caps: `agent_activity_logs`, `automation_jobs` and `agent_logs`
+  keep only the latest 500 rows each; every other backed-up table keeps
+  1000. Older rows are gone from the backup and cannot be restored from it.
 - The backup is from ONE database lineage: rows are matched by `id`,
   so never apply a backup from a different database.
 - A backup that has never been restore-tested live is a hope, not a
