@@ -465,8 +465,15 @@
     var stopBtn = el('emergencyStopBtn');
     if (stopBtn) {
       stopBtn.addEventListener('click', function () {
+        // No confirmation dialog here, deliberately: this is a safety
+        // control and must work on the first tap in every browser.
+        // A dialog gate broke the toggle live on 2026-11-19 — in
+        // browsers that auto-dismiss dialogs the dialog returns false,
+        // the handler returned early, and NO request was ever sent
+        // (silently, with no error and no state change). The action
+        // is instantly reversible (one more click turns it back) and
+        // the button label states exactly what will happen.
         var next = !emergencyStopped;
-        if (!window.confirm(next ? 'Turn the Emergency Stop ON? All agent runs will be blocked (423).' : 'Turn the Emergency Stop OFF? Agent runs will be allowed again.')) return;
         api('/api/admin/emergency-stop', { method: 'POST', body: { stopped: next } }).then(function (r) {
           if (r.ok) { emergencyStopped = !!r.data.stopped; loadEmergencyStop(); setText('agentStatus', 'Emergency Stop is now ' + (emergencyStopped ? 'ON.' : 'OFF.')); }
           else setText('agentStatus', apiError(r));
