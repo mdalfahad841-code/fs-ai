@@ -5,7 +5,7 @@
  * Pro/Flash listed 'Free of charge' for input+output, no billing
  * account needed (official Gemini API pricing, Oct 2026). Rate limits
  * are per-project and shown in AI Studio, not published as fixed
- * numbers; the caps enforced here (Flash ~20 RPD, Flash-Lite ~500 RPD)
+ * numbers; the caps enforced here (Flash ~18 RPD, Flash-Lite ~450 RPD)
  * are third-party REPORTED figures, not promised limits. Needs a free
  * API key from Google AI Studio in the GEMINI_API_KEY secret — no key
  * exists today, so the provider reports 'not-configured' until the

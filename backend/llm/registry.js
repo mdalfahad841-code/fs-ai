@@ -54,7 +54,7 @@ export const PROVIDERS = [
     defaultModel: GEMINI_MODELS[0],
     needsKey: true,
     keyEnv: 'GEMINI_API_KEY',
-    note: 'Free tier, no billing account. Needs a free API key from Google AI Studio. Reported caps: Flash ~20 requests/day, Flash-Lite ~450/day (reported, not official). Free-tier data may be used by Google to improve its products.',
+    note: 'Free tier, no billing account. Needs a free API key from Google AI Studio. Reported caps: Flash ~18 requests/day, Flash-Lite ~450/day (reported, not official). Free-tier data may be used by Google to improve its products.',
   },
 ];
 
@@ -121,7 +121,7 @@ export async function providerStatus(env) {
         ? `Ready — ${todayUsage.neurons} of 10,000 free Neurons used today.`
         : provider.id === 'groq'
           ? `Ready — ${todayUsage.tokensIn + todayUsage.tokensOut} of 200,000 free tokens used today.`
-          : `Ready — ${todayUsage.requests} free-tier requests used today (reported caps: Flash ~20/day, Flash-Lite ~450/day).`;
+          : `Ready — ${todayUsage.requests} free-tier requests used today (reported caps: Flash ~18/day, Flash-Lite ~450/day).`;
     }
     statuses.push(entry);
   }
