@@ -303,6 +303,61 @@ describe('Emergency Stop display sync between the two sections (live 2026-11-19)
   });
 });
 
+describe('Emergency Stop message line sync (live 2026-11-19 follow-up)', () => {
+  // Live 2026-11-19, after the 9149e01 sync fix: toggling OFF from
+  // Autonomous Operations updated both sections' state lines and
+  // buttons without a reload, BUT the AI Agent Control section still
+  // showed the stale message "Emergency Stop is now ON." under its
+  // correct OFF state line. Cause: loadEmergencyStop() refreshed the
+  // state/button but never the message line — the message was only
+  // ever written by the click handler in the same section. The
+  // mirror defect exists in autonomy.js too (loadStatus() never
+  // writes autonomyControlStatus), so the reverse direction is
+  // covered here as well. These tests run BOTH shipped scripts in
+  // one sandbox with one shared fake server.
+  it('autonomy.js toggle OFF clears the stale dashboard message (live defect)', async () => {
+    const h = makeHarness({ scripts: [DASHBOARD_JS, AUTONOMY_JS], sessionVerified: true });
+    h.fireDomReady();
+    await flush();
+    // Dashboard toggle ON writes the ON message in both sections.
+    h.doc.getElementById('emergencyStopBtn').click();
+    await flush();
+    assert.equal(h.doc.getElementById('agentStatus').textContent, 'Emergency Stop is now ON.');
+    assert.equal(h.doc.getElementById('autonomyControlStatus').textContent, 'Emergency Stop is now ON.');
+    // Autonomy toggle OFF: the dashboard message must follow the state.
+    h.doc.getElementById('autonomyStopBtn').click();
+    await flush();
+    assert.equal(h.doc.getElementById('emergencyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('agentStatus').textContent, 'Emergency Stop is now OFF.');
+    assert.equal(h.doc.getElementById('autonomyControlStatus').textContent, 'Emergency Stop is now OFF.');
+  });
+
+  it('dashboard.js toggle clears the stale autonomy message, in both directions', async () => {
+    const h = makeHarness({ scripts: [DASHBOARD_JS, AUTONOMY_JS], sessionVerified: true });
+    h.fireDomReady();
+    await flush();
+    // Autonomy toggle ON writes the ON message in both sections.
+    h.doc.getElementById('autonomyStopBtn').click();
+    await flush();
+    assert.equal(h.doc.getElementById('agentStatus').textContent, 'Emergency Stop is now ON.');
+    assert.equal(h.doc.getElementById('autonomyControlStatus').textContent, 'Emergency Stop is now ON.');
+    // Dashboard toggle OFF: the autonomy message must follow the state.
+    h.doc.getElementById('emergencyStopBtn').click();
+    await flush();
+    assert.equal(h.doc.getElementById('emergencyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'OFF — agent runs allowed');
+    assert.equal(h.doc.getElementById('agentStatus').textContent, 'Emergency Stop is now OFF.');
+    assert.equal(h.doc.getElementById('autonomyControlStatus').textContent, 'Emergency Stop is now OFF.');
+    // And back ON from the dashboard: the autonomy message follows again.
+    h.doc.getElementById('emergencyStopBtn').click();
+    await flush();
+    assert.equal(h.doc.getElementById('autonomyStopState').textContent, 'ON — agent runs are blocked (423)');
+    assert.equal(h.doc.getElementById('agentStatus').textContent, 'Emergency Stop is now ON.');
+    assert.equal(h.doc.getElementById('autonomyControlStatus').textContent, 'Emergency Stop is now ON.');
+  });
+});
+
 describe('Emergency Stop toggle endpoint round-trip (local check)', () => {
   it('POST flips the stored value, agent runs answer 423 while ON, and OFF restores 200', async () => {
     const env = await makeOwnerEnv();

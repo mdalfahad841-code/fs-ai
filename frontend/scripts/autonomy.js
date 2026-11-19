@@ -255,7 +255,16 @@
   }
 
   /* --- Status + agents (GET /api/autonomy/status) --- */
-  function loadStatus() {
+  // syncMessage=true when re-fetching because the OTHER section toggled:
+  // the message line must match the server state too — the same
+  // stale-message defect as dashboard.js, mirror image (the live
+  // check only exercised the other direction: loadStatus() refreshed
+  // state/button/KPI but never autonomyControlStatus, so a toggle
+  // from AI Agent Control left the old message standing). The click
+  // handler below sets the message itself, and every other
+  // loadStatus() caller leaves the message to the action that
+  // triggered it, so only the event-driven refresh syncs it here.
+  function loadStatus(syncMessage) {
     setText('autonomyStatus', 'Loading autonomy status…');
     api('/api/autonomy/status').then(function (r) {
       var grid = el('autonomyKpiGrid');
@@ -274,6 +283,7 @@
       var stopBtn = el('autonomyStopBtn');
       if (stopState) stopState.textContent = emergencyStopped ? 'ON — agent runs are blocked (423)' : 'OFF — agent runs allowed';
       if (stopBtn) { stopBtn.disabled = false; stopBtn.textContent = emergencyStopped ? 'Turn Emergency Stop OFF' : 'Turn Emergency Stop ON'; }
+      if (syncMessage) setText('autonomyControlStatus', 'Emergency Stop is now ' + (emergencyStopped ? 'ON.' : 'OFF.'));
       setText('autonomyStatus', 'Status from the live API' + (d.source ? ' (source: ' + d.source + ')' : '') + '.');
       var level = d.autonomyLevel != null ? String(d.autonomyLevel) : '—';
       var target = d.targetLevel != null ? String(d.targetLevel) : '3';
@@ -932,8 +942,10 @@
     window.addEventListener('fsai:session-verified', startIfReady);
     // The AI Agent Control section (dashboard.js) toggles the same
     // E-Stop: re-fetch our display when it changes, instead of showing
-    // a stale ON/OFF until a reload (live 2026-11-19).
-    window.addEventListener('fsai:emergency-stop-changed', loadStatus);
+    // a stale ON/OFF until a reload (live 2026-11-19). The message line
+    // syncs too (loadStatus(true)) — the state line alone left the old
+    // "Emergency Stop is now OFF." message standing.
+    window.addEventListener('fsai:emergency-stop-changed', function () { loadStatus(true); });
     var poll = setInterval(function () {
       startIfReady();
       if (started) clearInterval(poll);

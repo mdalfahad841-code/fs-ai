@@ -380,7 +380,14 @@
   }
 
   /* --- 5. AI Agent Control --- */
-  function loadEmergencyStop() {
+  // syncMessage=true when re-fetching because the OTHER section toggled:
+  // the message line must match the server state too, or it keeps the
+  // stale "Emergency Stop is now ON." from the earlier toggle (live
+  // 2026-11-19: OFF toggled from Autonomous Operations left the AI
+  // Agent Control message saying ON). The click handler below sets the
+  // message itself, and the initial load leaves it to loadAgents'
+  // agent-count line, so only the event-driven refresh syncs it here.
+  function loadEmergencyStop(syncMessage) {
     api('/api/admin/emergency-stop').then(function (r) {
       var state = el('emergencyStopState');
       var btn = el('emergencyStopBtn');
@@ -393,6 +400,7 @@
       emergencyStopped = !!r.data.stopped;
       if (state) state.textContent = emergencyStopped ? 'ON — agent runs are blocked (423)' : 'OFF — agent runs allowed';
       if (btn) { btn.disabled = false; btn.textContent = emergencyStopped ? 'Turn Emergency Stop OFF' : 'Turn Emergency Stop ON'; }
+      if (syncMessage) setText('agentStatus', 'Emergency Stop is now ' + (emergencyStopped ? 'ON.' : 'OFF.'));
     }).catch(function () {
       var state = el('emergencyStopState');
       if (state) state.textContent = 'Unknown — could not reach the server.';
@@ -764,7 +772,9 @@
     window.addEventListener('fsai:session-verified', startIfVerified);
     // The Autonomous Operations section (autonomy.js) toggles the same
     // E-Stop: re-fetch our display when it changes, instead of showing
-    // a stale ON/OFF until a reload (live 2026-11-19).
-    window.addEventListener('fsai:emergency-stop-changed', loadEmergencyStop);
+    // a stale ON/OFF until a reload (live 2026-11-19). The message line
+    // syncs too (loadEmergencyStop(true)) — the state line alone left
+    // the old "Emergency Stop is now ON." message standing.
+    window.addEventListener('fsai:emergency-stop-changed', function () { loadEmergencyStop(true); });
   });
 })();
