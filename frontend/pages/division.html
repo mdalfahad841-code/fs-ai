@@ -32,6 +32,7 @@
 <main id="main">
   <section class="section">
     <div class="wrap">
+      <div id="divisionBanner"></div>
       <h1 id="divisionTitle">All divisions</h1>
       <p class="lead" id="divisionIntro">Eight divisions, one platform. Choose a division to see its articles.</p>
       <div class="grid" id="divisionGrid"></div>
@@ -87,6 +88,10 @@ document.addEventListener('DOMContentLoaded', function () {
        name present even where only the text is read. */
     title.textContent = div.name;
     title.innerHTML = window.FSAI.divisionIcon(div.id) + ' ' + window.FSAI.esc(div.name);
+    /* Round 2: the single-division view opens with the same flat-colour
+       illustration plate as the division cards. */
+    var banner = document.getElementById('divisionBanner');
+    if (banner) banner.innerHTML = window.FSAI.divisionPlate(div, null, 'div-plate--banner', 'xMaxYMid meet');
     intro.textContent = div.description;
     heading.textContent = 'Articles in ' + div.name;
     var list = window.FSAI.articlesByDivision(div.name);

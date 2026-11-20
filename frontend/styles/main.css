@@ -60,7 +60,7 @@ img, canvas { max-width: 100%; }
 /* Hero */
 .hero { position: relative; overflow: hidden; background: linear-gradient(180deg, #1b1917, var(--bg)); padding: 96px 0 80px; }
 .hero-inner { position: relative; display: grid; grid-template-columns: 1.2fr .8fr; gap: 40px; align-items: center; }
-.hero h1 { font-size: clamp(36px, 5vw, 56px); line-height: 1.08; letter-spacing: 0; margin: 0 0 16px; }
+.hero h1 { font-size: clamp(40px, 5.5vw, 64px); line-height: 1.08; letter-spacing: 0; margin: 0 0 16px; }
 .hero p.lead { font-size: 18px; line-height: 1.6; color: var(--text-secondary); max-width: 560px; }
 .search-box { display: flex; gap: 8px; margin: 24px 0 12px; max-width: 560px; }
 .search-box input { flex: 1; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 16px; }
@@ -70,7 +70,7 @@ img, canvas { max-width: 100%; }
 .hero-stats strong { color: var(--text-secondary); font-weight: 600; }
 .hero-preview-label { font-size: 12px; color: var(--text-muted); margin: 0 0 12px; }
 .hero-preview { padding: 24px; }
-.hero-preview h3 { font-size: 22px; }
+.hero-preview h3 { font-size: 26px; }
 .hero-preview-meta { color: var(--text-muted); font-size: 14px; }
 .article-no { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
 
@@ -90,10 +90,10 @@ img, canvas { max-width: 100%; }
 .section { padding: 56px 0; }
 #search { padding: 24px 0 8px; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
-.section-head h2 { font-size: 28px; margin: 0; }
+.section-head h2 { font-size: 32px; margin: 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
-.card h3 { margin: 8px 0 8px; font-size: 19px; line-height: 1.35; }
+.card h3 { margin: 8px 0 8px; font-size: 20px; line-height: 1.35; }
 .card h3 a { color: var(--text); }
 .card p { color: var(--text-secondary); margin: 0 0 12px; }
 .card-tag { font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--blue); }
@@ -146,7 +146,8 @@ ul.clean li { padding: 12px 0; border-bottom: 1px solid var(--border); }
 .newsletter .unsubscribe-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .note-box { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--amber); border-radius: 10px; padding: 16px; }
 .article-body { max-width: 760px; }
-.article-body h1 { font-size: 36px; line-height: 1.15; }
+.article-body h1 { font-size: 40px; line-height: 1.15; }
+#divisionTitle { font-size: 40px; line-height: 1.15; }
 #divisionTitle svg { width: 32px; height: 32px; vertical-align: -6px; color: var(--text-secondary); }
 .article-body p { font-size: 18px; color: var(--text-secondary); }
 .article-meta { color: var(--muted); margin-bottom: 20px; }
@@ -159,6 +160,24 @@ ul.clean li { padding: 12px 0; border-bottom: 1px solid var(--border); }
 .table-scroll { overflow-x: auto; }
 .table-scroll table { min-width: 640px; }
 #loginCard { max-width: 480px; margin: 0 auto; }
+
+/* Round 2 — illustration plates (unslop round 2, 2026-11-20). A division
+   card opens with a flat-colour plate: the division's own colour as a
+   solid band, a large white hand-drawn line scene on it, and the mono
+   field-guide number on a dark chip. Flat colour only — no gradients, no
+   glows, no shadows, no blur. The plate is clipped by the card's own
+   radius, so it reads as a book-cover band, not a floating banner. */
+.div-plate { position: relative; height: 120px; overflow: hidden; color: #fff; flex: none; }
+.div-plate-art { position: absolute; inset: 0; width: 100%; height: 100%; }
+.div-plate-no { position: absolute; top: 12px; left: 16px; font-family: var(--font-mono); font-size: 13px; letter-spacing: .08em; color: #fff; background: rgba(22, 21, 19, .32); padding: 4px 8px; border-radius: 6px; }
+.division-card { padding: 0; overflow: hidden; }
+.division-card .div-body { padding: 24px; }
+.division-card h3 { font-size: 22px; margin: 0 0 8px; }
+.hero-preview { padding: 0; overflow: hidden; }
+.hero-preview .div-plate { height: 180px; }
+.hero-preview .div-plate-no { font-size: 16px; top: 16px; left: 20px; }
+.hero-preview-body { padding: 24px; }
+.div-plate--banner { border-radius: var(--radius); margin-bottom: 24px; height: 160px; }
 
 /* Footer */
 .site-footer { border-top: 1px solid var(--border); background: #121110; padding: 40px 0 24px; margin-top: 40px; }

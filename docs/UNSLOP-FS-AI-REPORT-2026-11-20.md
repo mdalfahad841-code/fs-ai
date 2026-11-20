@@ -272,4 +272,141 @@ after, not site bugs.
 
 ---
 
+## Round 2 — 2026-11-20 (same day, after the user saw it on his phone)
+
+**What the user said.** He opened the redesigned site on his phone (All
+divisions page) and said: *"Eta to beshi simple hoi gece kono design nei"*
+— too simple, no design. The round-1 direction was right but its Moments
+and Signature were too faint: the division cards showed only an 8px colour
+dot, the hero preview was a small plain card, and the type hierarchy was
+too flat. This round is a fix, not a new feature: **enrich, do NOT revert.**
+Every slop sign from `references/signs.md` is still absent (no glows, no
+gradients-as-chrome, no emoji, no particles, no glass/neu/clay/brutalist/
+chrome/liquid-glass/skeuo, no shouting copy). Work local only — nothing
+deployed, nothing pushed, no D1 data, no login/session logic, no backend.
+
+**A finding from his screenshot.** It shows the DESKTOP bento layout on
+his phone (3–4 columns, full nav, no hamburger): his Chrome renders a
+~980px viewport, likely "Desktop site" mode. Reproduced with a 980px
+viewport screenshot; the plates were therefore verified at 980px as well
+as 390px mobile and 1280px desktop.
+
+### Direction addendum
+
+The field-guide world, character and "No. NN" signature are unchanged.
+What changes is the weight of the Moments and the Signature: each
+division now has a real visual identity — a bold flat-colour plate with
+a hand-drawn white line scene of the division's object — and the hero's
+latest-guide preview is a genuinely rich moment, a tall cover plate
+instead of a small plain card. The "No. NN" index is made MORE present,
+not less: a mono chip on a dark chip on every plate, plus a big "No. NN"
+on the hero cover.
+
+### Per-pass changes
+
+- **Colour / identity.** The 8 divisions now each have a distinct flat
+  colour (they previously shared blue×3, green×2, amber×2): automotive
+  #2878FF, ai-technology #19C37D, gadgets-electronics #F5A623,
+  finance-money #12A594 teal, travel-lifestyle #E85D3D coral,
+  digital-tools #9D6BC4 muted plum, health-wellness #D64570 rose,
+  education-learning #A9805B sepia. Colour is visible at a glance as a
+  solid plate band, not an 8px dot (the dot is removed from the markup;
+  its CSS rules stay in `main.css` — one existing test pins `.div-icon`
+  background).
+- **Icon / illustration.** Each division card now opens with a flat
+  plate — solid division colour + a large hand-drawn white line SVG
+  scene of the division's object, coded in `frontend/scripts/app.js`
+  (`DIVISION_SCENES`, `divisionArt(id, aspect)`,
+  `divisionPlate(d, no, cls, aspect)`, `divisionNo(id)`): car on a road
+  with sun, CPU with squares, phone with signal arcs, banknote with
+  coins, plane with a dashed route, sliders with knobs, heart with a
+  pulse line, graduation cap with books. Original inline SVG, no stock,
+  no gradients-as-glow. Art is anchored right (`xMaxYMid slice`) so the
+  icon is never cropped on narrow plates; the scene sits at x 96–150 so
+  it survives the crop; the banner uses `xMaxYMid meet`.
+- **Components.** The single-division page gets the same plate as a
+  banner (`#divisionBanner` container in
+  `frontend/pages/division.html`, filled via
+  `divisionPlate(div, null, 'div-plate--banner', 'xMaxYMid meet')`).
+  The hero's latest-guide preview now has a tall cover plate (180px
+  desktop / 148px mobile) with the article's division scene large and a
+  big "No. NN" (16px), title 26px; body below unchanged in copy. The
+  small `.div-icon` tile is removed from division-card markup.
+- **Type.** Stronger size/weight contrast, still 400/500/600 only,
+  serif display kept: hero h1 clamp(40px, 5.5vw, 64px), section h2 32px
+  (26px mobile), card h3 20px, division-card h3 22px, article h1 and
+  `#divisionTitle` 40px.
+- **Spacing.** Mobile plate heights in
+  `frontend/styles/responsive.css`: 104px cards, 148px hero cover,
+  120px banner.
+- **Copy, motion, visuals.** Unchanged. No copy changed anywhere; no
+  motion change; no generated or stock image — every illustration is
+  coded inline SVG.
+
+### Test changes
+
+- Baseline before this round: **779 pass / 0 fail / 178 suites**.
+- First run after the changes: **782 pass / 1 fail** —
+  `tests/division-not-found.test.js:190` (`?division=automotive…`):
+  `title.insertAdjacentHTML is not a function` — the test's fake DOM
+  has no `insertAdjacentHTML`/`parentNode`. Fixed by using the
+  `#divisionBanner` container + `innerHTML` (real-browser-safe and
+  fake-DOM-safe), NOT by weakening the test; the test harness gained
+  the `divisionBanner` stub + 3 new assertions in the existing
+  automotive test (banner has `div-plate--banner`, `No. 01`,
+  `background:#2878FF`).
+- Final run: **783 pass / 0 fail / 179 suites** (`npm test`, exit 0).
+- `tests/ui-styles.test.js` gained a "round 2 — illustration plates"
+  describe block with 4 new `it()` blocks (8 distinct colours; plate
+  markup + index number; hero cover 180px; plates flat-colour only —
+  no gradient/shadow/blur/text-shadow), documented in the test header;
+  count 20 → 24 `it()` blocks. No existing check was changed or
+  weakened.
+
+### Verification
+
+Before shots in `/tmp/unslop-fsai/round2/before/` (7 shots), after shots
+in `/tmp/unslop-fsai/round2/after/` (10 shots + 2 cropped tops),
+rendered locally on `http://localhost:8812/` (the changed source;
+server confirmed stopped afterwards). The shoot script scrolls the page
+first, then force-adds `.visible` to all `.reveal` elements (screenshot
+aid only — the real reveal uses IntersectionObserver threshold 0.12,
+which does not fire for below-fold cards in a headless full-page shot).
+Console errors in all runs are only the known environmental ones (GA
+`ERR_TUNNEL_CONNECTION_FAILED`, favicon 404).
+
+- **Divisions at 980px (his viewport).** All 8 plates bold, icons
+  whole, scenes visible, No. chips legible.
+- **Divisions desktop 1280 + mobile 390.** Single-column full-width
+  plates on mobile; bento grid on desktop.
+- **Home desktop + light + mobile.** Hero cover works, 64px serif
+  headline. Light theme plates pop on warm paper in both themes.
+- **Division (Automotive) banner.** Wide blue band, scene right,
+  No. chip left.
+- **Article 1.** 40px serif title, meta "No. 01 · Published 11 Nov
+  2026", body word-for-word intact.
+- **Dashboard desktop + mobile.** Login card centred, all controls
+  present.
+
+### Files changed (round 2)
+
+`frontend/pages/division.html`, `frontend/scripts/app.js`,
+`frontend/styles/main.css`, `frontend/styles/responsive.css`,
+`tests/division-not-found.test.js`, `tests/ui-styles.test.js`. Nothing
+else. Local only — not deployed, not pushed.
+
+### Deliberately unchanged (round 2)
+
+- Every slop sign stays absent; the field-guide direction, the "No. NN"
+  signature, flat cards, serif titles and sentence case are kept.
+- **All content and behaviour** — every feature, section, link,
+  article, tool and dashboard control exactly as-is. No copy changed.
+- **Login/session logic, backend, D1 data, publishing flags** —
+  untouched by rule.
+- **The `.div-icon` / `.div-dot` CSS rules** stay in `main.css`
+  (one existing test pins `.div-icon` background); only the markup
+  use was removed.
+
+---
+
 Unslop by Damir Sokolovsky ([@heydamir](https://x.com/heydamir)), CC BY 4.0.

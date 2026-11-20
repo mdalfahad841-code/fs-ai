@@ -10,6 +10,11 @@
 // rewritten on 2026-11-20 to guard the quiet layer instead — same number of
 // checks, same exact-value style, opposite values. See
 // docs/UNSLOP-FS-AI-REPORT-2026-11-20.md.
+// Round 2 (2026-11-20): the owner found round 1 too plain on his phone, so
+// the direction's Moments were strengthened — flat-colour illustration
+// plates on division cards and the hero cover, 8 distinct division colours,
+// stronger type contrast. Four new checks guard the plates below, so the
+// count is now 24 it() blocks (was 20); no existing check was changed.
 // Run: node --test tests/ui-styles.test.js (or: npm test)
 'use strict';
 
@@ -193,6 +198,40 @@ describe('themes and phone safety', () => {
   it('no fixed width above 320px anywhere in the sheet', () => {
     const widths = [...CSS.matchAll(/(?<!min-)width:\s*(\d+)px/g)].map((m) => Number(m[1]));
     for (const w of widths) assert.ok(w <= 320, 'fixed width ' + w + 'px exceeds a 320px viewport');
+  });
+});
+
+describe('round 2 — illustration plates (2026-11-20)', () => {
+  const APP = fs.readFileSync(path.join(FRONTEND, 'scripts', 'app.js'), 'utf8');
+
+  it('all 8 divisions have distinct flat colours', () => {
+    const colors = [...APP.matchAll(/color: '(#[0-9A-Fa-f]{6})'/g)].map((m) => m[1].toLowerCase());
+    assert.equal(colors.length, 8, 'expected 8 division colours, found ' + colors.length);
+    assert.equal(new Set(colors).size, 8, 'division colours must be distinct, found: ' + colors.join(', '));
+  });
+
+  it('division cards open with a flat-colour plate carrying the scene and the index number', () => {
+    assert.match(APP, /divisionPlate\(d\)/);
+    assert.match(APP, /class="div-plate/);
+    assert.match(APP, /div-plate-no/);
+    assert.match(APP, /divisionNo\(d\.id\)/);
+    assert.doesNotMatch(APP, /div-icon/, 'the tiny icon tile must stay replaced by the plate');
+    assert.doesNotMatch(APP, /div-dot/, 'the 8px dot must stay replaced by the plate');
+  });
+
+  it('hero preview carries a tall cover plate with the latest guide number', () => {
+    assert.match(APP, /divisionPlate\(div, articleNo\(latest\.id\)\)/);
+    assert.match(APP, /hero-preview-body/);
+    assert.match(MAIN, /\.hero-preview \.div-plate\s*\{[^}]*height:\s*180px/);
+  });
+
+  it('plates are flat colour only — no gradient, glow, shadow or blur in the plate rules', () => {
+    const plate = (MAIN.match(/\.div-plate[^{]*\{[^}]*\}/g) || []).join('\n');
+    assert.ok(plate.length > 0, 'expected .div-plate rules in main.css');
+    assert.doesNotMatch(plate, /gradient/);
+    assert.doesNotMatch(plate, /box-shadow/);
+    assert.doesNotMatch(plate, /blur/);
+    assert.doesNotMatch(plate, /text-shadow/);
   });
 });
 

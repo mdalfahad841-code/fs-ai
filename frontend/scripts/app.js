@@ -30,16 +30,57 @@
   function articleNo(id) {
     return 'No. ' + String(id).padStart(2, '0');
   }
+  /* Round 2 (2026-11-20): coded illustration plates. Each division gets a
+     flat-colour plate carrying a large hand-drawn line scene of its own
+     object — the division icon, drawn big, plus a small scene (road, coins,
+     pulse line) in the same white line. No gradients, no glows, no stock,
+     no generated images: every shape is coded here, in the division's own
+     flat colour. The scene sits left, the big icon right. */
+  var DIVISION_SCENES = {
+    car: '<circle cx="112" cy="20" r="7"/><line x1="100" y1="78" x2="220" y2="78"/><line x1="104" y1="62" x2="116" y2="62"/><line x1="122" y1="68" x2="134" y2="68"/>',
+    cpu: '<rect x="100" y="18" width="10" height="10"/><rect x="118" y="18" width="10" height="10"/><rect x="100" y="36" width="10" height="10"/><line x1="96" y1="66" x2="140" y2="66"/>',
+    smartphone: '<path d="M116 58 a12 12 0 0 1 24 0"/><path d="M122 58 a6 6 0 0 1 12 0"/><circle cx="128" cy="58" r="2.5" fill="currentColor" stroke="none"/>',
+    banknote: '<circle cx="116" cy="54" r="12"/><circle cx="116" cy="54" r="5"/><circle cx="138" cy="62" r="8"/>',
+    send: '<path d="M96 74 C120 50 140 78 158 46" stroke-dasharray="5 5"/><circle cx="96" cy="74" r="3" fill="currentColor" stroke="none"/>',
+    sliders: '<line x1="96" y1="26" x2="140" y2="26"/><line x1="96" y1="48" x2="140" y2="48"/><line x1="96" y1="70" x2="140" y2="70"/><circle cx="112" cy="26" r="4.5" fill="currentColor" stroke="none"/><circle cx="128" cy="48" r="4.5" fill="currentColor" stroke="none"/><circle cx="106" cy="70" r="4.5" fill="currentColor" stroke="none"/>',
+    heart: '<polyline points="96,54 112,54 120,38 130,66 138,54 150,54"/><circle cx="100" cy="24" r="3"/>',
+    graduation: '<rect x="96" y="66" width="48" height="10" rx="2"/><rect x="102" y="54" width="36" height="10" rx="2"/><line x1="96" y1="40" x2="134" y2="40"/>'
+  };
+  /* Division index number, in DIVISIONS order: Automotive is No. 01. */
+  function divisionNo(id) {
+    var i = DIVISIONS.findIndex(function (d) { return d.id === id; });
+    return 'No. ' + String(i + 1).padStart(2, '0');
+  }
+  function divisionArt(id, aspect) {
+    var d = DIVISIONS.find(function (x) { return x.id === id; });
+    if (!d) return '';
+    /* Art is anchored right (xMax): on narrow plates the icon — the
+       identity — is never cropped, and the scene beside it survives; the
+       left of the plate stays flat colour. The banner passes 'meet' so its
+       very wide, short band shows the whole scene instead of slicing it. */
+    return '<svg class="div-plate-art" viewBox="0 0 240 96" preserveAspectRatio="' + (aspect || 'xMaxYMid slice') + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<g opacity="0.55">' + (DIVISION_SCENES[d.icon] || '') + '</g>' +
+      '<g transform="translate(156,18) scale(2.5)">' + (ICON_PATHS[d.icon] || '') + '</g></svg>';
+  }
+  /* One flat-colour plate: the division colour as a solid band, the white
+     line scene on it, and the field-guide index number on a dark chip. */
+  function divisionPlate(d, no, cls, aspect) {
+    return '<div class="div-plate' + (cls ? ' ' + cls : '') + '" style="background:' + d.color + '">' + divisionArt(d.id, aspect) +
+      '<span class="div-plate-no">' + esc(no || divisionNo(d.id)) + '</span></div>';
+  }
 
+  /* Round 2 (2026-11-20): each division now has its OWN flat colour, so a
+     card is recognisable at a glance — blue/green/amber were shared by two
+     or three divisions before. Colours are flat fills only, never gradients. */
   var DIVISIONS = [
     { id: 'automotive', name: 'Automotive', short: 'Automotive', tagline: 'Cars, bikes and the road ahead.', description: 'Practical guides to buying, maintaining and understanding cars and motorcycles — from EV charging to warning lights.', icon: 'car', color: '#2878FF', articleCount: 12 },
     { id: 'ai-technology', name: 'AI & Technology', short: 'AI & Technology', tagline: 'AI explained in plain English.', description: 'Beginner-friendly explainers and honest guides to free AI tools that actually save time.', icon: 'cpu', color: '#19C37D', articleCount: 2 },
     { id: 'gadgets-electronics', name: 'Gadgets & Electronics', short: 'Gadgets & Electronics', tagline: 'Buy the right device, once.', description: 'Buying guides for phones, laptops and tablets — what matters, what does not, and what to pay.', icon: 'smartphone', color: '#F5A623', articleCount: 2 },
-    { id: 'finance-money', name: 'Finance & Money', short: 'Finance & Money', tagline: 'Money, explained simply.', description: 'Budgeting, saving and borrowing explained in plain language — no jargon, no promises.', icon: 'banknote', color: '#19C37D', articleCount: 3 },
-    { id: 'travel-lifestyle', name: 'Travel & Lifestyle', short: 'Travel & Lifestyle', tagline: 'Travel well, spend wisely.', description: 'Budget trips, road-trip checklists and planning guides for travel that fits your pocket.', icon: 'send', color: '#2878FF', articleCount: 2 },
-    { id: 'digital-tools', name: 'Digital Tools', short: 'Digital Tools', tagline: 'Free tools, ready to use.', description: 'Converters and calculators you can use today — no sign-up, no download, no cost.', icon: 'sliders', color: '#8995A7', articleCount: 1 },
-    { id: 'health-wellness', name: 'Health & Wellness', short: 'Health & Wellness', tagline: 'Small steps, every day.', description: 'Beginner fitness and wellbeing guides — walking, home workouts and habits that stick.', icon: 'heart', color: '#F5A623', articleCount: 2 },
-    { id: 'education-learning', name: 'Education & Learning', short: 'Education & Learning', tagline: 'Learn a new skill in 30 days.', description: 'Practical learning guides for digital skills — structured, realistic and free to start.', icon: 'graduation', color: '#2878FF', articleCount: 1 }
+    { id: 'finance-money', name: 'Finance & Money', short: 'Finance & Money', tagline: 'Money, explained simply.', description: 'Budgeting, saving and borrowing explained in plain language — no jargon, no promises.', icon: 'banknote', color: '#12A594', articleCount: 3 },
+    { id: 'travel-lifestyle', name: 'Travel & Lifestyle', short: 'Travel & Lifestyle', tagline: 'Travel well, spend wisely.', description: 'Budget trips, road-trip checklists and planning guides for travel that fits your pocket.', icon: 'send', color: '#E85D3D', articleCount: 2 },
+    { id: 'digital-tools', name: 'Digital Tools', short: 'Digital Tools', tagline: 'Free tools, ready to use.', description: 'Converters and calculators you can use today — no sign-up, no download, no cost.', icon: 'sliders', color: '#9D6BC4', articleCount: 1 },
+    { id: 'health-wellness', name: 'Health & Wellness', short: 'Health & Wellness', tagline: 'Small steps, every day.', description: 'Beginner fitness and wellbeing guides — walking, home workouts and habits that stick.', icon: 'heart', color: '#D64570', articleCount: 2 },
+    { id: 'education-learning', name: 'Education & Learning', short: 'Education & Learning', tagline: 'Learn a new skill in 30 days.', description: 'Practical learning guides for digital skills — structured, realistic and free to start.', icon: 'graduation', color: '#A9805B', articleCount: 1 }
   ];
 
   var ARTICLES = [
@@ -233,11 +274,11 @@
   function renderDivisions(root) {
     if (!root) return;
     root.innerHTML = DIVISIONS.map(function (d) {
-      return '<article class="card division-card reveal">' +
-        '<div class="div-icon" aria-hidden="true">' + svgIcon(d.icon) + '</div><h3><span class="div-dot" style="background:' + d.color + '"></span>' + esc(d.name) + '</h3>' +
+      return '<article class="card division-card reveal">' + divisionPlate(d) +
+        '<div class="div-body"><h3>' + esc(d.name) + '</h3>' +
         '<p class="div-tagline">' + esc(d.tagline) + '</p><p>' + esc(d.description) + '</p>' +
         '<p class="div-count">' + d.articleCount + ' article' + (d.articleCount === 1 ? '' : 's') + '</p>' +
-        '<a class="btn btn-outline" href="pages/division.html?division=' + d.id + '">Explore ' + esc(d.short) + ' →</a></article>';
+        '<a class="btn btn-outline" href="pages/division.html?division=' + d.id + '">Explore ' + esc(d.short) + ' →</a></div></article>';
     }).join('');
     fixArticleLinks(root);
   }
@@ -258,17 +299,21 @@
     fixArticleLinks(root);
   }
 
-  /* Hero moment (unslop run 2026-11-20): the latest guide rendered as a real
-     card, instead of the glowing ring. Same data as the article grid. */
+  /* Hero moment (unslop run 2026-11-20, cover plate added in round 2): the
+     latest guide rendered as a real card with a tall flat-colour cover —
+     the article's division scene, large, with its "No. NN" on the plate. */
   function renderHeroPreview(root) {
     if (!root) return;
     var latest = ARTICLES.slice().sort(function (a, b) { return b.date.localeCompare(a.date); })[0];
     if (!latest) return;
-    root.innerHTML = '<article class="card hero-preview"><p class="card-tag">' + esc(latest.division) + ' · ' + esc(latest.category) + '</p>' +
+    var div = DIVISIONS.find(function (x) { return x.name === latest.division; });
+    var plate = div ? divisionPlate(div, articleNo(latest.id)) : '';
+    root.innerHTML = '<article class="card hero-preview">' + plate +
+      '<div class="hero-preview-body"><p class="card-tag">' + esc(latest.division) + ' · ' + esc(latest.category) + '</p>' +
       '<h3><a href="pages/article?id=' + latest.id + '">' + esc(latest.title) + '</a></h3>' +
       '<p>' + esc(latest.excerpt) + '</p>' +
-      '<p class="hero-preview-meta"><span class="article-no">' + articleNo(latest.id) + '</span> · <time datetime="' + latest.date + '">' + formatDate(latest.date) + '</time></p>' +
-      '<a class="read-more" href="pages/article?id=' + latest.id + '">Read article →</a></article>';
+      '<p class="hero-preview-meta"><time datetime="' + latest.date + '">' + formatDate(latest.date) + '</time></p>' +
+      '<a class="read-more" href="pages/article?id=' + latest.id + '">Read article →</a></div></article>';
   }
 
   window.FSAI.renderHeader = renderHeader;
@@ -278,6 +323,8 @@
   window.FSAI.renderTools = renderTools;
   window.FSAI.articleCard = articleCard;
   window.FSAI.articleNo = articleNo;
+  window.FSAI.divisionNo = divisionNo;
+  window.FSAI.divisionPlate = divisionPlate;
   window.FSAI.divisionIcon = function (id) {
     var d = DIVISIONS.find(function (x) { return x.id === id; });
     return d ? svgIcon(d.icon) : '';

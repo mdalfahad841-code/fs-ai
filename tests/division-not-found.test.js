@@ -138,6 +138,7 @@ function runDivisionPage(search) {
     divisionArticlesHeading: makeEl('divisionArticlesHeading'),
     divisionGrid: makeEl('divisionGrid'),
     divisionBackLinks: makeEl('divisionBackLinks'),
+    divisionBanner: makeEl('divisionBanner'),
   };
   // Seed the static text the shipped HTML already carries, as a real
   // browser would: the page script only overwrites these, never sets
@@ -196,6 +197,10 @@ describe('frontend-data path: shipped division.html rendered', () => {
     assert.match(els.divisionArticles.innerHTML, /article\?id=1/, 'clean article link — no .html, per the 2026-11-20 indexing fix');
     assert.equal(els.divisionGrid.style.display, 'none', 'full grid stays hidden for a single division');
     assert.equal(els.divisionArticlesHeading.style.display, undefined, 'articles heading must not be hidden');
+    /* Round 2: the single-division view opens with the flat-colour plate. */
+    assert.match(els.divisionBanner.innerHTML, /div-plate--banner/);
+    assert.match(els.divisionBanner.innerHTML, /No\. 01/);
+    assert.match(els.divisionBanner.innerHTML, /background:#2878FF/);
   });
 
   it('no ?division= still renders the all-divisions view with latest articles', () => {

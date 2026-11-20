@@ -28,7 +28,12 @@
   .search-box { flex-direction: column; }
   .search-box .btn { width: 100%; }
   .grid { grid-template-columns: 1fr; }
-  .section-head h2 { font-size: 24px; }
+  .section-head h2 { font-size: 26px; }
+  /* Round 2 — plates stay visible on phones, shorter so the card body
+     still shows above the fold. */
+  .div-plate { height: 104px; }
+  .hero-preview .div-plate { height: 148px; }
+  .div-plate--banner { height: 120px; }
   /* KPI cards go single-column on phones: at 320px a two-column grid gives
      each card only ~116px, and the live "Data unavailable" traffic value
      (30px, "unavailable" ≈ 175px unbreakable) forced both columns to
