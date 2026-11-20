@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS articles (
     status          TEXT NOT NULL DEFAULT 'draft'
                     CHECK (status IN ('draft', 'pending_approval', 'approved', 'published', 'archived')),
     fact_checked    INTEGER NOT NULL DEFAULT 0 CHECK (fact_checked IN (0, 1)),
+    is_protected    INTEGER NOT NULL DEFAULT 0 CHECK (is_protected IN (0, 1)),  -- migration 013: 1 = never auto-modified (test articles #26/#27)
     seo_title       TEXT,
     seo_description TEXT,
     featured_image  TEXT,
@@ -491,3 +492,32 @@ CREATE TABLE IF NOT EXISTS article_revisions (
     revised_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_article_revisions_article ON article_revisions(article_id);
+
+-- ---------------------------------------------------------------------------
+-- 26. rss_fetch_audit — one row per RSS fetch execution per feed
+--     (migration 014). The audit log for the 19 Nov double-fetch anomaly
+--     (Phase 1 report section 4 / section 22 item 12): started/ended
+--     times, per-run execution_id, trigger_type, and the true counts
+--     recorded at the insert/dedupe point (items_discovered = new items
+--     that passed dedupe, items_inserted = rows actually written,
+--     duplicates_skipped = skipped as duplicates). UNIQUE
+--     (execution_id, source_id) so one execution can never write two
+--     rows for the same feed. No backfill: pre-014 fetches have no rows.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS rss_fetch_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL REFERENCES research_sources(id),
+    feed_url TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    execution_id TEXT NOT NULL,
+    trigger_type TEXT NOT NULL CHECK (trigger_type IN ('manual', 'scheduled', 'daily-workflow')),
+    items_discovered INTEGER NOT NULL DEFAULT 0,
+    items_inserted INTEGER NOT NULL DEFAULT 0,
+    duplicates_skipped INTEGER NOT NULL DEFAULT 0,
+    errors TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'partial', 'skipped-overlap')),
+    UNIQUE (execution_id, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rss_fetch_audit_source_started ON rss_fetch_audit(source_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_rss_fetch_audit_execution ON rss_fetch_audit(execution_id);

@@ -18,7 +18,7 @@ export function metaForArticle(article) {
     titleFull: title,
     description,
     keywords: article.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w, i, a) => w.length > 3 && a.indexOf(w) === i).slice(0, 8).join(', '),
-    canonical: `${SITE_URL}/articles/${article.slug}`,
+    canonical: `${SITE_URL}/pages/article?id=${article.id}`,
     robots: 'index, follow',
   };
 }
@@ -45,7 +45,7 @@ export function structuredDataForArticle(article) {
     author: { '@type': 'Organization', name: 'FS AI', url: SITE_URL },
     publisher: { '@type': 'Organization', name: 'FS AI', url: SITE_URL },
     datePublished: article.publishedAt || '',
-    mainEntityOfPage: `${SITE_URL}/articles/${article.slug}`,
+    mainEntityOfPage: `${SITE_URL}/pages/article?id=${article.id}`,
     articleSection: article.divisionName || article.division,
   };
 }
@@ -64,14 +64,14 @@ export function structuredDataForSite() {
 export function sitemapEntries() {
   const entries = [
     { loc: `${SITE_URL}/`, changefreq: 'weekly', priority: 1.0 },
-    ...DIVISIONS.map((d) => ({ loc: `${SITE_URL}/divisions/${d.slug}`, changefreq: 'weekly', priority: 0.8 })),
+    ...DIVISIONS.map((d) => ({ loc: `${SITE_URL}/pages/division?division=${d.slug}`, changefreq: 'weekly', priority: 0.8 })),
     ...ARTICLES.filter((a) => a.status === 'published').map((a) => ({
-      loc: `${SITE_URL}/articles/${a.slug}`,
+      loc: `${SITE_URL}/pages/article?id=${a.id}`,
       lastmod: a.publishedAt || '',
       changefreq: 'monthly',
       priority: 0.7,
     })),
-    { loc: `${SITE_URL}/tools`, changefreq: 'monthly', priority: 0.8 },
+    { loc: `${SITE_URL}/pages/tools`, changefreq: 'monthly', priority: 0.8 },
   ];
   return entries;
 }

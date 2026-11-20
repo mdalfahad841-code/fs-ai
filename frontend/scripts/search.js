@@ -48,7 +48,7 @@
       }
       results.innerHTML = hits.map(function (a) {
         return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(a.division) + ' · ' + window.FSAI.esc(a.category) + '</div>' +
-          '<h3><a href="pages/article.html?id=' + a.id + '">' + window.FSAI.esc(a.title) + '</a></h3>' +
+          '<h3><a href="pages/article?id=' + a.id + '">' + window.FSAI.esc(a.title) + '</a></h3>' +
           '<p>' + window.FSAI.esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + window.FSAI.formatDate(a.date) + '</time></article>';
       }).join('');
       if (window.location.pathname.indexOf('/pages/') !== -1) {

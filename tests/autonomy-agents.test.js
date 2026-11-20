@@ -316,7 +316,7 @@ describe('social-media agent', () => {
       { agent: 'social-media', kind: 'social-pack', payload: { article_id: 1 } }, env);
     assert.equal(result.outcome, 'done');
     assert.equal(result.articleId, 1);
-    assert.ok(result.url.includes('/pages/article.html?id=1'), 'pack links the real article URL');
+    assert.ok(result.url.includes('/pages/article?id=1'), 'pack links the real article URL');
     assert.ok(result.pinterest.caption.includes(result.title), 'Pinterest caption uses the real title');
     assert.ok(Array.isArray(result.pinterest.hashtags) && result.pinterest.hashtags.length > 0);
     assert.ok(result.youtubeCommunity.text.includes(result.title));

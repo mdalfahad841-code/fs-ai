@@ -15,14 +15,21 @@
  *   POST /api/autonomy/reports/generate   { kind: daily|weekly } (snapshot only)
  *   GET  /api/autonomy/accounts
  *   POST /api/autonomy/run-daily          { force?: boolean }
+ *   POST /api/autonomy/run-weekly         { force?: boolean } (weekly workflow only — never runs the daily workflow)
  *   POST /api/autonomy/scaffolds/:runId/convert
  *   GET  /api/autonomy/sources
  *   POST /api/autonomy/sources            { division, name, url } (feed is validated live first)
  *   POST /api/autonomy/sources/:id/fetch
  *   POST /api/autonomy/sources/:id/toggle { is_active: 0|1 }
+ *   GET  /api/autonomy/rss-audit?source_id=&limit=   (fetch audit log, migration 014)
  *   GET  /api/autonomy/fact-checks?article_id=
  *   GET  /api/autonomy/seo?article_id=        (latest SEO check + 11 checks)
  *   GET  /api/autonomy/gate?article_id=
+ *   GET  /api/autonomy/corrections?article_id=   (Fix 4: unresolved corrections + failure reasons)
+ *   POST /api/autonomy/corrections/:id/resolve   (Fix 4: owner resolution of one failed correction)
+ *   POST /api/autonomy/articles/:id/recheck      (Fix 5: explicit fact-check re-run, reuses the task)
+ *   POST /api/autonomy/articles/:id/seo-check    (Fix 6: per-article SEO, check-only — never modifies)
+ *   POST /api/autonomy/articles/:id/seo-optimize (Fix 6: per-article SEO repair — unprotected drafts only)
  *   GET  /api/autonomy/analytics
  *
  * All endpoints: 503 without D1, 400 on bad input, never invent data.
@@ -41,9 +48,12 @@ import { persistAgentStatus } from '../agents/business-manager.js';
 import { QUEUE_AGENTS, QUEUE_TO_REGISTRY } from '../agents/autonomy-runner.js';
 import { convertScaffoldToDraft } from '../agents/autonomy/content.js';
 import { providerStatus, getProviderOrder } from '../llm/registry.js';
-import { fetchFeed } from '../rss/rss.js';
+import { fetchFeed, newExecutionId } from '../rss/rss.js';
 import { loadAllSources, loadSource, fetchSource } from '../rss/sources.js';
 import { evaluatePublishGate } from '../publishing/gate.js';
+import { isProtected, assertNotProtected, assertTaskNotProtected, PROTECTED_TEST_ARTICLES } from '../publishing/protection.js';
+import { runSeo, runSeoCheckOnly } from '../agents/autonomy/seo.js';
+import { findEvidence, judgeClaimDeterministic, MAX_CORRECTION_ATTEMPTS } from '../agents/autonomy/factcheck.js';
 import {
   runTask, retryTask, runDailyWorkflow, runWeeklyWorkflow, enqueueTask,
   generateReportSnapshot, normaliseTaskRow, todayStr,
@@ -212,13 +222,21 @@ async function handleStatus(request, env) {
   const lastRuns = {};
   for (const r of lastRunRows) {
     let reason = null;
+    let step = null;
     try {
       const detail = JSON.parse(r.detail || '{}');
       reason = detail.reason || detail.error
         || (detail.result && (detail.result.reason || detail.result.error)) || null;
-    } catch { reason = null; }
+      step = detail.step || null;
+    } catch { reason = null; step = null; }
     lastRuns[r.agent] = {
       outcome: r.outcome, startedAt: r.started_at, finishedAt: r.finished_at,
+      // The step label (e.g. 'fact-check-run' vs 'correction-run') is
+      // what distinguishes the two steps the 'fact-checking' agent
+      // performs — without it the dashboard showed the correction
+      // step's "auto_correction is off" note under Fact-Checking
+      // (minor fix A, 2026-11-20).
+      step,
       reason: reason ? String(reason).slice(0, 200) : null,
     };
   }
@@ -335,6 +353,12 @@ async function handleCreateTask(request, env) {
   if (body.idempotency_key !== undefined && body.idempotency_key !== null && typeof body.idempotency_key !== 'string') {
     return jsonError('idempotency_key must be a string.', 400);
   }
+  // Fix 1: a modifying task for a protected article must never be
+  // created — fail fast here so it can never exist to run or retry.
+  if (body.payload && typeof body.payload === 'object' && body.payload.article_id !== undefined) {
+    const protection = await assertTaskNotProtected(env, { agent: body.agent, kind: body.kind.trim(), payload: body.payload });
+    if (!protection.ok) return jsonError(protection.reason, 403, { protected: true });
+  }
   const res = await enqueueTask(env, {
     agent: body.agent,
     kind: body.kind.trim(),
@@ -345,7 +369,11 @@ async function handleCreateTask(request, env) {
     scheduled_for: body.scheduled_for ? new Date(body.scheduled_for).toISOString() : null,
   });
   if (!res.ok) return jsonError(res.error || 'Task could not be created.', res.status || 500);
-  return jsonOk({ task: res.task, duplicate: res.duplicate }, res.duplicate ? 200 : 201);
+  // Fix 8: a duplicate content-task creation carries `sourceMerge`
+  // (existing-reused / sources-added / no-new-sources / rejected) so the
+  // caller can tell whether its new sources were merged, duplicated, or
+  // rejected. The { task, duplicate } shape is unchanged for other tasks.
+  return jsonOk({ task: res.task, duplicate: res.duplicate, ...(res.sourceMerge ? { sourceMerge: res.sourceMerge } : {}) }, res.duplicate ? 200 : 201);
 }
 
 async function handleRunTask(request, env, id) {
@@ -497,6 +525,31 @@ async function handleRunDaily(request, env) {
   return jsonOk({ ok: true, status, ...result });
 }
 
+async function handleRunWeekly(request, env) {
+  if (!env.DB) return jsonError('Weekly workflow requires the D1 database', 503);
+  let force = false;
+  try {
+    const body = await readJsonBody(request);
+    force = Boolean(body && body.force === true);
+  } catch {
+    force = false;
+  }
+  if (await getEmergencyStop(env)) {
+    // runWeeklyWorkflow logs the skip itself; answer 423 as specified.
+    await runWeeklyWorkflow(env, { force });
+    return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { skipped: true, status: 'blocked' });
+  }
+  const result = await runWeeklyWorkflow(env, { force });
+  if (!result.ok) return jsonError(result.error || 'Weekly workflow failed.', 500, { status: 'failed' });
+  // Real execution status, never a bare success: 'completed' (the
+  // workflow ran), 'already_completed' (it already ran today and force
+  // was NOT requested — a no-op, not a success), 'blocked' (E-Stop).
+  // This endpoint runs ONLY the weekly workflow — it never runs the
+  // daily workflow (no daily_reports 'daily' row is written here).
+  const status = result.skipped ? 'blocked' : result.duplicate ? 'already_completed' : 'completed';
+  return jsonOk({ ok: true, status, ...result });
+}
+
 async function handleRetryTask(request, env, id) {
   if (!env.DB) return jsonError('Task retry requires the D1 database', 503);
   const result = await retryTask(env, id);
@@ -547,8 +600,95 @@ async function handleFetchSource(request, env, id) {
   if (!env.DB) return jsonError('Sources require the D1 database', 503);
   const source = await loadSource(env, id);
   if (!source) return jsonError('Source not found.', 404);
-  const result = await fetchSource(env, source);
+  // Manual dashboard fetch: its own execution id, trigger 'manual'
+  // (migration 014 audit row).
+  const result = await fetchSource(env, source, { executionId: newExecutionId(), triggerType: 'manual' });
   return jsonOk({ source: result });
+}
+
+/**
+ * GET /api/autonomy/rss-audit?source_id=&limit= — the RSS fetch audit
+ * log (migration 014). Read-only: it never recomputes or writes
+ * counters, so a reload cannot alter historical counts. Returns the
+ * audit rows newest-first plus per-source totals that reconcile with
+ * the research_sources counters: for each source, the audit sums over
+ * its 'completed'/'partial' rows, the source's own items_discovered /
+ * duplicates_found counters, and the live COUNT(research_items) for
+ * that source. reconciled is true only when audit inserted sum ==
+ * research_items count == source items_discovered. Audit rows exist
+ * only for fetches that ran after migration 014 — earlier fetches
+ * were never recorded and are not backfilled, so a source fetched
+ * before 014 reconciles as false until its next audited fetch; the
+ * raw numbers are shown so the gap is visible, never hidden.
+ * 503 when the audit table does not exist yet (pre-014 DB).
+ */
+async function handleRssAudit(request, env) {
+  if (!env.DB) return jsonError('RSS fetch audit requires the D1 database', 503);
+  const q = new URL(request.url).searchParams;
+  const sourceIdRaw = q.get('source_id');
+  const sourceId = sourceIdRaw === null || sourceIdRaw === '' ? null : Number(sourceIdRaw);
+  if (sourceIdRaw !== null && sourceIdRaw !== '' && (!Number.isInteger(sourceId) || sourceId <= 0)) {
+    return jsonError('source_id must be a positive integer.', 400);
+  }
+  let limit = Number(q.get('limit') || 50);
+  if (!Number.isInteger(limit) || limit <= 0) limit = 50;
+  if (limit > 100) limit = 100;
+  let rows;
+  let totalRow;
+  let perSource;
+  try {
+    const where = sourceId !== null ? 'WHERE source_id = ?' : '';
+    const params = sourceId !== null ? [sourceId] : [];
+    totalRow = await d1First(env, `SELECT COUNT(*) AS n FROM rss_fetch_audit ${where}`, params);
+    rows = await d1All(env,
+      `SELECT * FROM rss_fetch_audit ${where} ORDER BY started_at DESC, id DESC LIMIT ?`,
+      [...params, limit]) || [];
+    perSource = await d1All(env,
+      'SELECT s.id AS source_id, s.name, s.url, d.slug AS division, '
+      + 's.items_discovered AS source_items_discovered, s.duplicates_found AS source_duplicates_found, '
+      + "COALESCE(SUM(CASE WHEN a.status IN ('completed', 'partial') THEN a.items_discovered ELSE 0 END), 0) AS audit_discovered, "
+      + "COALESCE(SUM(CASE WHEN a.status IN ('completed', 'partial') THEN a.items_inserted ELSE 0 END), 0) AS audit_inserted, "
+      + "COALESCE(SUM(CASE WHEN a.status IN ('completed', 'partial') THEN a.duplicates_skipped ELSE 0 END), 0) AS audit_duplicates, "
+      + "SUM(CASE WHEN a.status IN ('completed', 'partial', 'failed') THEN 1 ELSE 0 END) AS audit_fetches, "
+      + "SUM(CASE WHEN a.status = 'skipped-overlap' THEN 1 ELSE 0 END) AS skipped_overlaps, "
+      + '(SELECT COUNT(*) FROM research_items ri WHERE ri.source_id = s.id) AS research_items_count '
+      + 'FROM research_sources s JOIN business_divisions d ON d.id = s.division_id '
+      + 'LEFT JOIN rss_fetch_audit a ON a.source_id = s.id '
+      + (sourceId !== null ? 'WHERE s.id = ? ' : '')
+      + 'GROUP BY s.id, s.name, s.url, d.slug, s.items_discovered, s.duplicates_found '
+      + 'ORDER BY s.division_id ASC, s.id ASC',
+      sourceId !== null ? [sourceId] : []) || [];
+  } catch {
+    return jsonError('RSS fetch audit is not available — migration 014 has not been applied yet.', 503);
+  }
+  const perSourceOut = perSource.map((p) => {
+    const auditInserted = Number(p.audit_inserted || 0);
+    const researchItemsCount = Number(p.research_items_count || 0);
+    const sourceItemsDiscovered = Number(p.source_items_discovered || 0);
+    return {
+      sourceId: p.source_id, name: p.name, url: p.url, division: p.division,
+      sourceItemsDiscovered, sourceDuplicatesFound: Number(p.source_duplicates_found || 0),
+      auditDiscovered: Number(p.audit_discovered || 0), auditInserted,
+      auditDuplicates: Number(p.audit_duplicates || 0),
+      auditFetches: Number(p.audit_fetches || 0), skippedOverlaps: Number(p.skipped_overlaps || 0),
+      researchItemsCount,
+      reconciled: auditInserted === researchItemsCount && sourceItemsDiscovered === researchItemsCount,
+    };
+  });
+  const totals = {
+    auditDiscovered: perSourceOut.reduce((n, p) => n + p.auditDiscovered, 0),
+    auditInserted: perSourceOut.reduce((n, p) => n + p.auditInserted, 0),
+    auditDuplicates: perSourceOut.reduce((n, p) => n + p.auditDuplicates, 0),
+    researchItemsTotal: perSourceOut.reduce((n, p) => n + p.researchItemsCount, 0),
+    sourcesTotal: perSourceOut.length,
+    sourcesReconciled: perSourceOut.filter((p) => p.reconciled).length,
+  };
+  return jsonOk({
+    audits: rows, total: Number(totalRow ? totalRow.n : rows.length), limit,
+    perSource: perSourceOut, totals,
+    note: 'Audit rows exist only for fetches after migration 014; earlier fetches are not backfilled.',
+    source: 'd1',
+  });
 }
 
 async function handleToggleSource(request, env, id) {
@@ -614,6 +754,514 @@ async function handleSeoChecks(request, env) {
   return jsonOk({ articleId, seoCheck: latest, checks, source: 'd1' });
 }
 
+// ---------------------------------------------------------------------------
+// Fix 4/5/6 handlers (2026-11-20, Critical Repair Phase 2).
+// ---------------------------------------------------------------------------
+
+function normaliseText(s) {
+  return String(s || '').replace(/\s+/g, ' ').trim();
+}
+
+/** Load one article row with its division slug (same shape as factcheck/seo use). */
+async function loadArticleById(env, articleId) {
+  return d1First(env,
+    'SELECT a.*, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id WHERE a.id = ? LIMIT 1',
+    [articleId]);
+}
+
+/**
+ * Which version of the article an action ran against: the row's
+ * updated_at + body length + article_revisions count. Recorded in the
+ * SEO and re-check responses so the owner can tell whether a stored
+ * result still describes the current body.
+ */
+async function articleVersion(env, article) {
+  let revisionCount = 0;
+  try {
+    const row = await d1First(env, 'SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?', [article.id]);
+    revisionCount = Number(row ? row.n : 0);
+  } catch { revisionCount = 0; }
+  return {
+    updatedAt: article.updated_at || null,
+    bodyChars: String(article.body || '').length,
+    revisionCount,
+  };
+}
+
+/**
+ * Resolution history for failed corrections. correction_resolutions is
+ * created lazily (CREATE TABLE IF NOT EXISTS) so the review endpoints
+ * work on a DB where the formal migration has not landed yet; the
+ * parent should formalise it as a migration (next number after 014)
+ * + console chunk at integration. Every resolution appends a row
+ * here — the original article_corrections row is never deleted and
+ * its pre-resolution status is kept in previous_status.
+ */
+async function ensureCorrectionResolutionsTable(env) {
+  await d1Run(env,
+    'CREATE TABLE IF NOT EXISTS correction_resolutions (' +
+    'id INTEGER PRIMARY KEY AUTOINCREMENT, ' +
+    'correction_id INTEGER NOT NULL REFERENCES article_corrections(id), ' +
+    'article_id INTEGER NOT NULL REFERENCES articles(id), ' +
+    'resolution TEXT NOT NULL, note TEXT, previous_status TEXT, new_status TEXT, ' +
+    'corrected_text TEXT, verification_verdict TEXT, resolved_by TEXT, ' +
+    "created_at TEXT NOT NULL DEFAULT (datetime('now')))");
+  await d1Run(env,
+    'CREATE INDEX IF NOT EXISTS idx_correction_resolutions_correction ON correction_resolutions(correction_id)');
+}
+
+async function listResolutions(env, correctionId) {
+  try {
+    return await d1All(env,
+      'SELECT * FROM correction_resolutions WHERE correction_id = ? ORDER BY created_at ASC, id ASC',
+      [correctionId]) || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Failure reason for one unresolved correction, derived from the row
+ * itself — never invented. runCorrection() records status 'failed'
+ * only when the claim sentence could not be located in the body for
+ * replacement or removal, so a failed row with no recheck_verdict
+ * means exactly that; a recheck_verdict names the verdict that
+ * failed.
+ */
+function deriveFailureReason(correction) {
+  const attempt = Number(correction.attempt || 1);
+  const parts = [];
+  if (correction.status === 'failed') {
+    parts.push(`Correction attempt ${attempt} failed.`);
+    if (correction.recheck_verdict) {
+      parts.push(`Re-check verdict: ${correction.recheck_verdict}.`);
+    } else {
+      parts.push('The claim sentence could not be located in the article body for replacement or removal.');
+    }
+    if (!correction.evidence_url) parts.push('No evidence URL supported the change.');
+  } else if (correction.status === 'pending') {
+    parts.push(`No correction attempt has completed for this claim yet (attempt ${attempt} of max ${MAX_CORRECTION_ATTEMPTS}).`);
+  }
+  if (attempt >= MAX_CORRECTION_ATTEMPTS) {
+    parts.push(`Max ${MAX_CORRECTION_ATTEMPTS} attempts reached — no further automatic attempt is permitted.`);
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Evidence pool for ONE article only (article_sources resolved to
+ * their stored research_items rows). This mirrors the private
+ * loadEvidence() in backend/agents/autonomy/factcheck.js — copied
+ * here because that helper is not exported and factcheck.js is out of
+ * scope for this fix. The pool is article-specific by construction:
+ * nothing from another article can enter a manual re-verification.
+ */
+async function loadArticleEvidencePool(env, articleId) {
+  const sources = await d1All(env, 'SELECT * FROM article_sources WHERE article_id = ? ORDER BY id ASC', [articleId]) || [];
+  const pool = [];
+  const seen = new Set();
+  for (const s of sources) {
+    let items = [];
+    if (s.research_item_id) {
+      const row = await d1First(env,
+        'SELECT id, source_id, title, url, published_at, summary, evidence_text, is_outdated FROM research_items WHERE id = ? LIMIT 1',
+        [s.research_item_id]);
+      if (row) items = [row];
+    }
+    if (!items.length && s.source_url) {
+      items = await d1All(env,
+        'SELECT id, source_id, title, url, published_at, summary, evidence_text, is_outdated FROM research_items WHERE url = ? ORDER BY fetched_at DESC',
+        [s.source_url]) || [];
+    }
+    for (const it of items) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
+      pool.push({
+        url: it.url, title: it.title, isOutdated: it.is_outdated === 1,
+        text: [it.title, it.summary, it.evidence_text].filter(Boolean).join(' '),
+        researchItemId: it.id,
+      });
+    }
+    if (!items.length) {
+      pool.push({ url: s.source_url || null, title: s.source_title || '', text: s.source_title || '', isOutdated: false, researchItemId: null });
+    }
+  }
+  return pool;
+}
+
+/** Sentence replacement (same behaviour as factcheck.js's private helper, not exported there). */
+function replaceClaimSentence(body, sentence, replacement) {
+  const text = String(body || '');
+  const idx = text.indexOf(sentence);
+  if (idx >= 0) return text.slice(0, idx) + replacement + text.slice(idx + sentence.length);
+  const escaped = sentence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  const re = new RegExp(escaped);
+  if (!re.test(text)) return null;
+  return text.replace(re, replacement);
+}
+
+/** All fact-checking tasks for one article, newest first (payloads parsed in JS). */
+async function findFactCheckTasksForArticle(env, articleId) {
+  const rows = await d1All(env,
+    "SELECT * FROM agent_tasks WHERE agent = 'fact-checking' ORDER BY id DESC") || [];
+  const matched = [];
+  for (const row of rows) {
+    let payload = {};
+    try { payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : (row.payload || {}); } catch { payload = {}; }
+    if (Number(payload.article_id) === Number(articleId)) matched.push(normaliseTaskRow(row));
+  }
+  return matched;
+}
+
+/**
+ * GET /api/autonomy/corrections?article_id= — unresolved corrections
+ * (status pending/failed) for one article: original claim, attempted
+ * correction, status, evidence URL, derived failure reason, and the
+ * resolution history for each. Read-only; allowed for protected
+ * articles (reviewing them changes nothing).
+ */
+async function handleListCorrections(request, env) {
+  if (!env.DB) return jsonError('Corrections require the D1 database', 503);
+  const q = new URL(request.url).searchParams;
+  const articleId = Number(q.get('article_id'));
+  if (!Number.isInteger(articleId) || articleId <= 0) return jsonError('article_id is required.', 400);
+  const article = await loadArticleById(env, articleId);
+  if (!article) return jsonError(`Article ${articleId} not found.`, 404);
+  const rows = await d1All(env,
+    "SELECT * FROM article_corrections WHERE article_id = ? AND status IN ('pending', 'failed') ORDER BY created_at ASC, id ASC",
+    [articleId]) || [];
+  const corrections = [];
+  for (const row of rows) {
+    corrections.push({
+      id: row.id, articleId: row.article_id, claimCheckId: row.claim_check_id,
+      originalText: row.original_text, attemptedCorrection: row.corrected_text || null,
+      attempt: row.attempt, status: row.status, recheckVerdict: row.recheck_verdict || null,
+      evidenceUrl: row.evidence_url || null,
+      failureReason: deriveFailureReason(row),
+      resolutions: await listResolutions(env, row.id),
+    });
+  }
+  return jsonOk({ articleId, corrections, total: corrections.length, source: 'd1' });
+}
+
+const CORRECTION_RESOLUTIONS = [
+  'accepted-unresolved-removed',
+  'manually-corrected-rechecked',
+  'rejected-for-retry',
+  'pending-human-review',
+];
+
+/**
+ * POST /api/autonomy/corrections/:id/resolve { resolution, note?,
+ * correctedText? } — owner review of one unresolved correction.
+ * Exactly four resolutions; anything else is a 400. A correction
+ * record is NEVER deleted and its original status is kept in the
+ * correction_resolutions history row (previous_status). The status
+ * UPDATE uses only values the article_corrections CHECK allows
+ * (pending/applied/failed/removed):
+ *  - accepted-unresolved-removed: claim verified ABSENT from the
+ *    current body first (else 409); status -> 'removed', so gate
+ *    check 4 stops counting it. The claim verdict itself is untouched.
+ *  - manually-corrected-rechecked: owner supplies correctedText; it
+ *    must pass a fresh deterministic fact-check against the article's
+ *    OWN evidence (VERIFIED) before anything is marked resolved — a
+ *    click alone can never mark a claim VERIFIED (a non-verifying
+ *    text is a 422 and changes nothing). Protected articles: 403.
+ *    E-Stop on: 423. On success the body edit is revisioned first.
+ *  - rejected-for-retry: status -> 'pending' for another permitted
+ *    attempt (max 3 attempts per claim; at the max this is a 409).
+ *  - pending-human-review: explicit hold; NO status change, so the
+ *    gate keeps counting the correction until another resolution
+ *    clears it.
+ */
+async function handleResolveCorrection(request, env, id, auth) {
+  if (!env.DB) return jsonError('Correction review requires the D1 database', 503);
+  const correctionId = Number(id);
+  if (!Number.isInteger(correctionId) || correctionId <= 0) return jsonError('correction id must be a positive integer.', 400);
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch {
+    return jsonError('Invalid JSON body.', 400);
+  }
+  const resolution = body && body.resolution;
+  if (!CORRECTION_RESOLUTIONS.includes(resolution)) {
+    return jsonError(`resolution must be one of: ${CORRECTION_RESOLUTIONS.join(', ')}.`, 400);
+  }
+  const note = typeof body.note === 'string' ? body.note.slice(0, 500) : null;
+  const resolvedBy = (auth && (auth.owner || auth.owner_email)) || 'owner';
+  const correction = await d1First(env, 'SELECT * FROM article_corrections WHERE id = ? LIMIT 1', [correctionId]);
+  if (!correction) return jsonError(`Correction ${correctionId} not found.`, 404);
+  if (correction.status === 'applied' || correction.status === 'removed') {
+    return jsonError(`Correction ${correctionId} is already resolved (status '${correction.status}').`, 409,
+      { status: correction.status, resolutions: await listResolutions(env, correctionId) });
+  }
+  const article = await loadArticleById(env, correction.article_id);
+  if (!article) return jsonError(`Article ${correction.article_id} not found.`, 404);
+  try {
+    await ensureCorrectionResolutionsTable(env);
+  } catch {
+    return jsonError('Correction resolution history is unavailable.', 500);
+  }
+  const recordResolution = async (fields) => {
+    const inserted = await d1Run(env,
+      'INSERT INTO correction_resolutions (correction_id, article_id, resolution, note, previous_status, new_status, corrected_text, verification_verdict, resolved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [correctionId, correction.article_id, resolution, note, correction.status,
+        fields.newStatus !== undefined ? fields.newStatus : correction.status,
+        fields.correctedText || null, fields.verificationVerdict || null, resolvedBy]);
+    return inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  };
+  const currentRow = async () => d1First(env, 'SELECT * FROM article_corrections WHERE id = ? LIMIT 1', [correctionId]);
+
+  if (resolution === 'accepted-unresolved-removed') {
+    if (normaliseText(article.body).includes(normaliseText(correction.original_text))) {
+      return jsonError('The claim text is still present in the current article body — remove it from the article first, then resolve as accepted-unresolved-removed.', 409,
+        { claimStillPresent: true });
+    }
+    await d1Run(env, "UPDATE article_corrections SET status = 'removed' WHERE id = ?", [correctionId]);
+    await recordResolution({ newStatus: 'removed' });
+    return jsonOk({
+      correction: await currentRow(), resolution,
+      gateEffect: 'Gate check 4 (correction-recheck) no longer counts this correction. Checks 1-2 still reflect the latest fact-check — run a re-check to refresh them.',
+      source: 'd1',
+    });
+  }
+
+  if (resolution === 'manually-corrected-rechecked') {
+    const correctedText = typeof body.correctedText === 'string' ? body.correctedText.trim() : '';
+    if (!correctedText) return jsonError('correctedText is required for manually-corrected-rechecked.', 400);
+    if (normaliseText(correctedText) === normaliseText(correction.original_text)) {
+      return jsonError('correctedText must differ from the original claim text.', 400);
+    }
+    if (String(article.status || '') === 'published') {
+      return jsonError('Published articles are never modified by correction review.', 409);
+    }
+    if (await getEmergencyStop(env)) {
+      return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { status: 'blocked' });
+    }
+    const guard = await assertNotProtected(env, article.id);
+    if (!guard.ok) return jsonError(guard.reason, 403, { protected: true, articleId: article.id });
+    // Fresh fact-check of ONLY the owner-supplied text, against the
+    // article's OWN evidence pool. The deterministic judge must return
+    // VERIFIED; anything else is a 422 and changes nothing.
+    const pool = await loadArticleEvidencePool(env, article.id);
+    const evidence = findEvidence(correctedText, pool);
+    const judged = judgeClaimDeterministic(correctedText, evidence, pool.length === 0);
+    if (judged.verdict !== 'VERIFIED') {
+      return jsonError(`The corrected text did not verify against the article's own evidence (verdict: ${judged.verdict}). Nothing was changed.`, 422, {
+        verification: { verdict: judged.verdict, explanation: judged.explanation, evidenceUrl: evidence ? evidence.url : null },
+      });
+    }
+    const newBody = replaceClaimSentence(article.body, correction.original_text, correctedText);
+    if (newBody === null) {
+      return jsonError('The original claim text was not found in the current article body — it may already have been removed; use accepted-unresolved-removed instead.', 409,
+        { claimNotFound: true });
+    }
+    await d1Run(env,
+      'INSERT INTO article_revisions (article_id, title, excerpt, body, status, revised_by) VALUES (?, ?, ?, ?, ?, ?)',
+      [article.id, article.title, article.excerpt || null, article.body, article.status, 'correction-review']);
+    await d1Run(env, 'UPDATE articles SET body = ?, updated_at = ? WHERE id = ?',
+      [newBody, nowIso(), article.id]);
+    await d1Run(env,
+      "UPDATE article_corrections SET status = 'applied', corrected_text = ?, recheck_verdict = 'VERIFIED', evidence_url = ? WHERE id = ?",
+      [correctedText, evidence ? evidence.url : null, correctionId]);
+    await recordResolution({ newStatus: 'applied', correctedText, verificationVerdict: 'VERIFIED' });
+    return jsonOk({
+      correction: await currentRow(), resolution,
+      verification: { verdict: 'VERIFIED', explanation: judged.explanation, evidenceUrl: evidence ? evidence.url : null },
+      gateEffect: 'Gate check 4 (correction-recheck) no longer counts this correction. Run a re-check to refresh the latest fact-check (checks 1-2).',
+      nextStep: `POST /api/autonomy/articles/${article.id}/recheck`,
+      source: 'd1',
+    });
+  }
+
+  if (resolution === 'rejected-for-retry') {
+    const attemptsRow = await d1First(env, 'SELECT COUNT(*) AS n FROM article_corrections WHERE claim_check_id = ?', [correction.claim_check_id]);
+    const attempts = Number(attemptsRow ? attemptsRow.n : 0);
+    if (attempts >= MAX_CORRECTION_ATTEMPTS) {
+      return jsonError(`Max ${MAX_CORRECTION_ATTEMPTS} correction attempts reached for this claim — it cannot be returned for another attempt.`, 409,
+        { attempts, maxAttempts: MAX_CORRECTION_ATTEMPTS });
+    }
+    await d1Run(env, "UPDATE article_corrections SET status = 'pending' WHERE id = ?", [correctionId]);
+    await recordResolution({ newStatus: 'pending' });
+    return jsonOk({
+      correction: await currentRow(), resolution, attempts, maxAttempts: MAX_CORRECTION_ATTEMPTS,
+      gateEffect: 'Gate check 4 (correction-recheck) still counts this correction until a retry succeeds.',
+      nextStep: 'Run the correction agent again for this article.',
+      source: 'd1',
+    });
+  }
+
+  // pending-human-review: explicit hold. No status change — the gate
+  // keeps counting the correction until a different resolution clears it.
+  await recordResolution({ newStatus: correction.status });
+  return jsonOk({
+    correction: await currentRow(), resolution,
+    gateEffect: 'No change: gate check 4 (correction-recheck) still counts this correction while it is on hold.',
+    source: 'd1',
+  });
+}
+
+/**
+ * POST /api/autonomy/articles/:id/recheck — explicit fact-check
+ * re-run for an existing draft (Fix 5). Owner-only (worker enforces
+ * requireOwner before this router), E-Stop respected (423). Protected
+ * articles are ALLOWED: a re-check is advisory-only (writes
+ * fact_checks / claim_checks rows, never the article row — same scope
+ * as the daily factCheckRun step), so protection does not block it.
+ * Reuses the article's existing fact-checking task record when one exists — no duplicate task is created; when
+ * none exists exactly one new task is enqueued. The run itself is
+ * recorded as a NEW agent_runs row and checkArticle() writes a NEW
+ * fact_checks row + new claim_checks rows, so every run is kept and
+ * the previous result is returned alongside the latest. An in-flight
+ * re-check for the same article answers 409 already-running instead
+ * of starting a second run. fact_checked is never set here (advisory
+ * only — only the publish gate sets it when it approves).
+ */
+async function handleRecheckArticle(request, env, id) {
+  if (!env.DB) return jsonError('Fact-check re-run requires the D1 database', 503);
+  const articleId = Number(id);
+  if (!Number.isInteger(articleId) || articleId <= 0) return jsonError('article id must be a positive integer.', 400);
+  const article = await loadArticleById(env, articleId);
+  if (!article) return jsonError(`Article ${articleId} not found.`, 404);
+  if (String(article.status || '') === 'published') {
+    return jsonError('Article is already published — re-check is for drafts.', 409);
+  }
+  if (await getEmergencyStop(env)) {
+    return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { status: 'blocked' });
+  }
+  // Re-check is advisory-only, exactly like the daily factCheckRun step
+  // and the manual fact-check task: it writes fact_checks /
+  // claim_checks audit rows and NEVER touches the article row
+  // (factcheck.js: fact_checked is never set by a check; the body,
+  // excerpt and seo_description are untouched). Protection therefore
+  // does not block a re-check on a protected article — the protection
+  // scope is article content/metadata, and a re-check modifies neither.
+  // (Coordinator decision 2026-11-20: Agent E's 403 here was
+  // inconsistent with the daily workflow, which fact-checks protected
+  // articles; see tests/factcheck-rerun.test.js.)
+  const existingTasks = await findFactCheckTasksForArticle(env, articleId);
+  if (existingTasks.some((t) => t.status === 'running')) {
+    const running = existingTasks.find((t) => t.status === 'running');
+    return jsonError('A fact-check re-check is already running for this article.', 409,
+      { status: 'already-running', taskId: running.id, articleId });
+  }
+  const before = await d1First(env,
+    'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [articleId]);
+  const previous = before
+    ? { id: before.id, verdict: before.verdict, claimsTotal: before.claims_total, claimsVerified: before.claims_verified, claimsFailed: before.claims_failed, createdAt: before.created_at }
+    : null;
+  let task = existingTasks[0] || null;
+  let taskReused = false;
+  if (task) {
+    taskReused = true;
+    if (task.status !== 'queued') {
+      await d1Run(env, "UPDATE agent_tasks SET status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
+        [nowIso(), task.id]);
+    }
+  } else {
+    const enqueued = await enqueueTask(env, {
+      agent: 'fact-checking', kind: 'fact-check', payload: { article_id: articleId },
+      division_id: article.division_id || null,
+      idempotency_key: `manual-recheck-${articleId}-${before ? before.id : 0}`,
+    });
+    if (!enqueued.ok) return jsonError(enqueued.error || 'Re-check task could not be created.', enqueued.status || 500);
+    task = enqueued.task;
+  }
+  const result = await runTask(env, task.id);
+  if (!result.ok) {
+    return jsonError(result.error || 'Fact-check re-run failed.', result.status || 500,
+      { taskId: task.id, ...(result.skipped ? { skipped: true } : {}) });
+  }
+  if (result.outcome === 'failed') {
+    return jsonError((result.result && result.result.error) || 'Fact-check run failed.', 500,
+      { taskId: task.id, runId: result.runId, outcome: 'failed' });
+  }
+  const latest = await d1First(env,
+    'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [articleId]);
+  const latestClaims = latest
+    ? (await d1All(env, 'SELECT * FROM claim_checks WHERE fact_check_id = ? ORDER BY id ASC', [latest.id]) || [])
+    : [];
+  const afterArticle = await d1First(env, 'SELECT fact_checked FROM articles WHERE id = ? LIMIT 1', [articleId]);
+  return jsonOk({
+    articleId, taskId: task.id, taskReused, runId: result.runId, outcome: result.outcome,
+    status: 'completed',
+    latest: latest
+      ? { id: latest.id, verdict: latest.verdict, claimsTotal: latest.claims_total, claimsVerified: latest.claims_verified, claimsFailed: latest.claims_failed, createdAt: latest.created_at, claims: latestClaims }
+      : null,
+    previous,
+    factChecked: afterArticle ? Number(afterArticle.fact_checked || 0) : 0,
+    articleVersion: await articleVersion(env, article),
+    note: 'Advisory only — fact_checked was not set by this re-check; only the publish gate sets it when it approves.',
+    source: 'd1',
+  });
+}
+
+/**
+ * POST /api/autonomy/articles/:id/seo-check — per-article SEO in
+ * CHECK-ONLY mode (Fix 6). Runs the real 11-check suite and stores
+ * the results, but never repairs: body, excerpt and SEO fields are
+ * untouched and no revision row is written. Protected articles are
+ * ALLOWED (check-only writes nothing to the article). E-Stop
+ * respected (423) — the check executes live link fetches. The
+ * response carries action 'check' so the owner can distinguish it
+ * from 'optimize'.
+ */
+async function handleSeoCheckArticle(request, env, id) {
+  if (!env.DB) return jsonError('SEO check requires the D1 database', 503);
+  const articleId = Number(id);
+  if (!Number.isInteger(articleId) || articleId <= 0) return jsonError('article id must be a positive integer.', 400);
+  const article = await loadArticleById(env, articleId);
+  if (!article) return jsonError(`Article ${articleId} not found.`, 404);
+  if (await getEmergencyStop(env)) {
+    return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { status: 'blocked' });
+  }
+  const isArticleProtected = await isProtected(env, articleId);
+  const result = await runSeoCheckOnly(env, article);
+  return jsonOk({
+    action: 'check', articleId, protected: isArticleProtected,
+    verdict: result.verdict, checks: result.checks, seoCheckId: result.seoCheckId,
+    articleVersion: await articleVersion(env, article),
+    note: result.note, source: 'd1',
+  });
+}
+
+/**
+ * POST /api/autonomy/articles/:id/seo-optimize — per-article SEO
+ * repair (Fix 6). Runs repairSeoFields then the 11-check suite.
+ * UNPROTECTED drafts only: protected articles are refused with a
+ * clear protected reason (403), published articles are refused (409),
+ * E-Stop respected (423). The response carries action 'optimize'
+ * (vs 'check') plus the repairs made.
+ */
+async function handleSeoOptimizeArticle(request, env, id) {
+  if (!env.DB) return jsonError('SEO optimization requires the D1 database', 503);
+  const articleId = Number(id);
+  if (!Number.isInteger(articleId) || articleId <= 0) return jsonError('article id must be a positive integer.', 400);
+  const article = await loadArticleById(env, articleId);
+  if (!article) return jsonError(`Article ${articleId} not found.`, 404);
+  if (String(article.status || '') === 'published') {
+    return jsonError('Published articles are never modified by SEO optimization.', 409);
+  }
+  if (await getEmergencyStop(env)) {
+    return jsonError('Autonomous operations are stopped by Emergency Stop', 423, { status: 'blocked' });
+  }
+  const guard = await assertNotProtected(env, articleId);
+  if (!guard.ok) return jsonError(guard.reason, 403, { protected: true, articleId });
+  const result = await runSeo({ kind: 'seo', payload: { article_id: articleId } }, env);
+  if (!result || result.outcome !== 'done') {
+    return jsonError((result && result.error) || 'SEO optimization failed.', 500);
+  }
+  const fresh = await loadArticleById(env, articleId);
+  return jsonOk({
+    action: 'optimize', articleId, protected: false,
+    verdict: result.verdict, checks: result.checks, seoCheckId: result.seoCheckId,
+    repairs: result.repairs, repairedFields: result.filled,
+    articleVersion: await articleVersion(env, fresh || article),
+    note: result.note, source: 'd1',
+  });
+}
+
 /**
  * GET /api/autonomy/analytics — first-party D1 analytics only. GA4 has
  * no Data API connection, so traffic stays 'Data unavailable' and
@@ -628,13 +1276,25 @@ async function handleAnalytics(request, env) {
     'FROM business_divisions d LEFT JOIN articles a ON a.division_id = d.id GROUP BY d.id, d.slug, d.name ORDER BY published ASC, total ASC') || [];
   const publishedToday = await d1First(env,
     "SELECT COUNT(*) AS n FROM articles WHERE status = 'published' AND published_at >= datetime('now', 'start of day')");
-  const drafts = await d1All(env,
-    "SELECT a.id, a.title, a.status, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id " +
-    "WHERE a.status IN ('draft', 'pending_approval') ORDER BY a.updated_at DESC LIMIT 20") || [];
+  // The dashboard needs is_protected per draft (PROTECTED badge + which
+  // actions are disabled). The column exists only once migration 013 is
+  // applied — fall back to the constant list on an older database so
+  // the analytics endpoint never fails outright.
+  let drafts;
+  try {
+    drafts = await d1All(env,
+      "SELECT a.id, a.title, a.status, d.slug AS division, a.is_protected FROM articles a JOIN business_divisions d ON d.id = a.division_id " +
+      "WHERE a.status IN ('draft', 'pending_approval') ORDER BY a.updated_at DESC LIMIT 20") || [];
+  } catch {
+    drafts = await d1All(env,
+      "SELECT a.id, a.title, a.status, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id " +
+      "WHERE a.status IN ('draft', 'pending_approval') ORDER BY a.updated_at DESC LIMIT 20") || [];
+    drafts = drafts.map((d) => ({ ...d, is_protected: PROTECTED_TEST_ARTICLES.includes(d.id) ? 1 : 0 }));
+  }
   const draftGates = [];
   for (const d of drafts) {
     const gate = await evaluatePublishGate(env, d.id);
-    draftGates.push({ id: d.id, title: d.title, status: d.status, division: d.division, contentReady: gate.contentReady, eligible: gate.eligible, blockedBy: gate.blockedBy });
+    draftGates.push({ id: d.id, title: d.title, status: d.status, division: d.division, isProtected: Number(d.is_protected || 0) === 1, contentReady: gate.contentReady, eligible: gate.eligible, blockedBy: gate.blockedBy });
   }
   const llmToday = await safeFirst(env,
     "SELECT COUNT(*) AS calls, COALESCE(SUM(neurons), 0) AS neurons FROM llm_usage WHERE date(created_at) = date('now')");
@@ -709,17 +1369,32 @@ export async function handleAutonomy(request, env, ctx, auth) {
   if (method === 'POST' && path === '/api/autonomy/reports/generate') return handleGenerateReport(request, env);
   if (method === 'GET' && path === '/api/autonomy/accounts') return handleAccounts();
   if (method === 'POST' && path === '/api/autonomy/run-daily') return handleRunDaily(request, env);
+  if (method === 'POST' && path === '/api/autonomy/run-weekly') return handleRunWeekly(request, env);
   if (method === 'GET' && path === '/api/autonomy/sources') return handleListSources(request, env);
   if (method === 'POST' && path === '/api/autonomy/sources') return handleCreateSource(request, env);
   if (method === 'POST' && parts.length === 5 && parts[2] === 'sources' && parts[4] === 'fetch') {
     return handleFetchSource(request, env, parts[3]);
   }
+  if (method === 'GET' && path === '/api/autonomy/rss-audit') return handleRssAudit(request, env);
   if (method === 'POST' && parts.length === 5 && parts[2] === 'sources' && parts[4] === 'toggle') {
     return handleToggleSource(request, env, parts[3]);
   }
   if (method === 'GET' && path === '/api/autonomy/fact-checks') return handleFactChecks(request, env);
   if (method === 'GET' && path === '/api/autonomy/seo') return handleSeoChecks(request, env);
   if (method === 'GET' && path === '/api/autonomy/gate') return handleGate(request, env);
+  if (method === 'GET' && path === '/api/autonomy/corrections') return handleListCorrections(request, env);
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'corrections' && parts[4] === 'resolve') {
+    return handleResolveCorrection(request, env, parts[3], auth);
+  }
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'articles' && parts[4] === 'recheck') {
+    return handleRecheckArticle(request, env, parts[3]);
+  }
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'articles' && parts[4] === 'seo-check') {
+    return handleSeoCheckArticle(request, env, parts[3]);
+  }
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'articles' && parts[4] === 'seo-optimize') {
+    return handleSeoOptimizeArticle(request, env, parts[3]);
+  }
   if (method === 'GET' && path === '/api/autonomy/analytics') return handleAnalytics(request, env);
   if (method === 'POST' && parts.length === 5 && parts[2] === 'scaffolds' && parts[4] === 'convert') {
     return handleScaffoldConvert(request, env, parts[3]);

@@ -241,7 +241,7 @@ describe('Frontend data: frontend/scripts/app.js', () => {
     const cards = (root.innerHTML.match(/article-card/g) || []).length;
     assert.equal(cards, 25);
     for (let id = 1; id <= 25; id++) {
-      assert.ok(root.innerHTML.includes(`article.html?id=${id}`), `card for id ${id}`);
+      assert.ok(root.innerHTML.includes(`article?id=${id}`), `card for id ${id}`);
     }
   });
 
@@ -270,22 +270,31 @@ describe('Static SEO tags: division + article page shells', () => {
   });
 
   it('article.html has canonical, description and article OG tags', () => {
+    // No STATIC canonical is shipped: one shared URL would be wrong for
+    // all 25 articles, and a wrong canonical is worse than none
+    // (indexing fix 2026-11-20). The per-article canonical + og:url are
+    // created/injected by the page script instead (setLink/setMeta
+    // create the element when no static tag exists).
+    assert.ok(!ARTICLE_HTML.includes('<link rel="canonical"'), 'no static canonical');
+    assert.ok(!ARTICLE_HTML.includes('<meta property="og:url"'), 'no static og:url');
     for (const needle of [
-      '<link rel="canonical"',
       'name="description"',
       'property="og:type" content="article"',
       'property="og:title"',
+      "canonical = 'https://fs-ai-5w5.pages.dev/pages/article?id=' + a.id",
       'setLink(\'canonical\', canonical)',
+      "setMeta('og:url', canonical, 'property')",
+      'mainEntityOfPage: canonical',
       'articleJsonLd',
     ]) assert.ok(ARTICLE_HTML.includes(needle), needle);
   });
 
   it('sitemap lists all 25 article URLs and all 8 division URLs', () => {
     for (let id = 1; id <= 25; id++) {
-      assert.ok(SITEMAP.includes(`article.html?id=${id}`), `sitemap id ${id}`);
+      assert.ok(SITEMAP.includes(`article?id=${id}`), `sitemap id ${id}`);
     }
     for (const expected of EXPECTED_DIVISIONS) {
-      assert.ok(SITEMAP.includes(`division.html?division=${expected.slug}`), expected.slug);
+      assert.ok(SITEMAP.includes(`division?division=${expected.slug}`), expected.slug);
     }
   });
 });

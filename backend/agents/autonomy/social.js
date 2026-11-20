@@ -46,7 +46,7 @@ export async function runSocialMedia(task, env) {
       articleId,
     };
   }
-  const url = `https://fs-ai-5w5.pages.dev/pages/article.html?id=${article.id}`;
+  const url = `https://fs-ai-5w5.pages.dev/pages/article?id=${article.id}`;
   const excerpt = String(article.excerpt || '').trim() || String(article.body || '').replace(/\s+/g, ' ').trim().slice(0, 160);
   const hashtags = hashtagsFor(article.division, article.title);
   const pack = {

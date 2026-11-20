@@ -193,7 +193,7 @@ describe('frontend-data path: shipped division.html rendered', () => {
     assert.match(els.divisionTitle.textContent, /Automotive/);
     assert.equal(els.divisionArticlesHeading.textContent, 'Articles in Automotive');
     assert.match(els.divisionArticles.innerHTML, /EV Charging at Home/);
-    assert.match(els.divisionArticles.innerHTML, /article\.html\?id=1/);
+    assert.match(els.divisionArticles.innerHTML, /article\?id=1/, 'clean article link — no .html, per the 2026-11-20 indexing fix');
     assert.equal(els.divisionGrid.style.display, 'none', 'full grid stays hidden for a single division');
     assert.equal(els.divisionArticlesHeading.style.display, undefined, 'articles heading must not be hidden');
   });

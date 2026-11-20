@@ -328,8 +328,8 @@ describe('repair E — SEO repair', () => {
     const h3Count = (row.body.match(/^###\s.+$/gm) || []).length;
     assert.ok(h2Count >= 2, `expected >=2 H2s after promotion, got ${h2Count}`);
     assert.equal(h3Count, 1, 'one H3 remains (only 2 were promoted)');
-    assert.match(row.body, /Related reading: \[Published Sibling Article\]\(https:\/\/fs-ai-5w5\.pages\.dev\/pages\/article\.html\?id=\d+\)/,
-      'a genuine link to the published sibling was appended');
+    assert.match(row.body, /Related reading: \[Published Sibling Article\]\(https:\/\/fs-ai-5w5\.pages\.dev\/pages\/article\?id=\d+\)/,
+      'a genuine link to the published sibling was appended (clean form — no .html, per the 2026-11-20 indexing fix)');
     const revisions = db.prepare('SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?').get(id).n;
     assert.equal(revisions, 1, 'pre-edit body stored as a revision first');
     const checks = db.prepare('SELECT checks_json FROM seo_checks WHERE article_id = ?').get(id);

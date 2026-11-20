@@ -16,6 +16,11 @@ import { runResearch } from '../agents/autonomy/research.js';
 import { runFactChecking } from '../agents/autonomy/factcheck.js';
 import { runSeo } from '../agents/autonomy/seo.js';
 import { evaluatePublishGate, publishGatePassed } from '../publishing/gate.js';
+import { PROTECTED_TEST_ARTICLES, protectedExclusion, assertTaskNotProtected } from '../publishing/protection.js';
+
+// Re-exported so existing callers/tests keep reading the list from this
+// module; the definition lives in backend/publishing/protection.js.
+export { PROTECTED_TEST_ARTICLES };
 
 /**
  * Protected test articles — the owner's standing order (2026-11-19/20):
@@ -27,16 +32,12 @@ import { evaluatePublishGate, publishGatePassed } from '../publishing/gate.js';
  * blocked — only the automatic draft selection below.
  * Fact-checking is advisory only (it never writes the body) and content
  * generation creates new articles, so neither needs this guard.
+ * The list + the SQL exclusion helper live in
+ * backend/publishing/protection.js (DB flag is_protected is the source
+ * of truth, the constant is the fallback); this module re-exports the
+ * list above and uses the imported helper at the correctionRun/seoRun
+ * guard sites.
  */
-export const PROTECTED_TEST_ARTICLES = [26, 27];
-
-// SQL fragment + bound params that exclude the protected test articles
-// from an automatic draft selection. Exclusion happens in the query, not
-// after fetching, so LIMIT still counts only eligible drafts.
-function protectedExclusion(column) {
-  const placeholders = PROTECTED_TEST_ARTICLES.map(() => '?').join(', ');
-  return { clause: `${column} NOT IN (${placeholders})`, params: [...PROTECTED_TEST_ARTICLES] };
-}
 
 export function todayStr(date = new Date()) {
   return date.toISOString().slice(0, 10);
@@ -76,14 +77,147 @@ async function logSkip(env, agent, reason) {
 /**
  * Enqueue a task. Never duplicates: an existing row with the same
  * idempotency_key is returned as { task, duplicate: true }.
+ *
+ * Content-task exception (Fix 8, 2026-11-20): re-creating a content task
+ * with the same key (same title, same day) used to silently drop the
+ * newly supplied sources. The duplicate is still reused — one task,
+ * history preserved — but valid new source URLs are merged into the
+ * existing task's payload (see mergeContentTaskSources), so the content
+ * run, which re-reads the task row, sees every source.
  */
+const CONTENT_TASK_SOURCE_LIMIT = 10; // matches the dashboard's 10-source cap
+
+function normaliseTitle(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/g, ' ') : '';
+}
+
+function normaliseDivision(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+// Dedupe key for a source URL: lowercase scheme+host, no fragment, no
+// trailing slash. The STORED value is always the caller's original
+// (trimmed) URL — resolveEvidence matches sources against
+// research_items.url by exact string, so the stored text must not be
+// rewritten.
+function normaliseSourceUrl(raw) {
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  if (!text) return null;
+  let parsed;
+  try { parsed = new URL(text); } catch { return null; }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  const path = parsed.pathname.replace(/\/+$/, '') || '/';
+  return `${parsed.protocol}//${parsed.hostname.toLowerCase()}${parsed.port ? `:${parsed.port}` : ''}${path}${parsed.search}`;
+}
+
+// Merge a duplicate content-task creation's sources into the existing
+// task. Returns null when the existing task is not a content task (the
+// caller then returns the plain duplicate). Otherwise returns
+// { task, sourceMerge } where task is the (possibly updated) task row
+// and sourceMerge is one of:
+//   existing-reused — no new sources were supplied
+//   sources-added   — new valid sources were merged (listed in `added`)
+//   no-new-sources  — sources were supplied but every one is a duplicate
+//   rejected        — no source could be merged (invalid or mismatched;
+//                     each entry in `rejected` carries its reason)
+// A source is rejected when it is not a valid http(s) URL, when the
+// re-creation names a different title/division than the original task
+// (a source from another title/division must never mix in), or when the
+// 10-source cap is already reached. The original task row is never
+// deleted or recreated; a merge only rewrites its payload + updated_at.
+async function mergeContentTaskSources(env, existingRow, newPayload, newDivisionId) {
+  const existing = normaliseTaskRow(existingRow);
+  if (!existing || existing.agent !== 'content-creation') return null;
+  const existingPayload = existing.payload && typeof existing.payload === 'object' ? existing.payload : {};
+  const newSources = newPayload && Array.isArray(newPayload.sources) ? newPayload.sources : [];
+  if (newSources.length === 0) {
+    return { task: existing, sourceMerge: { status: 'existing-reused', added: [], duplicates: [], rejected: [] } };
+  }
+  // A task that already ran (done / running / skipped) can never use
+  // merged sources — its article was already converted (or it will
+  // never run). Reject the merge instead of claiming 'sources-added'
+  // for sources that reach nothing. Failed tasks may still merge: a
+  // retry re-reads the payload at run time.
+  if (existing.status === 'done' || existing.status === 'running' || existing.status === 'skipped') {
+    const reason = `task already ${existing.status} — sources cannot reach the already-converted (or never-run) article; create a new task`;
+    return {
+      task: existing,
+      sourceMerge: { status: 'rejected', added: [], duplicates: [], rejected: newSources.map((s) => ({ source: typeof s === 'string' ? s.trim() : '', reason })) },
+    };
+  }
+  // Request-level guard: a re-creation for a different title/division
+  // must never mix its sources into this task.
+  const mismatchReasons = [];
+  if (newPayload && typeof newPayload.title === 'string' && newPayload.title.trim()
+    && normaliseTitle(newPayload.title) !== normaliseTitle(existingPayload.title)) {
+    mismatchReasons.push(`title does not match the original task ("${String(existingPayload.title || '').trim()}")`);
+  }
+  if (newPayload && typeof newPayload.division === 'string' && newPayload.division.trim()
+    && normaliseDivision(newPayload.division) !== normaliseDivision(existingPayload.division)) {
+    mismatchReasons.push(`division does not match the original task ("${String(existingPayload.division || '').trim()}")`);
+  }
+  if (newDivisionId != null && existing.division_id != null && Number(newDivisionId) !== Number(existing.division_id)) {
+    mismatchReasons.push('division_id does not match the original task');
+  }
+  const supplied = newSources.map((s) => (typeof s === 'string' ? s.trim() : ''));
+  if (mismatchReasons.length > 0) {
+    const reason = `mismatched re-creation: ${mismatchReasons.join('; ')}`;
+    return {
+      task: existing,
+      sourceMerge: { status: 'rejected', added: [], duplicates: [], rejected: supplied.map((s) => ({ source: s, reason })) },
+    };
+  }
+  const existingSources = (Array.isArray(existingPayload.sources) ? existingPayload.sources : [])
+    .filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim());
+  const seenKeys = new Set(existingSources.map((s) => normaliseSourceUrl(s)).filter(Boolean));
+  const seenExact = new Set(existingSources);
+  const added = [];
+  const duplicates = [];
+  const rejected = [];
+  const mergedSources = [...existingSources];
+  for (const text of supplied) {
+    if (!text) { rejected.push({ source: text, reason: 'empty source' }); continue; }
+    const key = normaliseSourceUrl(text);
+    if (!key) { rejected.push({ source: text, reason: 'not a valid http(s) URL' }); continue; }
+    if (seenKeys.has(key) || seenExact.has(text)) { duplicates.push(text); continue; }
+    if (mergedSources.length >= CONTENT_TASK_SOURCE_LIMIT) {
+      rejected.push({ source: text, reason: `source limit of ${CONTENT_TASK_SOURCE_LIMIT} reached` });
+      continue;
+    }
+    seenKeys.add(key);
+    seenExact.add(text);
+    mergedSources.push(text);
+    added.push(text);
+  }
+  const status = added.length > 0 ? 'sources-added' : (rejected.length > 0 ? 'rejected' : 'no-new-sources');
+  if (added.length === 0) {
+    return { task: existing, sourceMerge: { status, added, duplicates, rejected } };
+  }
+  const now = nowIso();
+  const nextPayload = { ...existingPayload, sources: mergedSources };
+  await d1Run(env, 'UPDATE agent_tasks SET payload = ?, updated_at = ? WHERE id = ?',
+    [JSON.stringify(nextPayload), now, existing.id]);
+  const row = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [existing.id]);
+  const task = row ? normaliseTaskRow(row) : { ...existing, payload: nextPayload, updated_at: now };
+  return { task, sourceMerge: { status, added, duplicates, rejected } };
+}
+
+// Shared duplicate return: a content task gets its sources merged
+// (Fix 8); every other task returns the existing row unchanged.
+async function duplicateTaskResult(env, row, payload, division_id) {
+  const merged = await mergeContentTaskSources(env, row, payload || {}, division_id);
+  if (merged) return { ok: true, task: merged.task, duplicate: true, sourceMerge: merged.sourceMerge };
+  return { ok: true, task: normaliseTaskRow(row), duplicate: true };
+}
+
 export async function enqueueTask(env, { agent, kind, payload = {}, division_id = null, priority = 5, idempotency_key, scheduled_for = null }) {
   if (!env || !env.DB) return { ok: false, status: 503, error: 'D1 database is not bound.' };
   if (!agent || typeof agent !== 'string') return { ok: false, status: 400, error: 'agent is required.' };
   if (!kind || typeof kind !== 'string') return { ok: false, status: 400, error: 'kind is required.' };
   const key = idempotency_key || `manual-${agent}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const existing = await d1First(env, 'SELECT * FROM agent_tasks WHERE idempotency_key = ? LIMIT 1', [key]);
-  if (existing) return { ok: true, task: normaliseTaskRow(existing), duplicate: true };
+  if (existing) return duplicateTaskResult(env, existing, payload, division_id);
   const now = nowIso();
   try {
     const result = await d1Run(env,
@@ -96,7 +230,7 @@ export async function enqueueTask(env, { agent, kind, payload = {}, division_id 
     // Race on the UNIQUE key: re-read and return the existing row.
     if (/UNIQUE|unique/i.test(String(err && err.message ? err.message : ''))) {
       const row = await d1First(env, 'SELECT * FROM agent_tasks WHERE idempotency_key = ? LIMIT 1', [key]);
-      if (row) return { ok: true, task: normaliseTaskRow(row), duplicate: true };
+      if (row) return duplicateTaskResult(env, row, payload, division_id);
     }
     return { ok: false, status: 500, error: String(err && err.message ? err.message : err).slice(0, 200) };
   }
@@ -138,6 +272,14 @@ export async function runTask(env, taskId) {
   const task = normaliseTaskRow(row);
   if (task.status !== 'queued') {
     return { ok: false, status: 409, error: `Task is '${task.status}' — only queued tasks can run.` };
+  }
+
+  // Manual task runs must not bypass protection: a modifying task
+  // (seo repair / correction) for a protected article is refused here,
+  // before any status change or execution.
+  const protection = await assertTaskNotProtected(env, task);
+  if (!protection.ok) {
+    return { ok: false, status: 403, error: protection.reason, protected: true };
   }
 
   if (await getEmergencyStop(env)) {
@@ -234,6 +376,11 @@ export async function retryTask(env, taskId) {
   const task = normaliseTaskRow(row);
   if (task.status !== 'failed') {
     return { ok: false, status: 409, error: `Task is '${task.status}' — only failed tasks can be retried.` };
+  }
+  // A failed modifying task for a protected article must not re-queue.
+  const protection = await assertTaskNotProtected(env, task);
+  if (!protection.ok) {
+    return { ok: false, status: 403, error: protection.reason, protected: true };
   }
   await d1Run(env, "UPDATE agent_tasks SET status = 'queued', attempts = 0, scheduled_for = NULL, updated_at = ? WHERE id = ?",
     [nowIso(), id]);

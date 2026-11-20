@@ -17,6 +17,8 @@
   var started = false;
   var emergencyStopped = null;
   var taskFilter = '';
+  // The article whose corrections the review section is showing.
+  var correctionArticleId = null;
   var queuedTasks = [];
 
   function token() {
@@ -122,6 +124,10 @@
       '“Discovered” is the total number of items ever stored from that feed; “Duplicates” is the total number of items skipped because they were already stored. Both are cumulative counters — they only change when a fetch actually runs. Reloading this page never changes them.</p>' +
       '<p id="autonomySourceStatus" aria-live="polite"></p>' +
       '<div class="table-scroll"><table><thead><tr><th>Source</th><th>Division</th><th>Status</th><th>Last fetch</th><th>Last error</th><th>Discovered</th><th>Duplicates</th><th>Actions</th></tr></thead><tbody id="autonomySourceList"></tbody></table></div>' +
+      '<h3>Fetch history (RSS audit)</h3>' +
+      '<p class="muted">Every RSS fetch since the audit log started is recorded here — feed, time, trigger (manual / scheduled / daily workflow), items found, new, duplicates, errors, and final status. These are recorded rows; reloading never changes them. Fetches before the audit log started were never recorded and are not backfilled.</p>' +
+      '<p><button class="btn btn-outline" type="button" id="autonomyLoadRssAuditBtn">Show fetch history</button> <span id="autonomyRssAuditStatus" class="muted" aria-live="polite"></span></p>' +
+      '<div class="table-scroll"><table><thead><tr><th>Feed</th><th>Started</th><th>Trigger</th><th>Found</th><th>New</th><th>Duplicates</th><th>Errors</th><th>Status</th></tr></thead><tbody id="autonomyRssAuditList"></tbody></table></div>' +
       '<h3>Add a research source</h3>' +
       '<p class="muted">The URL is fetched and validated live before it is stored — only a URL that returns valid RSS/Atom XML becomes a source.</p>' +
       '<div class="field"><label for="autonomySourceDivision">Division</label>' +
@@ -146,6 +152,10 @@
       '<p id="autonomyPipelineStatus" aria-live="polite"></p>' +
       '<div class="table-scroll"><table><thead><tr><th>Draft</th><th>Status</th><th>Gate</th><th>Blocked by</th><th>Actions</th></tr></thead><tbody id="autonomyPipelineList"></tbody></table></div>' +
       '<p id="autonomyFactCheckDetail" aria-live="polite"></p>' +
+      '<h3>Correction review</h3>' +
+      '<p class="muted">Unresolved corrections for one draft: original claim, attempted correction, evidence, and why it failed. Open “Review” on a draft above. Resolving never marks an unsupported claim verified — it only records the owner’s decision, and the gate re-evaluates from the recorded state.</p>' +
+      '<p id="autonomyCorrectionStatus" aria-live="polite">No article selected — open “Review” on a draft above.</p>' +
+      '<div id="autonomyCorrectionList"></div>' +
       '<h3>Operations analytics</h3>' +
       '<p class="muted">First-party numbers from the live database only. GA4 reporting is not connected, so traffic stays “Data unavailable” and revenue stays $0.00.</p>' +
       '<div class="kpi-grid" id="autonomyAnalyticsGrid"></div>' +
@@ -161,14 +171,17 @@
       '<button class="btn btn-primary" type="button" id="autonomyStartAllBtn">Start All Agents</button> ' +
       '<button class="btn btn-outline" type="button" id="autonomyPauseAllBtn">Pause All Agents</button> ' +
       '<button class="btn btn-outline" type="button" id="autonomyResumeBtn">Resume Operations</button> ' +
-      '<button class="btn btn-primary" type="button" id="autonomyRunDailyBtn">Run Daily Workflow Now</button>' +
+      '<button class="btn btn-primary" type="button" id="autonomyRunDailyBtn">Run Daily Workflow Now</button> ' +
+      '<button class="btn btn-outline" type="button" id="autonomyRunWeeklyBtn">Run Weekly Workflow Now</button>' +
       '</p>' +
       '<p class="muted">Start / Pause / Resume act on all agents through the Worker. ' +
       '“Run Daily Workflow Now” runs the full daily workflow on demand; it is blocked (423) while the Emergency Stop is ON. ' +
       'A manual run is an explicit re-run, so it runs even if the workflow already ran today. ' +
+      '“Run Weekly Workflow Now” runs the weekly workflow on demand (Sunday’s report); a second run in the same week reports “already completed” instead of duplicating it. ' +
       'The daily workflow also runs on schedule at 00:00 UTC (06:00 Dhaka) every day, and the weekly workflow on Sundays at 00:00 UTC.</p>' +
       '<p id="autonomyControlStatus" aria-live="polite"></p>' +
       '<p id="autonomyRunDailyStatus" aria-live="polite"></p>' +
+      '<p id="autonomyRunWeeklyStatus" aria-live="polite"></p>' +
       '<h3>Create a content draft task</h3>' +
       '<p class="muted">Creates a queued content-creation task for one article. Run it below; when it finishes with an AI draft, convert its scaffold (run ID) to a CMS draft for owner review. AI drafts are marked “AI-DRAFT — needs fact-check + owner approval” and are never published automatically.</p>' +
       '<div class="field"><label for="autonomyContentTitle">Article title</label>' +
@@ -335,7 +348,11 @@
         list.innerHTML = agents.map(function (a) {
           var lr = lastRuns[a.id] || null;
           var lastLine = lr
-            ? ' <span class="muted">— last run ' + fmtDate(lr.startedAt) + ': ' + esc(lr.outcome) + (lr.reason ? ' (' + esc(lr.reason) + ')' : '') + '</span>'
+            // The step label (e.g. 'fact-check-run' vs 'correction-run')
+            // is what tells the two 'fact-checking' steps apart — the
+            // correction step's "auto_correction is off" note used to
+            // show under Fact-Checking (minor fix A).
+            ? ' <span class="muted">— last run ' + fmtDate(lr.startedAt) + ': ' + (lr.step ? esc(lr.step) + ' — ' : '') + esc(lr.outcome) + (lr.reason ? ' (' + esc(lr.reason) + ')' : '') + '</span>'
             : ' <span class="muted">— no run recorded yet</span>';
           var disabledNote = '';
           if (a.status === 'paused') disabledNote = ' <span class="muted">(paused by owner — resume it to run)</span>';
@@ -453,6 +470,7 @@
         (result && result.articleId ? ' (article #' + result.articleId + ')' : ''));
       loadTasks();
       loadStatus();
+      loadPipeline();
     }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
   }
 
@@ -464,6 +482,7 @@
       setText(statusElId, 'Task ' + id + ' is queued again (attempts reset).');
       loadTasks();
       loadStatus();
+      loadPipeline();
     }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
   }
 
@@ -674,12 +693,26 @@
         list.innerHTML = drafts.map(function (a) {
           var gate = a.contentReady ? 'Ready' : 'Blocked';
           var blocked = (a.blockedBy || []).slice(0, 2).join('; ');
-          var fcBtn = '<button class="btn btn-small" type="button" data-autonomy-factcheck="' + esc(String(a.id)) + '">Fact-check</button>';
-          var corrBtn = '<button class="btn btn-small" type="button" data-autonomy-correct="' + esc(String(a.id)) + '">Correct</button>';
-          var detailBtn = '<button class="btn btn-small" type="button" data-autonomy-fc-detail="' + esc(String(a.id)) + '">Details</button>';
-          return '<tr><td><strong>' + esc(a.title || '') + '</strong><br><span class="muted">#' + esc(String(a.id)) + ' · ' + esc(a.division || '') + '</span></td>' +
+          var id = esc(String(a.id));
+          // Protected articles (Fix 1): no automatic modification.
+          // Fact-check, Re-check and SEO Check are advisory/check-only
+          // and stay available; Correct and Optimize SEO are disabled
+          // here (the server also refuses them with 403).
+          var prot = a.isProtected ? '<br><strong>PROTECTED — AUTOMATIC MODIFICATION DISABLED</strong>' : '';
+          var fcBtn = '<button class="btn btn-small" type="button" data-autonomy-factcheck="' + id + '">Fact-check</button>';
+          var recheckBtn = '<button class="btn btn-small" type="button" data-autonomy-recheck="' + id + '">Re-check</button>';
+          var corrBtn = a.isProtected
+            ? '<button class="btn btn-small" type="button" disabled title="Protected — automatic modification disabled">Correct</button>'
+            : '<button class="btn btn-small" type="button" data-autonomy-correct="' + id + '">Correct</button>';
+          var seoCheckBtn = '<button class="btn btn-small" type="button" data-autonomy-seo-check="' + id + '">SEO Check</button>';
+          var seoOptBtn = a.isProtected
+            ? '<button class="btn btn-small" type="button" disabled title="Protected — automatic modification disabled">Optimize SEO</button>'
+            : '<button class="btn btn-small" type="button" data-autonomy-seo-optimize="' + id + '">Optimize SEO</button>';
+          var reviewBtn = '<button class="btn btn-small" type="button" data-autonomy-review="' + id + '">Review</button>';
+          var detailBtn = '<button class="btn btn-small" type="button" data-autonomy-fc-detail="' + id + '">Details</button>';
+          return '<tr><td><strong>' + esc(a.title || '') + '</strong><br><span class="muted">#' + id + ' · ' + esc(a.division || '') + '</span>' + prot + '</td>' +
             '<td>' + statusPill(a.status) + '</td><td>' + statusPill(gate) + '</td>' +
-            '<td>' + esc(blocked || '—') + '</td><td>' + fcBtn + ' ' + corrBtn + ' ' + detailBtn + '</td></tr>';
+            '<td>' + esc(blocked || '—') + '</td><td>' + fcBtn + ' ' + recheckBtn + ' ' + corrBtn + ' ' + seoCheckBtn + ' ' + seoOptBtn + ' ' + reviewBtn + ' ' + detailBtn + '</td></tr>';
         }).join('') || '<tr><td colspan="5">No drafts — nothing waiting for review.</td></tr>';
       }
       if (grid) {
@@ -765,14 +798,199 @@
     }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
   }
 
+  /* --- Per-article actions: re-check, SEO check/optimize, correction
+     review, RSS audit (Fixes 4, 5, 6, 9, 10) ---
+     Results go to the detail line (autonomyFactCheckDetail) or their
+     own status line, so the pipeline table can refresh without erasing
+     them (minor C). Every result shows the ACTUAL state from the
+     server — completed / already completed / blocked / failed /
+     protected — never a blanket success (minor D/E). */
+
+  // Fix 8: say what happened to the sources on a duplicate content
+  // task instead of a bare "already existed".
+  function sourceMergeText(sm) {
+    if (!sm) return '';
+    var parts = [];
+    if (sm.status === 'sources-added') parts.push((sm.added || []).length + ' new source(s) added: ' + (sm.added || []).join(', '));
+    if (sm.status === 'no-new-sources') parts.push('no new sources — the supplied source(s) were already on the task.');
+    if (sm.status === 'existing-reused') parts.push('the existing task was reused unchanged (already done, running, or skipped — its sources cannot change now).');
+    if (sm.status === 'rejected') parts.push('new sources rejected: ' + (sm.rejected || []).map(function (x) { return (x.source || '') + ' (' + (x.reason || '') + ')'; }).join(', '));
+    if (sm.duplicates && sm.duplicates.length) parts.push(sm.duplicates.length + ' duplicate(s) ignored: ' + sm.duplicates.join(', '));
+    if (sm.rejected && sm.rejected.length && sm.status !== 'rejected') parts.push('rejected: ' + sm.rejected.map(function (x) { return (x.source || '') + ' (' + (x.reason || '') + ')'; }).join(', '));
+    return parts.length ? ' Sources: ' + parts.join(' ') : '';
+  }
+
+  function seoChecksText(checks) {
+    if (!checks || !checks.length) return '';
+    // The actionable Fix line lives inside each check's detail
+    // (seo.js appends " Fix: …" to the readability detail).
+    return checks.map(function (c) {
+      return (c.ok ? '✓ ' : '✗ ') + (c.name || '') + (c.detail ? ' — ' + c.detail : '');
+    }).join(' | ');
+  }
+
+  // Fix 5: per-article fact-check re-run — reuses the existing task,
+  // records a new run, keeps history, never sets fact_checked.
+  function recheckArticle(articleId) {
+    setText('autonomyFactCheckDetail', 'Re-checking article #' + articleId + '…');
+    api('/api/autonomy/articles/' + encodeURIComponent(articleId) + '/recheck', { method: 'POST' }).then(function (r) {
+      if (!r.ok) { setText('autonomyFactCheckDetail', 'Re-check failed for article #' + articleId + ' — ' + apiError(r) + '.'); return; }
+      var d = r.data || {};
+      var latest = d.latest || {};
+      var prev = d.previous || null;
+      var msg = 'Re-check completed for article #' + articleId + ' (task #' + (d.taskId != null ? d.taskId : '—') + (d.taskReused ? ', task reused' : ', new task') + ', run #' + (d.runId != null ? d.runId : '—') + '): ' +
+        'latest fact-check ' + (latest.verdict || '—') + ' (' + (latest.claimsVerified != null ? latest.claimsVerified : '—') + '/' + (latest.claimsTotal != null ? latest.claimsTotal : '—') + ' verified, ' + (latest.claimsFailed != null ? latest.claimsFailed : '—') + ' failed)' +
+        (prev ? '; previous was ' + (prev.verdict || '—') + ' (' + (prev.claimsVerified != null ? prev.claimsVerified : '—') + '/' + (prev.claimsTotal != null ? prev.claimsTotal : '—') + ' verified)' : '; no previous run') +
+        '. fact_checked stays ' + (d.factChecked != null ? d.factChecked : '0') + ' (advisory only).';
+      setText('autonomyFactCheckDetail', msg);
+      loadPipeline();
+    }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
+  }
+
+  // Fix 6: per-article SEO — Check is check-only (nothing changes),
+  // Optimize repairs an eligible unprotected draft. The two are
+  // separate buttons so they can never be confused.
+  function seoCheckArticle(articleId) {
+    setText('autonomyFactCheckDetail', 'Running SEO check for article #' + articleId + '…');
+    api('/api/autonomy/articles/' + encodeURIComponent(articleId) + '/seo-check', { method: 'POST' }).then(function (r) {
+      if (!r.ok) { setText('autonomyFactCheckDetail', 'SEO check failed for article #' + articleId + ' — ' + apiError(r) + '.'); return; }
+      var d = r.data || {};
+      var msg = 'SEO check (check-only — nothing changed) for article #' + articleId + ': verdict ' + (d.verdict || '—') +
+        (d.checks ? ' — ' + seoChecksText(d.checks) : '') + (d.note ? ' ' + d.note : '');
+      setText('autonomyFactCheckDetail', msg);
+      loadPipeline();
+    }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
+  }
+
+  function seoOptimizeArticle(articleId) {
+    setText('autonomyFactCheckDetail', 'Optimizing SEO for article #' + articleId + '…');
+    api('/api/autonomy/articles/' + encodeURIComponent(articleId) + '/seo-optimize', { method: 'POST' }).then(function (r) {
+      if (!r.ok) { setText('autonomyFactCheckDetail', 'SEO optimize failed for article #' + articleId + ' — ' + apiError(r) + '.'); return; }
+      var d = r.data || {};
+      var msg = 'SEO optimize completed for article #' + articleId + ': verdict ' + (d.verdict || '—') +
+        (d.repairedFields && d.repairedFields.length ? ' — repaired: ' + d.repairedFields.join(', ') : ' — nothing needed repair') +
+        (d.checks ? ' — ' + seoChecksText(d.checks) : '') + (d.note ? ' ' + d.note : '');
+      setText('autonomyFactCheckDetail', msg);
+      loadPipeline();
+    }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
+  }
+
+  // Fix 4: owner-visible review of unresolved corrections.
+  function loadCorrections(articleId) {
+    correctionArticleId = articleId;
+    setText('autonomyCorrectionStatus', 'Loading unresolved corrections for article #' + articleId + '…');
+    api('/api/autonomy/corrections?article_id=' + encodeURIComponent(articleId)).then(function (r) {
+      var list = el('autonomyCorrectionList');
+      if (!r.ok) { setText('autonomyCorrectionStatus', apiError(r)); if (list) list.innerHTML = ''; return; }
+      var items = (r.data && r.data.corrections) || [];
+      setText('autonomyCorrectionStatus', items.length + ' unresolved correction(s) for article #' + articleId + '. Resolving never marks an unsupported claim verified — it only records the owner’s decision, and the gate re-evaluates from the recorded state.');
+      if (!list) return;
+      list.innerHTML = items.map(function (c) {
+        var ev = c.evidenceUrl ? '<a href="' + esc(c.evidenceUrl) + '" target="_blank" rel="noopener">' + esc(c.evidenceUrl) + '</a>' : '—';
+        var hist = (c.resolutions || []).map(function (res) {
+          return esc(res.resolution || '') + (res.note ? ' — ' + esc(res.note) : '') + ' (' + fmtDate(res.created_at) + ')';
+        }).join(' | ');
+        return '<div class="card"><p><strong>Original claim:</strong> ' + esc(c.originalText || '') + '</p>' +
+          '<p><strong>Attempted correction:</strong> ' + esc(c.attemptedCorrection || '—') + '</p>' +
+          '<p class="muted">Status: ' + esc(c.status || '') + ' · attempt ' + esc(String(c.attempt != null ? c.attempt : '—')) + ' · recheck verdict: ' + esc(c.recheckVerdict || '—') + '</p>' +
+          '<p><strong>Evidence:</strong> ' + ev + '</p>' +
+          '<p><strong>Why it failed:</strong> ' + esc(c.failureReason || '—') + '</p>' +
+          (hist ? '<p class="muted"><strong>Resolution history:</strong> ' + hist + '</p>' : '') +
+          '<div class="field"><label>Resolution</label><select data-autonomy-correction-resolution="' + esc(String(c.id)) + '">' +
+          '<option value="accepted-unresolved-removed">Accept as unresolved — remove the claim</option>' +
+          '<option value="manually-corrected-rechecked">Manually corrected — re-check it</option>' +
+          '<option value="rejected-for-retry">Reject — try another attempt</option>' +
+          '<option value="pending-human-review">Pending human review</option>' +
+          '</select></div>' +
+          '<div class="field"><label>Corrected text (only for “Manually corrected” — it is re-checked against the article’s own sources)</label><input type="text" data-autonomy-correction-text="' + esc(String(c.id)) + '" placeholder="The corrected claim"></div>' +
+          '<div class="field"><label>Note (optional)</label><input type="text" data-autonomy-correction-note="' + esc(String(c.id)) + '" placeholder="Why this decision"></div>' +
+          '<p><button class="btn btn-small" type="button" data-autonomy-correction-resolve="' + esc(String(c.id)) + '">Resolve</button></p></div>';
+      }).join('') || '<p>No unresolved corrections for this article.</p>';
+    }).catch(function () { setText('autonomyCorrectionStatus', 'Could not reach the FS AI server.'); });
+  }
+
+  function resolveCorrection(correctionId, card) {
+    var resSel = card ? card.querySelector('[data-autonomy-correction-resolution]') : null;
+    var txtEl = card ? card.querySelector('[data-autonomy-correction-text]') : null;
+    var noteEl = card ? card.querySelector('[data-autonomy-correction-note]') : null;
+    var resolution = resSel ? resSel.value : '';
+    var body = { resolution: resolution };
+    if (noteEl && noteEl.value.trim()) body.note = noteEl.value.trim();
+    if (resolution === 'manually-corrected-rechecked') {
+      if (!txtEl || !txtEl.value.trim()) { setText('autonomyCorrectionStatus', 'Enter the corrected text first — “Manually corrected” needs the corrected claim.'); return; }
+      body.correctedText = txtEl.value.trim();
+    }
+    setText('autonomyCorrectionStatus', 'Recording resolution…');
+    api('/api/autonomy/corrections/' + encodeURIComponent(correctionId) + '/resolve', { method: 'POST', body: body }).then(function (r) {
+      if (!r.ok) { setText('autonomyCorrectionStatus', apiError(r)); return; }
+      var d = r.data || {};
+      var corr = d.correction || {};
+      setText('autonomyCorrectionStatus', 'Resolution recorded: ' + (d.resolution || resolution) + ' — correction #' + correctionId + ' is now ' + (corr.status || '—') + '.' + (d.gateEffect ? ' ' + d.gateEffect : ''));
+      if (correctionArticleId != null) loadCorrections(correctionArticleId);
+      loadPipeline();
+    }).catch(function () { setText('autonomyCorrectionStatus', 'Could not reach the FS AI server.'); });
+  }
+
+  // Fix 10: the recorded RSS fetch history (read-only — a reload
+  // never changes the counts).
+  function loadRssAudit() {
+    setText('autonomyRssAuditStatus', 'Loading fetch history…');
+    api('/api/autonomy/rss-audit?limit=50').then(function (r) {
+      var list = el('autonomyRssAuditList');
+      if (!r.ok) { setText('autonomyRssAuditStatus', apiError(r)); if (list) list.innerHTML = ''; return; }
+      var d = r.data || {};
+      var totals = d.totals || {};
+      setText('autonomyRssAuditStatus', (d.total != null ? d.total : 0) + ' recorded fetch(es); ' + (totals.sourcesReconciled != null ? totals.sourcesReconciled : '—') + ' of ' + (totals.sourcesTotal != null ? totals.sourcesTotal : '—') + ' sources reconcile. ' + (d.note || ''));
+      if (!list) return;
+      list.innerHTML = (d.audits || []).map(function (a) {
+        return '<tr><td><strong>' + esc(a.feed_url || '') + '</strong><br><span class="muted">feed #' + esc(String(a.source_id)) + '</span></td>' +
+          '<td>' + fmtDate(a.started_at) + '</td><td>' + esc(a.trigger_type || '') + '</td>' +
+          '<td>' + esc(String(a.items_discovered != null ? a.items_discovered : '—')) + '</td>' +
+          '<td>' + esc(String(a.items_inserted != null ? a.items_inserted : '—')) + '</td>' +
+          '<td>' + esc(String(a.duplicates_skipped != null ? a.duplicates_skipped : '—')) + '</td>' +
+          '<td>' + esc(a.errors ? String(a.errors).slice(0, 120) : '—') + '</td>' +
+          '<td>' + statusPill(a.status) + '</td></tr>';
+      }).join('') || '<tr><td colspan="8">No fetches recorded yet — the audit log starts with migration 014.</td></tr>';
+    }).catch(function () { setText('autonomyRssAuditStatus', 'Could not reach the FS AI server.'); });
+  }
+
+  // Fix 9: manual weekly run. Owner-only; the server enforces the
+  // E-Stop, protection and duplicate rules and answers with the real
+  // status (completed / already_completed / blocked) — the button
+  // never claims success for a no-op.
+  function runWeekly(btn) {
+    if (btn) btn.disabled = true;
+    setText('autonomyRunWeeklyStatus', 'Running the weekly workflow…');
+    api('/api/autonomy/run-weekly', { method: 'POST', body: {} }).then(function (r) {
+      if (btn) btn.disabled = false;
+      if (!r.ok) { setText('autonomyRunWeeklyStatus', apiError(r)); return; }
+      var d = r.data || {};
+      var status = d.status || 'completed';
+      var msg;
+      if (status === 'already_completed') {
+        msg = 'Weekly workflow already ran this week (report #' + (d.reportId != null ? d.reportId : '—') + ') — no re-run. ' + (d.reason || '');
+      } else if (status === 'blocked') {
+        msg = 'Weekly workflow blocked — Emergency Stop is on.';
+      } else {
+        msg = 'Weekly workflow completed (report #' + (d.reportId != null ? d.reportId : '—') + ').';
+      }
+      setText('autonomyRunWeeklyStatus', msg);
+      loadStatus();
+      loadTasks();
+      loadReports();
+      loadPipeline();
+    }).catch(function () { if (btn) btn.disabled = false; setText('autonomyRunWeeklyStatus', 'Could not reach the FS AI server.'); });
+  }
+
   function enqueueAgentTask(agent, kind, articleId, statusElId) {
     setText(statusElId, 'Creating ' + kind + ' task for article #' + articleId + '…');
     var key = 'manual-' + kind + '-' + articleId + '-' + new Date().toISOString().slice(0, 10);
     api('/api/autonomy/tasks', { method: 'POST', body: { agent: agent, kind: kind, payload: { article_id: Number(articleId) }, idempotency_key: key } }).then(function (r) {
       if (!r.ok) { setText(statusElId, apiError(r)); return; }
       var task = r.data.task || {};
-      setText(statusElId, kind + ' task created (task #' + task.id + ')' + (r.data.duplicate ? ' — already existed.' : '') + ' — run it from the task queue.');
+      setText(statusElId, kind + ' task created (task #' + task.id + ')' + (r.data.duplicate ? ' — already existed.' : '') + ' — run it from the task queue.' + sourceMergeText(r.data.sourceMerge));
       loadTasks();
+      loadPipeline();
     }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
   }
 
@@ -850,8 +1068,14 @@
           loadStatus();
           loadTasks();
           loadReports();
+          loadPipeline();
         }).catch(function () { dailyBtn.disabled = false; setText('autonomyRunDailyStatus', 'Could not reach the FS AI server.'); });
       });
+    }
+
+    var weeklyBtn = el('autonomyRunWeeklyBtn');
+    if (weeklyBtn) {
+      weeklyBtn.addEventListener('click', function () { runWeekly(weeklyBtn); });
     }
 
     var createContentBtn = el('autonomyCreateContentBtn');
@@ -870,7 +1094,7 @@
         api('/api/autonomy/tasks', { method: 'POST', body: { agent: 'content-creation', kind: 'article-draft', payload: { title: title, division: division, sources: sources }, division_id: DIVISION_IDS[division], idempotency_key: key } }).then(function (r) {
           if (!r.ok) { setText('autonomyCreateContentStatus', apiError(r)); return; }
           var task = r.data.task || {};
-          setText('autonomyCreateContentStatus', 'Content task created (task #' + task.id + ')' + (r.data.duplicate ? ' — this task already existed (same title today).' : '') + ' — run it under “Run a task manually”, then convert its scaffold (run ID) to a draft.');
+          setText('autonomyCreateContentStatus', 'Content task created (task #' + task.id + ')' + (r.data.duplicate ? ' — this task already existed (same title today).' : '') + ' — run it under “Run a task manually”, then convert its scaffold (run ID) to a draft.' + sourceMergeText(r.data.sourceMerge));
           loadTasks();
           loadStatus();
         }).catch(function () { setText('autonomyCreateContentStatus', 'Could not reach the FS AI server.'); });
@@ -896,6 +1120,7 @@
           if (!r.ok) { setText('autonomyConvertStatus', apiError(r)); return; }
           var article = r.data.article || {};
           setText('autonomyConvertStatus', 'Scaffold converted to a CMS draft' + (article.id != null ? ' (article #' + article.id + ')' : '') + ' — owner review required before publishing.');
+          loadPipeline();
         }).catch(function () { setText('autonomyConvertStatus', 'Could not reach the FS AI server.'); });
       });
     }
@@ -959,6 +1184,11 @@
       });
     }
 
+    var rssAuditBtn = el('autonomyLoadRssAuditBtn');
+    if (rssAuditBtn) {
+      rssAuditBtn.addEventListener('click', loadRssAudit);
+    }
+
     var addSourceBtn = el('autonomyAddSourceBtn');
     if (addSourceBtn) {
       addSourceBtn.addEventListener('click', function () {
@@ -983,12 +1213,34 @@
     var pipelineList = el('autonomyPipelineList');
     if (pipelineList) {
       pipelineList.addEventListener('click', function (e) {
+        // Per-article action results go to the detail line, not the
+        // pipeline status line: loadPipeline() refreshes the table
+        // after every action and would erase a message written to the
+        // pipeline status line (minor C).
         var fcBtn = e.target.closest('[data-autonomy-factcheck]');
-        if (fcBtn) { enqueueAgentTask('fact-checking', 'fact-check', fcBtn.getAttribute('data-autonomy-factcheck'), 'autonomyPipelineStatus'); return; }
+        if (fcBtn) { enqueueAgentTask('fact-checking', 'fact-check', fcBtn.getAttribute('data-autonomy-factcheck'), 'autonomyFactCheckDetail'); return; }
+        var recheckBtn = e.target.closest('[data-autonomy-recheck]');
+        if (recheckBtn) { recheckArticle(recheckBtn.getAttribute('data-autonomy-recheck')); return; }
         var corrBtn = e.target.closest('[data-autonomy-correct]');
-        if (corrBtn) { enqueueAgentTask('fact-checking', 'correct', corrBtn.getAttribute('data-autonomy-correct'), 'autonomyPipelineStatus'); return; }
+        if (corrBtn) { enqueueAgentTask('fact-checking', 'correct', corrBtn.getAttribute('data-autonomy-correct'), 'autonomyFactCheckDetail'); return; }
+        var seoCheckBtn = e.target.closest('[data-autonomy-seo-check]');
+        if (seoCheckBtn) { seoCheckArticle(seoCheckBtn.getAttribute('data-autonomy-seo-check')); return; }
+        var seoOptBtn = e.target.closest('[data-autonomy-seo-optimize]');
+        if (seoOptBtn) { seoOptimizeArticle(seoOptBtn.getAttribute('data-autonomy-seo-optimize')); return; }
+        var reviewBtn = e.target.closest('[data-autonomy-review]');
+        if (reviewBtn) { loadCorrections(reviewBtn.getAttribute('data-autonomy-review')); return; }
         var detailBtn = e.target.closest('[data-autonomy-fc-detail]');
         if (detailBtn) { loadFactCheckDetail(detailBtn.getAttribute('data-autonomy-fc-detail')); }
+      });
+    }
+
+    var correctionList = el('autonomyCorrectionList');
+    if (correctionList) {
+      correctionList.addEventListener('click', function (e) {
+        var resolveBtn = e.target.closest('[data-autonomy-correction-resolve]');
+        if (!resolveBtn) return;
+        var card = resolveBtn.closest('.card');
+        resolveCorrection(resolveBtn.getAttribute('data-autonomy-correction-resolve'), card);
       });
     }
 

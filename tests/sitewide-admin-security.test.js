@@ -3,8 +3,10 @@
 // Pins the findings of the 2026-11-14 site-wide/admin/security/SEO audit:
 //   - sitemap has exactly 60 URLs; robots.txt points at it.
 //   - homepage carries a canonical, OG tags and JSON-LD; article/division
-//     pages upgrade the canonical to the per-article / per-division URL
-//     in JavaScript (static HTML ships the base canonical only).
+//     pages set the canonical to the per-article / per-division URL
+//     in JavaScript (the article page ships NO static canonical — one
+//     shared URL would be wrong for all 25 articles; the script creates
+//     the link element when none exists).
 //   - newsletter copy never claims a confirmation email was sent: the
 //     stored state is "pending" and the UI says so honestly.
 //   - no secret VALUES ship in frontend JS/HTML (names such as
@@ -54,8 +56,8 @@ describe('SEO files (sitemap / robots / canonicals)', () => {
     const locs = xml.match(/<loc>[^<]+<\/loc>/g) || [];
     assert.equal(locs.length, 60, `expected 60 <loc> entries, found ${locs.length}`);
     assert.ok(locs.includes('<loc>https://fs-ai-5w5.pages.dev/</loc>'));
-    assert.ok(locs.includes('<loc>https://fs-ai-5w5.pages.dev/pages/article.html?id=25</loc>'));
-    assert.ok(locs.includes('<loc>https://fs-ai-5w5.pages.dev/pages/privacy.html</loc>'));
+    assert.ok(locs.includes('<loc>https://fs-ai-5w5.pages.dev/pages/article?id=25</loc>'));
+    assert.ok(locs.includes('<loc>https://fs-ai-5w5.pages.dev/pages/privacy</loc>'));
   });
 
   it('robots.txt allows all and names the sitemap', () => {
@@ -76,7 +78,7 @@ describe('SEO files (sitemap / robots / canonicals)', () => {
 
   it('article and division pages inject a per-item canonical in JS', () => {
     const article = read('frontend/pages/article.html');
-    assert.match(article, /canonical = 'https:\/\/fs-ai-5w5\.pages\.dev\/pages\/article\.html\?id=' \+ a\.id/);
+    assert.match(article, /canonical = 'https:\/\/fs-ai-5w5\.pages\.dev\/pages\/article\?id=' \+ a\.id/);
     const division = read('frontend/pages/division.html');
     assert.match(division, /canonical/);
     assert.ok(division.includes('division'), 'division page handles per-division canonical');

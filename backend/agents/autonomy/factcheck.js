@@ -29,6 +29,17 @@
  * with no recorded sources gets an EMPTY pool, and correction then
  * marks claims for human review instead of reaching for unrelated
  * sources.
+ *
+ * CORRECTION QUALITY + CITATION-AWARE EXTRACTION (Fixes 2+3,
+ * 2026-11-20): a rewrite must be one whole evidence-backed sentence
+ * (cleanCandidate + isValidReplacementSentence); replaceSentence uses a
+ * literal replacement and a citation-tolerant matcher; removal is
+ * allowed only when it preserves context; and validateCorrectedBody
+ * rejects any corrected body with fragments, splices, repeats,
+ * incomplete paragraphs or evidence-ungrounded new sentences — on
+ * rejection nothing is saved. extractClaims excludes citation/source
+ * lines and bibliography sections but keeps factual claims that carry
+ * a trailing citation URL (citation stripped, claim kept).
  */
 import { d1All, d1First, d1Run, DISCLAIMER_DIVISIONS } from '../../middleware/validation.js';
 import { generateText } from '../../llm/index.js';
@@ -53,12 +64,117 @@ function parsePayload(task) {
   return {};
 }
 
+const ASSERTION_VERB_RE = /\b(is|are|was|were|has|have|can|will|uses|provides|offers|means|includes|requires|takes|costs|lasts|covers|helps|gives|makes)\b/i;
+const CITATION_SECTION_RE = /^\s*(sources?|references?|related reading|further reading)\s*:/i;
+
+/**
+ * Citation-aware claim extraction (Fix 3, 2026-11-20).
+ *
+ * The old extractor split the body into sentences with no citation
+ * awareness, so a source-reference line such as
+ * "(https://…/sila-panasonic-battery-deal/) - **MIT Technology Review**
+ * – "What a..." became a permanently CONFLICTING claim on article #28:
+ * it can never verify, so the gate could never pass. These helpers
+ * exclude citation material while preserving real factual statements:
+ *
+ * EXCLUDED (never a claim):
+ *  - "Sources:" / "References:" / "Related reading:" / "Further
+ *    reading:" section headers, and every line after one until the next
+ *    markdown heading or the end of the body (these sections are
+ *    terminal in generated bodies — content.js appends "Sources:" last
+ *    and seo.js appends "Related reading:" last).
+ *  - Standalone URLs, including parenthesised "(https://…)" lines.
+ *  - Bibliography entries: bullet/numbered items that are a bare link,
+ *    a bold source label + dash + URL/quote ("- **MIT Technology
+ *    Review** – "What a..."), or a list item with no assertion verb
+ *    outside quotes that looks like a source attribution (quoted title,
+ *    publication-style name + comma/dash, "press release", "retrieved").
+ *  - A line that is only one quoted fragment/title, with no attribution
+ *    after the closing quote (a pulled headline, not a statement).
+ *  - "Source:" lines.
+ *
+ * PRESERVED (still extracted, citation part stripped):
+ *  - A sentence with a factual assertion + a trailing citation URL —
+ *    the parenthesised URL or " - <url>" tail is stripped, the claim is
+ *    kept. A bare mid-sentence URL is left verbatim (the claim still
+ *    states a fact); the tolerant matcher in replaceSentence finds the
+ *    claim in the body even after its citation part was stripped.
+ *  - Real claims that merely sit near citations, and list items that
+ *    DO assert something ("- **Fast charging** is available …" stays).
+ */
+function stripLeadingCitationPrefix(line) {
+  // A line that opens with a parenthesised citation URL: drop the URL
+  // (and a following dash) and keep whatever statement follows it.
+  return String(line || '').replace(/^\s*\(https?:\/\/[^)]*\)\s*[–—-]?\s*/, '');
+}
+
+function isReferenceListItem(line) {
+  const m = String(line || '').match(/^\s*([-*•]|\d+[.)])\s+(.*)$/);
+  if (!m) return false;
+  const rest = m[2].trim();
+  if (/https?:\/\//.test(rest)) return true;
+  if (/^\*\*[^*]+\*\*\s*[–—-]/.test(rest)) return true;
+  // A list item with no assertion verb outside quotes that looks like a
+  // source attribution is a reference, not a claim. (A real claim in a
+  // list — "- **Fast charging** is available …" — has an assertion verb
+  // and is kept.)
+  const outsideQuotes = rest.replace(/"[^"]*"/g, '').replace(/“[^”]*”/g, '');
+  if (ASSERTION_VERB_RE.test(outsideQuotes)) return false;
+  if (/["“]/.test(rest)) return true;
+  if (/\b(retrieved|accessed|available at|press release)\b/i.test(rest)) return true;
+  if (/^([A-Z][\w&.'-]+(\s+[A-Z][\w&.'-]+){0,4})\s*[,–—-]/.test(rest)) return true;
+  return false;
+}
+
+function isCitationOnlyLine(line) {
+  const s = String(line || '').trim();
+  if (!s) return false;
+  if (CITATION_SECTION_RE.test(s)) return true;
+  if (/^source\s*:/i.test(s)) return true;
+  if (/^[\(\[]?https?:\/\/\S+[\)\]]?$/.test(s)) return true;
+  if (/^\*\*[^*]+\*\*\s*[–—-]\s*(https?:|\(https?:|["“'])/.test(s)) return true;
+  if (isReferenceListItem(s)) return true;
+  // One standalone quoted fragment/title, nothing after the closing
+  // quote (a pulled headline). A quoted statement WITH attribution
+  // ("…," said the chief executive.) has text after the closing quote
+  // and is kept.
+  if (/^["“][^"”]*["”][.!?]?\s*$/.test(s)) return true;
+  return false;
+}
+
+/** Remove citation-only lines from a body (shared by extractClaims and
+ *  the corrected-body validator so both agree on what is a citation). */
+function stripCitationLines(body) {
+  const lines = String(body || '').split('\n');
+  const kept = [];
+  let inCitationSection = false;
+  for (const line of lines) {
+    if (/^\s*#{1,6}\s/.test(line)) { inCitationSection = false; kept.push(line); continue; }
+    if (CITATION_SECTION_RE.test(line.trim())) { inCitationSection = true; continue; }
+    if (inCitationSection) continue;
+    const stripped = stripLeadingCitationPrefix(line);
+    if (isCitationOnlyLine(stripped)) continue;
+    kept.push(stripped);
+  }
+  return kept.join('\n');
+}
+
 /** Split a body into checkable claim sentences (headings + the AI-DRAFT marker excluded). */
 export function extractClaims(body, { maxClaims = MAX_CLAIMS_PER_ARTICLE } = {}) {
-  const text = String(body || '')
+  const text = stripCitationLines(String(body || ''))
     .replace(/^AI-DRAFT[^\n]*\n?/im, '')
     .replace(/^#{1,6}\s+.*$/gm, ' ')
-    .replace(/\n+/g, ' ');
+    .replace(/\n+/g, ' ')
+    // Strip citation material from inside sentences, keeping the claim:
+    // a parenthesised URL, or a trailing " - <url>" tail (a trailing
+    // period after the URL is preserved so the sentence still ends),
+    // or a citation tail glued to the previous sentence ("…States. -
+    // **MIT Technology Review** – "What a…""). A bold-label tail in the
+    // MIDDLE of a sentence is left verbatim (it stays findable for
+    // correction); only tails after a sentence boundary are stripped.
+    .replace(/\s*\(https?:\/\/[^)]*\)/g, '')
+    .replace(/\s*[–—-]\s*https?:\/\/\S+/g, (m) => (m.endsWith('.') ? '.' : ''))
+    .replace(/([.!?]\s+)[–—-]\s*\*\*[^*]+\*\*\s*[–—-]\s*["“][^"”]*["”][.!?]?\s*/g, '$1');
   const raw = text.split(/(?<=[.!?])\s+/);
   const claims = [];
   for (const sentence of raw) {
@@ -66,7 +182,7 @@ export function extractClaims(body, { maxClaims = MAX_CLAIMS_PER_ARTICLE } = {})
     if (s.length < 40 || s.length > 500) continue;
     if (!/[a-zA-Z]/.test(s)) continue;
     const hasNumber = /\d/.test(s);
-    const hasAssertion = /\b(is|are|was|were|has|have|can|will|uses|provides|offers|means|includes|requires|takes|costs|lasts|covers|helps|gives|makes)\b/i.test(s);
+    const hasAssertion = ASSERTION_VERB_RE.test(s);
     const words = s.split(/\s+/);
     const hasEntity = words.slice(1).some((w) => /^[A-Z][a-z]{2,}/.test(w));
     if (!hasNumber && !hasAssertion && !hasEntity) continue;
@@ -316,14 +432,366 @@ export async function checkArticle(env, article) {
   };
 }
 
+/**
+ * Build a tolerant search pattern for a claim sentence in the body.
+ * A claim extracted by extractClaims may have had its citation part
+ * stripped (a parenthesised URL, or a " - <url>" tail), so the body can
+ * hold citation material where the claim has only whitespace, or just
+ * before its final punctuation. The pattern allows exactly that — an
+ * optional parenthesised URL or dash-URL — at each whitespace run and
+ * before the closing punctuation, and nothing else.
+ */
+function claimPattern(sentence) {
+  const escaped = String(sentence).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const citationInsert = '(?:\\([^)]*https?:\\/\\/[^)]*\\)|[–—-]\\s*https?:\\/\\/\\S+)';
+  let pattern = escaped.replace(/\s+/g, `\\s+(?:${citationInsert}\\s+)?`);
+  pattern = pattern.replace(/\\([.!?])$/, `(?:\\s*${citationInsert})?\\$1`);
+  return new RegExp(pattern);
+}
+
 function replaceSentence(body, sentence, replacement) {
   const text = String(body || '');
   const idx = text.indexOf(sentence);
   if (idx >= 0) return text.slice(0, idx) + replacement + text.slice(idx + sentence.length);
-  const escaped = sentence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-  const re = new RegExp(escaped);
+  const re = claimPattern(sentence);
   if (!re.test(text)) return null;
-  return text.replace(re, replacement);
+  // Replacement via a function: a literal `$&` / `$'` / "$`" in the
+  // replacement would otherwise be interpreted by String.replace and
+  // splice matched body text into the sentence (a second splice vector
+  // next to the unvalidated LLM rewrite). A function return is literal.
+  return text.replace(re, () => replacement);
+}
+
+/**
+ * Correction quality (Fix 2, 2026-11-20).
+ *
+ * SPLICE CAUSE (article #28, live): the correction loop accepted any
+ * LLM reply that was long enough, different from the original and free
+ * of invented numbers, and inserted it VERBATIM with replaceSentence.
+ * Nothing checked that the reply was a single complete sentence, so a
+ * reply that ran a fragment and a second sentence together —
+ * "a potential key to smaller The deal—worth more than a billion
+ * dollars—aims to supply silicon-carbon anode material..." — was saved
+ * as one "sentence". A second vector: replaceSentence passed the
+ * candidate to String.replace as a raw replacement string, so any
+ * `$&` / `$'` / "$`" in it would splice matched body text into the
+ * sentence. Both are fixed here, and validateCorrectedBody below is
+ * the backstop that rejects any corrected body that still garbles.
+ */
+
+function normaliseText(s) {
+  return String(s || '').trim().replace(/\s+/g, ' ');
+}
+
+function splitSentences(text) {
+  return String(text || '')
+    .replace(/^AI-DRAFT[^\n]*\n?/im, '')
+    .replace(/^#{1,6}\s+.*$/gm, ' ')
+    .replace(/\n+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim().replace(/\s+/g, ' '))
+    .filter(Boolean);
+}
+
+/** A sentence-start capitalised mid-sentence after a lowercase word,
+ *  followed by a lowercase word: "…smaller The deal…" — the #28 splice
+ *  signature. Genuine publication names ("according to The Verge") do
+ *  NOT match: the word after "The" is capitalised there. */
+const SPLICE_MARKER_RE = /\b[a-z]{2,}\s+(The|This|That|These|Those|It|They|We|He|She)\s+[a-z]/;
+const DOUBLED_WORD_RE = /\b(the|a|an|and|to|of|is|was|were|in|on|for|with)\s+\1\b/i;
+
+function startsWithLowercaseFragment(s) {
+  const text = String(s || '').trim();
+  if (/^["“'(\[]?\d/.test(text)) return false; // "14 million …" starts with a number, not a fragment
+  if (/^(e\.g\.|i\.e\.)/i.test(text)) return false;
+  const m = text.match(/[A-Za-z]/);
+  return Boolean(m) && m[0] !== m[0].toUpperCase();
+}
+
+/** Strip an LLM reply down to its first complete sentence. A reply
+ *  that runs two sentences (or a fragment + a sentence) together is
+ *  never inserted whole — only its first sentence is even considered,
+ *  and isValidReplacementSentence below must still accept it. */
+function cleanCandidate(raw) {
+  let text = String(raw || '').trim().replace(/\s+/g, ' ');
+  text = text.replace(/^(corrected sentence|correction|rewritten sentence)\s*:\s*/i, '');
+  text = text.replace(/^here is (the )?(corrected|rewritten)[^:]*:\s*/i, '');
+  text = text.replace(/^["“']|["”']$/g, '').trim();
+  const parts = text.split(/(?<=[.!?])\s+/);
+  return (parts[0] || '').trim().replace(/["”']$/, '').trim();
+}
+
+/** A rewrite is usable only as ONE whole evidence-backed sentence:
+ *  single complete sentence, capitalised start, terminal punctuation,
+ *  no splice marker, no raw URL, no first-person refusal/meta reply,
+ *  no doubled word. Numbers are checked separately against the
+ *  evidence quote by the caller (unchanged rule). */
+function isValidReplacementSentence(candidate, original) {
+  if (!candidate || candidate === original) return false;
+  if (candidate.length < 20 || candidate.length > 500) return false;
+  if (startsWithLowercaseFragment(candidate)) return false;
+  if (!/[.!?]["”')]?$/.test(candidate)) return false;
+  if (SPLICE_MARKER_RE.test(candidate)) return false;
+  if (/[a-z][.!?][A-Z]/.test(candidate)) return false;
+  if (/https?:\/\//.test(candidate)) return false;
+  if (/\b(as an ai|i (do not|don't|can ?not|cannot) (know|verify|confirm)|i'?m sorry|unable to verify)\b/i.test(candidate)) return false;
+  if (DOUBLED_WORD_RE.test(candidate)) return false;
+  if (!/[a-zA-Z]/.test(candidate)) return false;
+  return true;
+}
+
+const BACK_REFERENCE_START_RE = /^(this|that|these|those|it|they|such|the above)\b/i;
+
+/**
+ * Removal preserves context only when no sentence left in the same
+ * paragraph opens with a back-reference ("This deal …") that would
+ * dangle without the removed sentence, and the removed sentence does
+ * not hand off to what follows ("as follows", a trailing colon). A
+ * whole paragraph disappearing is fine (blank lines are harmless);
+ * cross-paragraph dangling references are NOT detected — see the
+ * report's limits. When this returns false the claim is skipped for
+ * human review instead of being removed.
+ */
+function removalPreservesContext(body, sentence) {
+  const target = normaliseText(sentence);
+  if (/\b(as follows|see below|listed below|following)\s*:?\s*$/.test(target) || /:\s*$/.test(target)) return false;
+  const pattern = claimPattern(sentence);
+  const paragraphs = String(body || '').split(/\n\s*\n/);
+  for (const para of paragraphs) {
+    const norm = normaliseText(para);
+    if (!pattern.test(norm)) continue;
+    const rest = norm.replace(pattern, '').replace(/\s+/g, ' ').trim();
+    if (!rest) return true;
+    const restSentences = rest.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+    if (restSentences.some((s) => BACK_REFERENCE_START_RE.test(s))) return false;
+    return true;
+  }
+  return false;
+}
+
+function wordSet(s) {
+  return new Set(String(s).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean));
+}
+
+function jaccardSimilarity(a, b) {
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter += 1;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 1 : inter / union;
+}
+
+function hasWholeWord(text, word) {
+  const escaped = String(word).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`).test(String(text || '').toLowerCase());
+}
+
+/** Structural issues of one sentence: { type, reason }.
+ *  Types: fragment | splice | missing-space | doubled-word | run-on |
+ *  raw-url. */
+function sentenceIssues(sentence) {
+  const issues = [];
+  const s = String(sentence || '').trim();
+  if (!s) return issues;
+  const excerpt = s.slice(0, 80);
+  if (startsWithLowercaseFragment(s)) {
+    issues.push({ type: 'fragment', reason: `broken sentence fragment (starts with a lowercase letter): "${excerpt}"` });
+  }
+  if (SPLICE_MARKER_RE.test(s)) {
+    issues.push({ type: 'splice', reason: `spliced sentence (a second sentence-start appears mid-sentence): "${excerpt}"` });
+  }
+  if (/[a-z][.!?][A-Z]/.test(s)) {
+    issues.push({ type: 'missing-space', reason: `fragment (missing space after a sentence boundary): "${excerpt}"` });
+  }
+  if (DOUBLED_WORD_RE.test(s)) {
+    issues.push({ type: 'doubled-word', reason: `repeated word in sentence: "${excerpt}"` });
+  }
+  if (s.length > 500) {
+    issues.push({ type: 'run-on', reason: `run-on sentence over 500 characters: "${excerpt}"` });
+  }
+  if (/https?:\/\//.test(s)) {
+    issues.push({ type: 'raw-url', reason: `sentence contains a raw URL (citation not stripped): "${excerpt}"` });
+  }
+  return issues;
+}
+
+/** Repeated / near-duplicate sentences in a sentence list. Short stock
+ *  sentences (< 6 words) may legitimately repeat and are ignored. */
+function duplicateIssues(sentences) {
+  const issues = [];
+  const items = sentences.map((s) => ({
+    s, norm: normaliseText(s).toLowerCase(), words: wordSet(s),
+    wordCount: String(s).split(/\s+/).filter(Boolean).length,
+  }));
+  const seen = new Map();
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (item.wordCount >= 6 && seen.has(item.norm)) {
+      issues.push({ key: `dup:${item.norm}`, reason: `repeated sentence: "${item.s.slice(0, 80)}"` });
+      continue;
+    }
+    seen.set(item.norm, i);
+    if (item.wordCount < 8) continue;
+    for (let j = 0; j < i; j++) {
+      if (items[j].wordCount < 8) continue;
+      if (jaccardSimilarity(items[j].words, item.words) >= 0.9) {
+        const key = `dup:${[items[j].norm, item.norm].sort().join('|')}`;
+        issues.push({ key, reason: `near-duplicate sentences: "${items[j].s.slice(0, 60)}" / "${item.s.slice(0, 60)}"` });
+        break;
+      }
+    }
+  }
+  return issues;
+}
+
+/** Paragraphs (citation lines and headings removed) that do not end
+ *  with terminal punctuation — an incomplete paragraph left behind by
+ *  a removal or a truncated rewrite. */
+function paragraphIssues(body) {
+  const issues = [];
+  const cleaned = stripCitationLines(String(body || ''));
+  for (const para of cleaned.split(/\n\s*\n/)) {
+    const lines = para.split('\n').map((l) => l.trim())
+      .filter((l) => l && !/^#{1,6}\s/.test(l) && !/^AI-DRAFT\b/.test(l));
+    const text = lines.join(' ').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    if (/:\s*$/.test(text)) continue; // list intro, e.g. "Key points:"
+    if (/^!?\[.*?\]\(https?:\/\/[^)]*\)$/.test(text)) continue; // link-only paragraph
+    if (/[.!?]["”')\]]?\s*$/.test(text)) continue;
+    issues.push({
+      key: `para:${normaliseText(text).toLowerCase().slice(0, 120)}`,
+      reason: `incomplete paragraph (no closing sentence punctuation): "${text.slice(0, 80)}"`,
+    });
+  }
+  return issues;
+}
+
+function balanceIssues(body) {
+  const issues = [];
+  const text = String(body || '');
+  const straightQuotes = (text.match(/"/g) || []).length;
+  const openQuotes = (text.match(/“/g) || []).length;
+  const closeQuotes = (text.match(/”/g) || []).length;
+  if (straightQuotes % 2 !== 0 || openQuotes !== closeQuotes) {
+    issues.push({ key: 'quotes', reason: 'unbalanced quotation marks in the corrected body' });
+  }
+  const openParens = (text.match(/\(/g) || []).length;
+  const closeParens = (text.match(/\)/g) || []).length;
+  if (openParens !== closeParens) {
+    issues.push({ key: 'parens', reason: 'unbalanced parentheses in the corrected body' });
+  }
+  return issues;
+}
+
+/**
+ * Evidence-grounding issues for sentences the correction ADDED (new
+ * vs the original body): numbers and named entities must come from the
+ * article's own evidence pool (or, for entities, from the original
+ * body — a rewrite may reuse the article's own names), and a sentence
+ * sharing no key word with either is unrelated content. A single
+ * unsupported Titlecase entity is flagged; words after a colon, dash
+ * or opening quote are sentence-medial headings, not entities.
+ */
+function evidenceIssues(newSentences, evidencePool, originalBody) {
+  const issues = [];
+  const poolText = (evidencePool || [])
+    .map((p) => [p.title, p.text].filter(Boolean).join(' ')).join(' ').toLowerCase();
+  const poolWords = new Set(poolText.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length >= 3));
+  const originalWords = wordSet(originalBody);
+  const originalLower = String(originalBody || '').toLowerCase();
+  for (const sentence of newSentences) {
+    const key = normaliseText(sentence).toLowerCase();
+    const excerpt = sentence.slice(0, 80);
+    for (const n of claimNumbers(sentence)) {
+      if (!hasWholeWord(poolText, n)) {
+        issues.push({ key: `ev-num:${key}`, reason: `unsupported number ${n} in corrected sentence ("${excerpt}") — not in the article's evidence` });
+        break;
+      }
+    }
+    const tokens = sentence.split(/\s+/);
+    const significant = tokens
+      .map((w) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ''))
+      .filter((w) => w.length >= 4 && !STOPWORDS.has(w));
+    if (significant.length >= 3 && !significant.some((w) => poolWords.has(w) || originalWords.has(w))) {
+      issues.push({ key: `ev-unrelated:${key}`, reason: `unrelated content in corrected sentence ("${excerpt}") — none of its key words appear in the article's evidence` });
+    }
+    const unsupportedEntities = [];
+    // Determiners/pronouns are never named entities, even capitalised
+    // mid-sentence ("…smaller The deal…" is caught by the splice marker,
+    // not here).
+    const NON_ENTITY_WORDS = new Set(['the', 'a', 'an', 'this', 'that', 'these', 'those', 'it', 'they', 'we', 'he', 'she', 'his', 'her', 'their', 'our', 'your', 'its', 'i']);
+    tokens.forEach((raw, idx) => {
+      if (idx === 0) return;
+      const prev = tokens[idx - 1] || '';
+      if (/[:—–]$/.test(prev) || /^[“"'(]$/.test(prev) || /^["“'(]/.test(raw)) return;
+      const w = raw.replace(/^[“"'(\[]+/, '').replace(/[.,;:!?)"”'\]]+$/, '');
+      if (!/^[A-Z][a-z]{2,}$/.test(w)) return;
+      const lower = w.toLowerCase();
+      if (NON_ENTITY_WORDS.has(lower)) return;
+      if (hasWholeWord(poolText, lower) || hasWholeWord(originalLower, lower)) return;
+      unsupportedEntities.push(w);
+    });
+    if (unsupportedEntities.length > 0) {
+      issues.push({ key: `ev-entity:${key}`, reason: `unsupported named ${unsupportedEntities.length === 1 ? 'entity' : 'entities'} ${unsupportedEntities.join(', ')} in corrected sentence ("${excerpt}") — not in the article's evidence or original body` });
+    }
+  }
+  return issues;
+}
+
+/**
+ * Deterministic validation of a corrected body (Fix 2). REJECTS a body
+ * containing any of:
+ *  - broken sentence fragments (lowercase start, missing space after a
+ *    boundary, repeated word, run-on over 500 chars, raw URL),
+ *  - repeated sentences (exact duplicates ≥ 6 words, or near-duplicates
+ *    with word-set similarity ≥ 0.9),
+ *  - incomplete paragraphs (no closing sentence punctuation),
+ *  - unbalanced quotes / parentheses,
+ *  - unrelated content (an added sentence sharing no key word with the
+ *    article's evidence or original body),
+ *  - unsupported facts (an added sentence with a number or a named
+ *    entity not in the article's evidence pool — entities may also come
+ *    from the original body),
+ *  - incoherence (a sentence containing a second sentence-start spliced
+ *    mid-sentence, detected by the SPLICE_MARKER_RE fragment marker).
+ * Issues already present UNCHANGED in the original body are NOT counted
+ * (the correction must not make the body worse; it is not punished for
+ * pre-existing quirks). Returns { ok, reasons }.
+ */
+export function validateCorrectedBody(originalBody, correctedBody, evidencePool) {
+  const reasons = [];
+  const originalSentences = splitSentences(originalBody);
+  const correctedSentences = splitSentences(correctedBody);
+  if (correctedSentences.length === 0 && originalSentences.length > 0) {
+    reasons.push('corrected body has no complete sentences left');
+  }
+  const issueKey = (sentence, type) => `${normaliseText(sentence).toLowerCase()}|${type}`;
+  const originalKeys = new Set();
+  for (const s of originalSentences) {
+    for (const issue of sentenceIssues(s)) originalKeys.add(issueKey(s, issue.type));
+  }
+  for (const s of correctedSentences) {
+    for (const issue of sentenceIssues(s)) {
+      if (!originalKeys.has(issueKey(s, issue.type))) reasons.push(issue.reason);
+    }
+  }
+  const originalDupKeys = new Set(duplicateIssues(originalSentences).map((i) => i.key));
+  for (const issue of duplicateIssues(correctedSentences)) {
+    if (!originalDupKeys.has(issue.key)) reasons.push(issue.reason);
+  }
+  const originalParaKeys = new Set(paragraphIssues(originalBody).map((i) => i.key));
+  for (const issue of paragraphIssues(correctedBody)) {
+    if (!originalParaKeys.has(issue.key)) reasons.push(issue.reason);
+  }
+  const originalBalanceKeys = new Set(balanceIssues(originalBody).map((i) => i.key));
+  for (const issue of balanceIssues(correctedBody)) {
+    if (!originalBalanceKeys.has(issue.key)) reasons.push(issue.reason);
+  }
+  const originalNorms = new Set(originalSentences.map((s) => normaliseText(s).toLowerCase()));
+  const newSentences = correctedSentences.filter((s) => !originalNorms.has(normaliseText(s).toLowerCase()));
+  for (const issue of evidenceIssues(newSentences, evidencePool, originalBody)) {
+    reasons.push(issue.reason);
+  }
+  return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
 export async function runCorrection(env, article) {
@@ -364,6 +832,10 @@ export async function runCorrection(env, article) {
   let removed = 0;
   let skipped = 0;
   const results = [];
+  // Correction rows are collected here and written only after the
+  // whole-body validation gate below passes — a rejected correction
+  // must never leave 'applied' rows behind for a body that was not saved.
+  const pending = [];
   for (const failed of failedClaims) {
     const attemptsRow = await d1First(env, 'SELECT COUNT(*) AS n FROM article_corrections WHERE claim_check_id = ?', [failed.id]);
     const attempts = Number(attemptsRow ? attemptsRow.n : 0);
@@ -375,6 +847,7 @@ export async function runCorrection(env, article) {
     const evidence = findEvidence(failed.claim_text, pool, { minScore: 0.3 });
     let action = null;
     let correctedText = null;
+    let actionReason = null;
     // A rewrite is attempted whenever usable evidence exists — INCLUDING
     // conflicting evidence, because that is exactly the case where the
     // evidence holds the right number and the claim holds the wrong one.
@@ -390,19 +863,22 @@ export async function runCorrection(env, article) {
         maxTokens: 200,
         purpose: 'fact-check-correct',
       }, env);
-      const candidate = rewrite && rewrite.ok ? String(rewrite.text || '').trim().replace(/\s+/g, ' ') : '';
-      // A rewrite is usable only if it is a real sentence, different from
-      // the original, and does not re-introduce a number the evidence
-      // does not contain. Dropping the disputed number entirely is a
-      // legitimate correction (the re-check then judges the weaker claim).
-      // EVERY number in the candidate must appear in the evidence — one
-      // shared number (e.g. the year) must not launder an invented one.
+      // Fix 2: the reply is reduced to its first complete sentence and
+      // must pass isValidReplacementSentence — a multi-sentence or
+      // fragment reply (the #28 splice shape) is never inserted whole.
+      const candidate = cleanCandidate(rewrite && rewrite.ok ? String(rewrite.text || '') : '');
+      // A rewrite is usable only if it is a real single sentence,
+      // different from the original, and does not re-introduce a number
+      // the evidence does not contain. Dropping the disputed number
+      // entirely is a legitimate correction (the re-check then judges
+      // the weaker claim). EVERY number in the candidate must appear in
+      // the evidence — one shared number (e.g. the year) must not
+      // launder an invented one.
       // (Fixed 2026-11-19: `some` let "77 million ... in 2023" through
       // because "2023" matched.)
       const candidateNumbers = claimNumbers(candidate);
       const evidenceNumbers = claimNumbers(evidence.quote || '');
-      const candidateOk = candidate.length >= 20 && candidate !== failed.claim_text
-        && !/as an ai|i (do not|don't) know/i.test(candidate)
+      const candidateOk = isValidReplacementSentence(candidate, failed.claim_text)
         && (candidateNumbers.length === 0 || evidenceNumbers.length === 0
           || candidateNumbers.every((n) => evidenceNumbers.includes(n)));
       if (candidateOk) {
@@ -413,26 +889,97 @@ export async function runCorrection(env, article) {
           correctedText = candidate;
           corrected += 1;
         }
+      } else if (candidate) {
+        actionReason = `LLM rewrite rejected (not a single complete evidence-backed sentence): "${candidate.slice(0, 120)}"`;
       }
     }
     if (!action) {
-      // No usable evidence or no valid rewrite: remove the unsupported sentence.
-      const removedBody = replaceSentence(body, failed.claim_text, '');
-      if (removedBody !== null) {
-        body = removedBody.replace(/[ \t]{2,}/g, ' ');
-        action = 'removed';
-        removed += 1;
+      // No usable evidence or no valid rewrite: remove the unsupported
+      // sentence ONLY when removal preserves context (Fix 2) — a
+      // sentence a neighbour refers back to ("This deal …") is left for
+      // a human instead of leaving a dangling reference behind.
+      if (removalPreservesContext(body, failed.claim_text)) {
+        const removedBody = replaceSentence(body, failed.claim_text, '');
+        if (removedBody !== null) {
+          body = removedBody.replace(/[ \t]{2,}/g, ' ');
+          action = 'removed';
+          removed += 1;
+        } else {
+          action = 'failed';
+          actionReason = 'Could not locate the sentence in the body to remove it.';
+        }
       } else {
-        action = 'failed';
+        action = 'skipped';
+        actionReason = 'Removing this sentence would leave a dangling reference — needs human review.';
+        skipped += 1;
       }
     }
     const recheck = correctedText
       ? judgeClaimDeterministic(correctedText, findEvidence(correctedText, pool), pool.length === 0)
       : null;
+    pending.push({
+      failed, action, correctedText, recheck, attempt: attempts + 1,
+      evidenceUrl: action === 'corrected' && evidence ? evidence.url : null,
+      reason: actionReason,
+    });
+    results.push({
+      claim: failed.claim_text, action, correctedText,
+      evidenceUrl: action === 'corrected' && evidence ? evidence.url : null,
+      recheckVerdict: recheck ? recheck.verdict : null,
+      ...(actionReason ? { reason: actionReason } : {}),
+    });
+  }
+
+  // Whole-body validation gate (Fix 2): the corrected body must read
+  // coherently before anything is saved. On rejection the body is NOT
+  // saved (no revision row, no UPDATE — the pre-edit body is untouched),
+  // every attempted correction is recorded as a 'failed' row, and the
+  // article is left for human review (the re-check below runs on the
+  // unchanged body, verdict needs-review; fact_checked is never set).
+  // The failure reason is recorded in three places: this returned
+  // result (the run/task log), each correction row's corrected_text
+  // ("VALIDATION REJECTED — …"), and the results below. It is NOT in
+  // recheck_verdict: that column has a CHECK constraint allowing only
+  // verdict words, so free text would violate it; no new column (and
+  // therefore no migration) is in scope for this fix.
+  if (body !== originalBody) {
+    const validation = validateCorrectedBody(originalBody, body, pool);
+    if (!validation.ok) {
+      for (const p of pending) {
+        if (p.action === 'skipped') continue; // 'skipped' is not a valid status value — no row
+        await d1Run(env,
+          'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict, evidence_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [article.id, p.failed.id, p.failed.claim_text,
+            p.action === 'failed' ? null : `VALIDATION REJECTED — ${validation.reasons.join('; ')}`,
+            p.attempt, 'failed', null, null]);
+      }
+      const recheck = await checkArticle(env, article);
+      return {
+        outcome: 'done', articleId: article.id, title: article.title, division: article.division,
+        corrected: 0, removed: 0, skipped,
+        validationRejected: true, validationReasons: validation.reasons,
+        results: results.map((r) => (r.action === 'corrected' || r.action === 'removed'
+          ? {
+            ...r, action: 'failed', attemptedAction: r.action, correctedText: null,
+            evidenceUrl: null, recheckVerdict: null,
+            reason: `Validation rejected the corrected body: ${validation.reasons.join('; ')}`,
+          }
+          : r)),
+        recheckVerdict: recheck.verdict, recheck,
+        note: 'Corrected body failed validation (garbled, repeated, incomplete or unsupported content) — nothing was saved; the article needs human review.',
+      };
+    }
+  }
+
+  // Validation passed (or nothing changed): record the corrections.
+  // 'skipped' has no row — the status CHECK allows only
+  // pending/applied/failed/removed, and a skip is recorded in the
+  // returned results instead.
+  for (const p of pending) {
+    if (p.action === 'skipped') continue;
     await d1Run(env,
       'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict, evidence_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [article.id, failed.id, failed.claim_text, correctedText, attempts + 1, action === 'corrected' ? 'applied' : action, recheck ? recheck.verdict : null, action === 'corrected' && evidence ? evidence.url : null]);
-    results.push({ claim: failed.claim_text, action, correctedText, evidenceUrl: action === 'corrected' && evidence ? evidence.url : null, recheckVerdict: recheck ? recheck.verdict : null });
+      [article.id, p.failed.id, p.failed.claim_text, p.correctedText, p.attempt, p.action === 'corrected' ? 'applied' : p.action, p.recheck ? p.recheck.verdict : null, p.evidenceUrl]);
   }
 
   if (body !== originalBody) {

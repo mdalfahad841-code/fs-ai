@@ -49,8 +49,11 @@ describe('Contact / About / 404 pages', () => {
 
   it('sitemap lists the About and Contact pages (60 URLs total)', () => {
     const xml = read('frontend/sitemap.xml');
-    assert.ok(xml.includes('<loc>https://fs-ai-5w5.pages.dev/pages/about.html</loc>'));
-    assert.ok(xml.includes('<loc>https://fs-ai-5w5.pages.dev/pages/contact.html</loc>'));
+    // Clean canonical forms — no .html (2026-11-20 indexing fix: every
+    // .html sitemap URL 308-redirected, and Google reported
+    // "Couldn't fetch").
+    assert.ok(xml.includes('<loc>https://fs-ai-5w5.pages.dev/pages/about</loc>'));
+    assert.ok(xml.includes('<loc>https://fs-ai-5w5.pages.dev/pages/contact</loc>'));
     assert.ok(!xml.includes('404.html'), '404 page must not be in the sitemap');
     assert.equal((xml.match(/<url>/g) || []).length, 60);
   });

@@ -8,18 +8,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Article — FS AI</title>
 <meta name="description" content="Read a free FS AI article.">
-<link rel="canonical" href="https://fs-ai-5w5.pages.dev/pages/article.html">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="FS AI">
 <meta property="og:title" content="Article — FS AI">
 <meta property="og:description" content="Read a free FS AI article.">
-<meta property="og:url" content="https://fs-ai-5w5.pages.dev/pages/article.html">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Article — FS AI">
 <meta name="twitter:description" content="Read a free FS AI article.">
 <!-- Per-article title, description, canonical and JSON-LD are injected by
      JavaScript from the loaded article (see the script at the end of this
-     page). Crawlers that do not run JavaScript will see only these generic
+     page). No static canonical or og:url is shipped: one shared URL would
+     be wrong for all 25 articles, and a wrong canonical is worse than
+     none. Crawlers that do not run JavaScript will see only these generic
      tags — static Pages hosting has no server rendering. -->
 <link rel="stylesheet" href="../styles/main.css">
 <link rel="stylesheet" href="../styles/responsive.css">
@@ -38,7 +38,7 @@
     <div class="wrap">
       <h2>More from this division</h2>
       <div class="grid" id="relatedGrid"></div>
-      <p class="muted"><a href="../index.html">← Back to home</a> · <a href="division.html">All divisions</a></p>
+      <p class="muted"><a href="../">← Back to home</a> · <a href="division">All divisions</a></p>
     </div>
   </section>
 </main>
@@ -53,7 +53,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var body = document.getElementById('articleBody');
   if (!a) {
     document.title = 'Article not found — FS AI';
-    body.innerHTML = '<h1>Article not found</h1><p>That article does not exist. <a href="../index.html">Browse all 25 articles on the home page</a>.</p>';
+    body.innerHTML = '<h1>Article not found</h1><p>That article does not exist. <a href="../">Browse all 25 articles on the home page</a>.</p>';
     return;
   }
   document.title = a.title + ' — FS AI';
@@ -61,15 +61,30 @@ document.addEventListener('DOMContentLoaded', function () {
   /* Per-article SEO, injected from the loaded article data. Honest note:
      this only exists after JavaScript runs — a crawler that does not run
      JS sees the generic tags in <head>. */
-  var canonical = 'https://fs-ai-5w5.pages.dev/pages/article.html?id=' + a.id;
+  var canonical = 'https://fs-ai-5w5.pages.dev/pages/article?id=' + a.id;
   function setMeta(name, value, attr) {
     var sel = attr === 'property' ? 'meta[property="' + name + '"]' : 'meta[name="' + name + '"]';
     var el = document.querySelector(sel);
-    if (el) el.setAttribute('content', value);
+    if (!el) {
+      /* No static tag is shipped for this value (e.g. og:url, which is
+         per-article) — create it so the injected value still lands. */
+      el = document.createElement('meta');
+      el.setAttribute(attr, name);
+      document.head.appendChild(el);
+    }
+    el.setAttribute('content', value);
   }
   function setLink(rel, href) {
     var el = document.querySelector('link[rel="' + rel + '"]');
-    if (el) el.setAttribute('href', href);
+    if (!el) {
+      /* No static canonical is shipped (one shared URL would be wrong
+         for all 25 articles) — create the link so the per-article
+         canonical still lands. */
+      el = document.createElement('link');
+      el.setAttribute('rel', rel);
+      document.head.appendChild(el);
+    }
+    el.setAttribute('href', href);
   }
   setMeta('description', a.excerpt, 'name');
   setMeta('og:title', a.title + ' — FS AI', 'property');
@@ -98,7 +113,7 @@ document.addEventListener('DOMContentLoaded', function () {
     '@context': 'https://schema.org', '@type': 'BreadcrumbList',
     itemListElement: [
       { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://fs-ai-5w5.pages.dev/' },
-      { '@type': 'ListItem', position: 2, name: a.division, item: div ? 'https://fs-ai-5w5.pages.dev/pages/division.html?division=' + div.id : 'https://fs-ai-5w5.pages.dev/pages/division.html' },
+      { '@type': 'ListItem', position: 2, name: a.division, item: div ? 'https://fs-ai-5w5.pages.dev/pages/division?division=' + div.id : 'https://fs-ai-5w5.pages.dev/pages/division' },
       { '@type': 'ListItem', position: 3, name: a.title, item: canonical }
     ]
   };
@@ -115,16 +130,16 @@ document.addEventListener('DOMContentLoaded', function () {
     '<p class="card-tag">' + window.FSAI.esc(a.division) + ' · ' + window.FSAI.esc(a.category) + '</p>' +
     '<h1>' + window.FSAI.esc(a.title) + '</h1>' +
     '<p class="article-meta">Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
-    (div ? '<a href="division.html?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
+    (div ? '<a href="division?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
     (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
     (a.body ? '<div class="article-full">' + a.body + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
-    '<p>Found this useful? Explore the <a href="tools.html">free tools</a> — including the calculators that go with this topic — or browse the other articles in ' + window.FSAI.esc(a.division) + ' below.</p>';
+    '<p>Found this useful? Explore the <a href="tools">free tools</a> — including the calculators that go with this topic — or browse the other articles in ' + window.FSAI.esc(a.division) + ' below.</p>';
   var related = window.FSAI.articlesByDivision(a.division).filter(function (x) { return x.id !== a.id; }).slice(0, 3);
   var grid = document.getElementById('relatedGrid');
   grid.innerHTML = related.map(function (x) {
     return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(x.category) + '</div>' +
-      '<h3><a href="article.html?id=' + x.id + '">' + window.FSAI.esc(x.title) + '</a></h3>' +
+      '<h3><a href="article?id=' + x.id + '">' + window.FSAI.esc(x.title) + '</a></h3>' +
       '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time></article>';
   }).join('') || '<p>No other articles in this division yet.</p>';
 });

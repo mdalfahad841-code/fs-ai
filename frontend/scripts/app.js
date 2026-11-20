@@ -194,9 +194,9 @@
 
   function articleCard(a) {
     return '<article class="card article-card reveal"><div class="card-tag">' + esc(a.division) + ' · ' + esc(a.category) + '</div>' +
-      '<h3><a href="pages/article.html?id=' + a.id + '">' + esc(a.title) + '</a></h3>' +
+      '<h3><a href="pages/article?id=' + a.id + '">' + esc(a.title) + '</a></h3>' +
       '<p>' + esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + formatDate(a.date) + '</time> ' +
-      '<a class="read-more" href="pages/article.html?id=' + a.id + '">Read article →</a></article>';
+      '<a class="read-more" href="pages/article?id=' + a.id + '">Read article →</a></article>';
   }
   /* articleCard links are written from the site root; fix them when rendered on a sub-page. */
   function fixArticleLinks(root) {

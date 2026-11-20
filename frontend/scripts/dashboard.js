@@ -153,7 +153,7 @@
     if (latest && F) {
       var sorted = F.ARTICLES.slice().sort(function (a, b) { return b.date.localeCompare(a.date); }).slice(0, 5);
       latest.innerHTML = sorted.map(function (a) {
-        return '<li><a href="article.html?id=' + a.id + '">' + esc(a.title) + '</a> <span class="muted">— ' + esc(a.division) + ', ' + F.formatDate(a.date) + '</span></li>';
+        return '<li><a href="article?id=' + a.id + '">' + esc(a.title) + '</a> <span class="muted">— ' + esc(a.division) + ', ' + F.formatDate(a.date) + '</span></li>';
       }).join('');
     }
     setText('dashboardNote', 'All numbers on this page come from the real content on this site or the live API. Revenue is $0.00 and traffic is "Data unavailable" unless the API returns a real row.');
@@ -198,7 +198,13 @@
       setText('contentStatus', arts.length + ' article(s)' + (r.data.source ? ' (source: ' + r.data.source + ')' : ''));
       if (!list) return;
       list.innerHTML = arts.map(function (a) {
-        return '<tr><td>' + esc(a.title) + '</td><td>' + esc(a.divisionName || a.division || '') + '</td><td>' + statusPill(a.status) + '</td><td>' + fmtDate(a.publishedAt || a.published_at) + '</td>' +
+        // Fix 1: show the protection state in the CMS list. The API
+        // returns is_protected once migration 013 is applied; on an
+        // older database the field is absent and the two protected
+        // test articles fall back to their ids (display only).
+        var prot = (a.is_protected === 1 || a.is_protected === '1' || (a.is_protected == null && (a.id === 26 || a.id === 27)))
+          ? '<br><strong>PROTECTED — AUTOMATIC MODIFICATION DISABLED</strong>' : '';
+        return '<tr><td>' + esc(a.title) + prot + '</td><td>' + esc(a.divisionName || a.division || '') + '</td><td>' + statusPill(a.status) + '</td><td>' + fmtDate(a.publishedAt || a.published_at) + '</td>' +
           '<td><button class="btn btn-small" type="button" data-article-action="publish" data-id="' + a.id + '">Publish</button> ' +
           '<button class="btn btn-small" type="button" data-article-action="unpublish" data-id="' + a.id + '">Unpublish</button> ' +
           '<button class="btn btn-small" type="button" data-article-action="edit" data-id="' + a.id + '">Edit</button> ' +

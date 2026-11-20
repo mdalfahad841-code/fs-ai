@@ -121,7 +121,7 @@ export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
     [article.division_id, 'published', article.id]) || [];
   const internalLinks = siblings.map((s) => ({
     id: s.id, title: s.title, slug: s.slug,
-    url: `https://fs-ai-5w5.pages.dev/pages/article.html?id=${s.id}`,
+    url: `https://fs-ai-5w5.pages.dev/pages/article?id=${s.id}`,
   }));
   const linksInternally = internalLinks.some((l) => body.includes(l.url) || body.includes(`id=${l.id}`) || body.includes(l.slug));
   push('internal-links', linksInternally, 'needs-review',
@@ -138,12 +138,29 @@ export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
       : `${imgs.length + mdImgs.length} image(s), ${missingAlt} missing alt text.`);
 
   // 8. Readability estimate (rough: average sentence length + word length).
+  // A failure MUST carry an actionable Fix line (added 2026-11-20, Fix 6):
+  // the old detail reported the numbers only, so the dashboard showed a
+  // failing check with no guidance while passing checks showed "Fix:".
   const sentences = plainBody.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 0);
   const words = plainBody.split(/\s+/).filter(Boolean);
   const avgSentence = sentences.length ? words.length / sentences.length : 0;
   const avgWord = words.length ? words.reduce((a, w) => a + w.length, 0) / words.length : 0;
-  push('readability', avgSentence >= 8 && avgSentence <= 25 && avgWord < 6.5, 'needs-review',
-    `Estimate: ${words.length} words, ${sentences.length} sentences, avg sentence ${avgSentence.toFixed(1)} words, avg word ${avgWord.toFixed(1)} chars.`);
+  const readabilityOk = avgSentence >= 8 && avgSentence <= 25 && avgWord < 6.5;
+  let readabilityDetail = `Estimate: ${words.length} words, ${sentences.length} sentences, avg sentence ${avgSentence.toFixed(1)} words, avg word ${avgWord.toFixed(1)} chars.`;
+  if (!readabilityOk) {
+    const fixes = [];
+    if (avgSentence > 25) {
+      fixes.push(`split long sentences — aim for 15-20 words per sentence (current average ${avgSentence.toFixed(1)} words)`);
+    }
+    if (avgSentence < 8) {
+      fixes.push(`combine very short fragments into fuller sentences — aim for 8-25 words per sentence (current average ${avgSentence.toFixed(1)} words)`);
+    }
+    if (avgWord >= 6.5) {
+      fixes.push(`use shorter, plainer words — aim for an average word under 6.5 characters (current ${avgWord.toFixed(1)} chars)`);
+    }
+    readabilityDetail += ` Fix: ${fixes.join('; ')}.`;
+  }
+  push('readability', readabilityOk, 'needs-review', readabilityDetail);
 
   // 9. Duplicate detection vs other published articles (5-word shingles).
   const mine = shingles(plainBody);
@@ -273,7 +290,7 @@ export async function repairSeoFields(env, article) {
     [article.division_id, 'published', article.id]) || [];
   const internalLinks = siblings.map((s) => ({
     id: s.id, title: s.title, slug: s.slug,
-    url: `https://fs-ai-5w5.pages.dev/pages/article.html?id=${s.id}`,
+    url: `https://fs-ai-5w5.pages.dev/pages/article?id=${s.id}`,
   }));
   const linksInternally = internalLinks.some((l) => newBody.includes(l.url) || newBody.includes(`id=${l.id}`) || newBody.includes(l.slug));
   if (!linksInternally && internalLinks.length) {
@@ -320,19 +337,21 @@ export async function runSeo(task, env) {
   const headingCount = markdownHeadings + htmlHeadings;
 
   const suite = await runSeoCheckSuite(env, fresh);
-  await d1Run(env, 'INSERT INTO seo_checks (article_id, verdict, checks_json) VALUES (?, ?, ?)',
+  const insertedSeo = await d1Run(env, 'INSERT INTO seo_checks (article_id, verdict, checks_json) VALUES (?, ?, ?)',
     [articleId, suite.verdict, JSON.stringify(suite.checks)]);
+  const seoCheckId = insertedSeo && insertedSeo.meta ? insertedSeo.meta.last_row_id : null;
 
   const siblings = await d1All(env,
     'SELECT id, title, slug FROM articles WHERE division_id = ? AND status = ? AND id != ? ORDER BY published_at DESC, id DESC LIMIT 5',
     [article.division_id, 'published', articleId]) || [];
   const internalLinks = siblings.map((s) => ({
     id: s.id, title: s.title, slug: s.slug,
-    url: `https://fs-ai-5w5.pages.dev/pages/article.html?id=${s.id}`,
+    url: `https://fs-ai-5w5.pages.dev/pages/article?id=${s.id}`,
   }));
 
   return {
     outcome: 'done',
+    action: 'optimize',
     articleId,
     title: fresh.title,
     division: fresh.division,
@@ -344,8 +363,39 @@ export async function runSeo(task, env) {
     repairs: repair.repairs,
     verdict: suite.verdict,
     checks: suite.checks,
+    seoCheckId,
     note: repair.repaired
       ? `SEO repaired from the article's own content: ${repair.repairs.join(' ')}`
       : 'SEO fields already adequate — nothing repaired, nothing overwritten.',
+  };
+}
+
+/**
+ * CHECK-ONLY SEO run (added 2026-11-20, Fix 6). Runs the same 11-check
+ * suite as runSeo but NEVER repairs: the article body, excerpt and SEO
+ * fields are untouched and no article_revisions row is written. Only a
+ * seo_checks row (the 11 results + verdict) is stored, so a protected
+ * article may be check-only run — the check writes nothing to the
+ * article itself. Returns the same shape as runSeo minus repairs, with
+ * action 'check' so callers (and the owner) can distinguish Check from
+ * Optimize in the response.
+ */
+export async function runSeoCheckOnly(env, article) {
+  const suite = await runSeoCheckSuite(env, article);
+  const inserted = await d1Run(env, 'INSERT INTO seo_checks (article_id, verdict, checks_json) VALUES (?, ?, ?)',
+    [article.id, suite.verdict, JSON.stringify(suite.checks)]);
+  const seoCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  return {
+    outcome: 'done',
+    action: 'check',
+    articleId: article.id,
+    title: article.title,
+    division: article.division,
+    seoTitle: String(article.seo_title || ''),
+    seoDescription: String(article.seo_description || ''),
+    verdict: suite.verdict,
+    checks: suite.checks,
+    seoCheckId,
+    note: 'Check-only: the article was not modified — no repair, no revision row.',
   };
 }
