@@ -21,7 +21,7 @@
 // carried forward; every run records check_kind + evidence_signature
 // and every claim row records previous_verdict.
 // Real SQLite database (schema + seed + migrations
-// 005/006/008/009/010/011/012/016/017/018). The LLM is stubbed through
+// 005/006/008/009/010/011/012/016/017/018/019). The LLM is stubbed through
 // env.AI (the Workers AI binding shape) — generateText never touches
 // the network here. Throwaway articles only; never #26/#27 ids.
 // Run: node --test tests/factcheck-phase3.test.js (or: npm test)
@@ -115,6 +115,7 @@ function freshEnv() {
     'database/migrations/016_llm_usage_estimated.sql',
     'database/migrations/017_correction_claim_key.sql',
     'database/migrations/018_factcheck_verdict_history.sql',
+    'database/migrations/019_factcheck_body_hash.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }

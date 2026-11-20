@@ -43,6 +43,7 @@
  */
 import { d1All, d1First, d1Run, DISCLAIMER_DIVISIONS, isMissingColumnError } from '../../middleware/validation.js';
 import { generateText } from '../../llm/index.js';
+import { bodyHash, sha256Hex } from '../../utils/bodyHash.js';
 
 export const MAX_CLAIMS_PER_ARTICLE = 20;
 export const MAX_CORRECTION_ATTEMPTS = 3;
@@ -115,13 +116,29 @@ export function stripCitationPrefix(text) {
 
 /**
  * Stable identity for a claim across fact-check runs: citation
- * prefix stripped, lower-cased, whitespace collapsed, first 200
- * chars. Two fact-check runs generate different claim_check ids for
- * the same claim text, so identity must be the TEXT, never the id.
+ * prefix stripped, lower-cased, whitespace collapsed. Two fact-check
+ * runs generate different claim_check ids for the same claim text, so
+ * identity must be the TEXT, never the id.
  * (Phase 3, Priority 5 — the duplicate-correction root cause.)
+ *
+ * claimKey() is the 200-char truncated form, kept for the correction
+ * flow (article_corrections.claim_key, backfilled by migration 017)
+ * and for the gate's open-correction grouping. It is LOSSY: two
+ * different long claims can share a 200-char prefix. Verdict
+ * carry-forward must therefore NEVER match on claimKey — it matches
+ * on claimHash(), the full SHA-256 of the normalised claim text.
  */
+function normaliseClaimText(text) {
+  return stripCitationPrefix(text).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 export function claimKey(text) {
-  return stripCitationPrefix(text).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
+  return normaliseClaimText(text).slice(0, 200);
+}
+
+/** Full identity hash of a claim's normalised text (no truncation). */
+export async function claimHash(text) {
+  return sha256Hex(normaliseClaimText(text));
 }
 
 /**
@@ -422,19 +439,31 @@ function structuralChecks(article, sources) {
  * Fact-check one article against its OWN recorded sources only.
  *
  * Phase 3, Priority 6 (verdict consistency): every run records
- * check_kind ('initial' | 'recheck' | 'correction-recheck') and the
- * evidence signature (the research-item ids + fetch times the run
- * judged against). A claim whose text is IDENTICAL to a claim in the
- * previous check AND whose evidence signature is unchanged is CARRIED
- * FORWARD with its previous verdict — the LLM entailment judge is
+ * check_kind ('initial' | 'recheck' | 'correction-recheck'), the
+ * evidence signature, and the body hash (migration 019). A claim is
+ * CARRIED FORWARD with its previous verdict ONLY when its FULL text
+ * hash matches a claim in the previous check AND the evidence
+ * signature is unchanged (the signature now covers evidence CONTENT,
+ * not just ids + fetch times). The LLM entailment judge is
  * non-deterministic, and re-running it on unchanged text against
  * unchanged evidence can only flip a verdict for no reason (live
  * #30: claim 8 flipped UNSUPPORTED → VERIFIED with no correction
- * saved). A claim whose text changed, or whose evidence changed (a
- * newer fetch), is evaluated fresh. previous_verdict is stored on
- * every claim_checks row so any flip is traceable. A correction
- * attempt alone therefore never flips a verdict: the corrected claim
- * is new text and is re-evaluated; unchanged claims keep theirs.
+ * saved). A claim whose text changed, or whose evidence changed, is
+ * evaluated fresh. previous_verdict is stored on every claim_checks
+ * row so any flip is traceable. A correction attempt alone therefore
+ * never flips a verdict: the corrected claim is new text and is
+ * re-evaluated; unchanged claims keep theirs.
+ *
+ * The body hash is a SEPARATE guard, not a carry-forward condition:
+ * it records which body a run judged, and the publish gate rejects
+ * any run whose stored hash differs from the article's current body
+ * (or is missing) as stale. Per-claim carry-forward is deliberately
+ * NOT gated on the body hash: editing one claim must not force the
+ * non-deterministic judge to re-run on the article's other,
+ * unchanged claims (that would reintroduce the #30 flip). A changed
+ * claim can never inherit an old verdict — its full text hash
+ * differs — and a removed claim leaves no row in the new run, so
+ * the active claim set is always the latest run's claims.
  * options: { checkKind }.
  */
 export async function checkArticle(env, article, options = {}) {
@@ -444,12 +473,19 @@ export async function checkArticle(env, article, options = {}) {
   const claims = extractClaims(article.body);
   const pool = await loadEvidence(env, article);
   const poolEmpty = pool.length === 0;
+  // Body hash: the identity of the body this run judges. A later edit
+  // must invalidate this run — an old verdict must never make a new
+  // or changed claim appear verified.
+  const currentBodyHash = await bodyHash(article.body);
   // Evidence signature: which stored research rows (and which fetch
-  // of each) this run judged against. Identical signature + identical
-  // claim text = nothing new to judge.
-  const evidenceSignature = pool
-    .map((p) => `${p.researchItemId || 0}:${p.fetchedAt || ''}`)
-    .sort().join('|');
+  // of each) this run judged against, AND WHAT EACH ROW SAID. The
+  // content hash is load-bearing: editing an evidence item's text
+  // (same id, same fetched_at) changes the signature and forces fresh
+  // evaluation — a verdict must not survive its own evidence changing.
+  const evidenceSignature = (await Promise.all(pool.map(async (p) => {
+    const contentHash = (await sha256Hex(String(p.text || ''))).slice(0, 16);
+    return `${p.researchItemId || 0}:${p.fetchedAt || ''}:${contentHash}`;
+  }))).sort().join('|');
   // Previous check, for carry-forward + previous_verdict (P6).
   const previousCheck = await d1First(env,
     'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [article.id]);
@@ -462,24 +498,36 @@ export async function checkArticle(env, article, options = {}) {
         'SELECT claim_text, verdict, evidence_url, evidence_quote, explanation FROM claim_checks WHERE fact_check_id = ? ORDER BY id ASC',
         [previousCheck.id]) || [];
       for (const pc of prevClaims) {
-        previousByKey.set(claimKey(pc.claim_text), {
+        // Full-hash identity (claimHash), never the truncated claimKey:
+        // two different long claims can share a 200-char prefix, and
+        // a shared prefix must never carry a verdict across.
+        previousByKey.set(await claimHash(pc.claim_text), {
           verdict: pc.verdict, explanation: pc.explanation || '',
           evidenceUrl: pc.evidence_url || null, evidenceQuote: pc.evidence_quote || null,
         });
       }
     } catch { previousByKey = new Map(); }
   }
-  // Carry-forward is legitimate only when the previous run recorded a
-  // signature AND it matches this run's (rows written before
-  // migration 018 have no signature, so they never carry forward).
+  // Carry-forward is legitimate ONLY when the previous run recorded
+  // an evidence signature AND it matches this run's (rows written
+  // before migration 018 have no signature, so they never carry
+  // forward). The body hash is deliberately NOT a condition here:
+  // it guards the publish gate (a run is only valid for the body it
+  // judged), while per-claim carry-forward is guarded by the claim's
+  // full text hash + the evidence-content signature. Editing one
+  // claim must not force the non-deterministic judge to re-run on
+  // the article's other, unchanged claims.
   const signatureUnchanged = previousCheck !== null && previousSignature !== null && previousSignature === evidenceSignature;
   const claimResults = [];
   for (const claim of claims) {
-    const key = claimKey(claim);
+    const key = await claimHash(claim);
     const prev = previousByKey.get(key) || null;
     const previousVerdict = prev ? prev.verdict : null;
-    // Same claim text, same evidence, not changed by the caller: keep
-    // the previous verdict. No LLM judge call, no flip, no Neurons.
+    // Same claim text (full hash), same evidence, not changed by
+    // the caller: keep the previous verdict. No LLM judge call, no
+    // flip, no Neurons. (The body hash is deliberately NOT a
+    // condition here — it guards the publish gate, not carry-forward;
+    // see the signatureUnchanged comment above.)
     if (prev && signatureUnchanged) {
       claimResults.push({
         claim, verdict: prev.verdict, previousVerdict,
@@ -518,21 +566,32 @@ export async function checkArticle(env, article, options = {}) {
   else if (claimResults.some((c) => c.verdict === 'INCORRECT')) verdict = 'failed';
   else if (failed > 0 || flags.length > 0) verdict = 'needs-review';
 
-  // fact_checks gains check_kind + evidence_signature (migration 018);
-  // fall back to the old column list when the migration is not yet
-  // applied live (the parent applies migrations after deploy).
+  // fact_checks gains check_kind + evidence_signature (migration 018)
+  // and body_hash (migration 019); fall back down the column lists
+  // when a migration is not yet applied live (the parent applies
+  // migrations after deploy). A run that cannot record its body hash
+  // still writes its verdicts — but the gate treats a hash-less row
+  // as stale, so it can never pass anything.
   let factCheckId = null;
   try {
     const inserted = await d1Run(env,
-      'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, check_kind, evidence_signature) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [article.id, verdict, claimResults.length, verified, failed, checkKind, evidenceSignature]);
+      'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, check_kind, evidence_signature, body_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [article.id, verdict, claimResults.length, verified, failed, checkKind, evidenceSignature, currentBodyHash]);
     factCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
   } catch (e) {
     if (!isMissingColumnError(e)) throw e;
-    const inserted = await d1Run(env,
-      'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed) VALUES (?, ?, ?, ?, ?)',
-      [article.id, verdict, claimResults.length, verified, failed]);
-    factCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+    try {
+      const inserted = await d1Run(env,
+        'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, check_kind, evidence_signature) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [article.id, verdict, claimResults.length, verified, failed, checkKind, evidenceSignature]);
+      factCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+    } catch (e2) {
+      if (!isMissingColumnError(e2)) throw e2;
+      const inserted = await d1Run(env,
+        'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed) VALUES (?, ?, ?, ?, ?)',
+        [article.id, verdict, claimResults.length, verified, failed]);
+      factCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+    }
   }
   if (factCheckId) {
     for (const c of claimResults) {
@@ -552,7 +611,7 @@ export async function checkArticle(env, article, options = {}) {
     factCheckId, articleId: article.id, title: article.title, division: article.division,
     status: article.status, verdict, claims: claimResults,
     claimsTotal: claimResults.length, claimsVerified: verified, claimsFailed: failed,
-    checks, flags, checkKind,
+    checks, flags, checkKind, bodyHash: currentBodyHash,
     carriedForward: claimResults.filter((c) => c.carriedForward).length,
   };
 }
@@ -1276,7 +1335,19 @@ export async function runFactChecking(task, env) {
     'SELECT a.*, d.slug AS division FROM articles a JOIN business_divisions d ON d.id = a.division_id WHERE a.id = ? LIMIT 1',
     [articleId]);
   if (!article) return { outcome: 'failed', error: `Article ${articleId} not found.` };
-  if (task && task.kind === 'correct') {
+  // A re-check payload (check_kind 'recheck') ALWAYS runs a real
+  // fact-check, even when the task row it arrived on is kind
+  // 'correct': the dashboard Correct button creates kind='correct'
+  // rows, and the Re-check endpoint reuses the article's newest
+  // fact-checking task whatever its kind — routing that row through
+  // runCorrection made a re-check a no-op on a passing article (live
+  // #31, runs #121/#122: no new fact_checks row, the old PASS was
+  // returned as the "re-check" result). The handler also forces the
+  // reused row's kind to 'fact-check'; this dispatch guard is the
+  // second layer, so no caller can reach the correction no-op from a
+  // re-check. Genuine corrections (kind 'correct', no recheck
+  // payload) still route to runCorrection.
+  if (task && task.kind === 'correct' && payload.check_kind !== 'recheck') {
     return runCorrection(env, article);
   }
   const result = await checkArticle(env, article, { checkKind: payload.check_kind || 'initial' });

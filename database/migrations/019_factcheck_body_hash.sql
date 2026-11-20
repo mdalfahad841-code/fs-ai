@@ -1,0 +1,29 @@
+-- FS AI migration 019 - body hash on fact_checks (fact-check integrity).
+--
+-- fact_checks.body_hash: SHA-256 of the article body as the run judged
+-- it (normalised: whitespace, blank lines, markdown heading/list
+-- markers, link markup, code ticks, **bold** markers and letter case
+-- normalise away; any wording change hashes differently — see
+-- backend/utils/bodyHash.js). Every fact-check run records the hash
+-- of the body it actually checked, so the pipeline can tell a fresh
+-- result from a stale one:
+--
+-- - checkArticle() stores the body hash on every run. Per-claim
+--   carry-forward is guarded by the claim's full text hash AND the
+--   evidence-content signature (see backend/agents/autonomy/factcheck.js):
+--   an unchanged claim against unchanged evidence may carry forward
+--   even after a sibling claim is edited; changed/new claims are
+--   always freshly judged and removed claims leave no row. The body
+--   hash itself guards the publish gate, not carry-forward.
+-- - evaluatePublishGate() rejects a latest fact-check whose stored
+--   body hash differs from the article's current body hash (or is
+--   missing) as STALE — fail-closed. An edited article can no longer
+--   keep an old PASS at the gate.
+--
+-- Safe: additive column only. Existing fact_checks rows keep a NULL
+-- body_hash, which the code treats as "unknown — never carry forward,
+-- always stale at the gate", so old rows can only ever be
+-- re-evaluated fresh. No existing data is changed. Rollback: leave
+-- the column (inert — code falls back to the pre-019 column lists
+-- when it is absent).
+ALTER TABLE fact_checks ADD COLUMN body_hash TEXT;

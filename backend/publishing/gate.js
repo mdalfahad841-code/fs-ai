@@ -17,6 +17,7 @@
  */
 import { d1All, d1First, d1Run, nowIso, DISCLAIMER_DIVISIONS, isMissingColumnError } from '../middleware/validation.js';
 import { getEmergencyStop } from '../routes/admin.js';
+import { bodyHash } from '../utils/bodyHash.js';
 
 async function setting(env, key, fallback) {
   try {
@@ -52,23 +53,45 @@ export async function evaluatePublishGate(env, articleId) {
     return { articleId: id, eligible: false, contentReady: false, checks, blockedBy, contentBlockers };
   }
 
-  // 1. Fact-check passes (latest run).
+  // 1. Fact-check passes (latest run) — and the run must be FRESH:
+  // it must correspond to the article body as it stands now. A body
+  // edit after the latest check, or a legacy run with no recorded
+  // body hash, makes the result STALE (fail-closed): an edited
+  // article must never keep an old PASS at the gate (live #31: the
+  // body was rewritten after fact_check 19, but the gate still read
+  // its PASS). The same staleness also gates checks 2 and 3 below —
+  // a stale run must not satisfy them either.
   const latestCheck = await d1First(env,
     'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [id]);
-  push('fact-check-pass', Boolean(latestCheck && latestCheck.verdict === 'pass'),
-    latestCheck ? `Latest fact-check verdict: ${latestCheck.verdict} (${latestCheck.claims_verified}/${latestCheck.claims_total} claims verified).` : 'No fact-check on record for this article.');
+  const currentBodyHash = await bodyHash(article.body);
+  const storedBodyHash = latestCheck ? (latestCheck.body_hash || null) : null;
+  const factCheckStale = Boolean(latestCheck) && (storedBodyHash === null || storedBodyHash !== currentBodyHash);
+  const staleDetail = storedBodyHash === null
+    ? 'fact-check is stale: the latest fact-check was recorded before body-hash tracking — run a fresh fact-check.'
+    : 'fact-check is stale: article body changed after the latest fact-check — run a fresh fact-check.';
+  push('fact-check-pass', Boolean(latestCheck && latestCheck.verdict === 'pass' && !factCheckStale),
+    !latestCheck ? 'No fact-check on record for this article.'
+      : factCheckStale ? staleDetail
+      : `Latest fact-check verdict: ${latestCheck.verdict} (${latestCheck.claims_verified}/${latestCheck.claims_total} claims verified).`);
 
-  // 2. No unresolved important errors.
+  // 2. No unresolved important errors (in the latest run — a stale
+  // run satisfies nothing).
   const unresolved = latestCheck ? Number(latestCheck.claims_failed || 0) : 0;
-  push('no-unresolved-errors', unresolved === 0,
-    unresolved ? `${unresolved} claim(s) still failed in the latest fact-check.` : 'No unresolved claim errors.');
+  push('no-unresolved-errors', !factCheckStale && unresolved === 0,
+    factCheckStale ? staleDetail
+      : unresolved ? `${unresolved} claim(s) still failed in the latest fact-check.` : 'No unresolved claim errors.');
 
   // 3. Required sources verified: at least one recorded source, and every
-  // VERIFIED claim in the latest run cites an evidence URL.
+  // VERIFIED claim in the latest run cites an evidence URL. A stale run
+  // satisfies nothing — its VERIFIED claims may describe a body that no
+  // longer exists.
   const sources = await d1All(env, 'SELECT * FROM article_sources WHERE article_id = ?', [id]) || [];
   let sourcesOk = sources.length > 0;
   let sourcesDetail = `${sources.length} source(s) recorded for this article.`;
-  if (latestCheck) {
+  if (factCheckStale) {
+    sourcesOk = false;
+    sourcesDetail = staleDetail;
+  } else if (latestCheck) {
     const unverifiedCited = await d1First(env,
       "SELECT COUNT(*) AS n FROM claim_checks WHERE fact_check_id = ? AND verdict = 'VERIFIED' AND (evidence_url IS NULL OR evidence_url = '')",
       [latestCheck.id]);

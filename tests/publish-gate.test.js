@@ -21,6 +21,7 @@ const path = require('node:path');
 
 const { DatabaseSync } = require('node:sqlite');
 const { evaluatePublishGate, publishGatePassed } = require('../backend/publishing/gate.js');
+const { bodyHash } = require('../backend/utils/bodyHash.js');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -94,6 +95,7 @@ function freshEnv() {
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
     'database/migrations/012_source_links.sql',
+    'database/migrations/019_factcheck_body_hash.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -109,11 +111,17 @@ function loadArticle(db, id) {
   return db.prepare('SELECT * FROM articles WHERE id = ?').get(id);
 }
 
-/** Make the article pass every CONTENT check (fact-check + sources + SEO + duplicate). */
-function makeContentReady(db, articleId, { factVerdict = 'pass', seoVerdict = 'pass' } = {}) {
+/** Make the article pass every CONTENT check (fact-check + sources + SEO + duplicate).
+ * The seeded fact-check is a genuinely FRESH run: its body_hash is the
+ * hash of the article's current body, exactly as checkArticle would
+ * record it (migration 019) — a hash-less legacy row is stale at the
+ * gate and would fail checks 1-3. */
+async function makeContentReady(db, articleId, { factVerdict = 'pass', seoVerdict = 'pass' } = {}) {
+  const article = loadArticle(db, articleId);
+  const hash = await bodyHash(article.body);
   const fc = db.prepare(
-    'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed) VALUES (?, ?, 2, 2, 0)',
-  ).run(articleId, factVerdict);
+    'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, body_hash) VALUES (?, ?, 2, 2, 0, ?)',
+  ).run(articleId, factVerdict, hash);
   const fcId = Number(fc.lastInsertRowid);
   db.prepare(
     "INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation) VALUES (?, 'EV sales reached 14 million units worldwide in 2023.', 'VERIFIED', 'https://example.com/source-1', 'EV sales reached 14 million units.', 'Supported by fetched source material.')",
@@ -160,7 +168,7 @@ describe('evaluatePublishGate', () => {
   it('contentReady=true but eligible=false under the live default (approved_only)', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     const gate = await evaluatePublishGate(env, id);
     assert.equal(gate.contentReady, true, JSON.stringify(gate.contentBlockers));
     assert.equal(gate.eligible, false, 'approved_only must never auto-publish');
@@ -174,7 +182,7 @@ describe('evaluatePublishGate', () => {
   it('auto_publishing on alone does NOT make the gate eligible while mode is approved_only', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     setSetting(db, 'auto_publishing', 'on');
     const gate = await evaluatePublishGate(env, id);
     assert.equal(gate.contentReady, true);
@@ -184,7 +192,7 @@ describe('evaluatePublishGate', () => {
   it('eligible=true only when content is ready AND mode permits AND auto_publishing is on', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     // NOTE: publishing_mode can only be changed by a direct settings write
     // in this test. The owner API (orchestrator SETTING_RULES) still
     // refuses any value other than 'approved_only' — the mode switch has
@@ -200,7 +208,7 @@ describe('evaluatePublishGate', () => {
   it('mode permitting but auto_publishing off is still not eligible', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     setSetting(db, 'publishing_mode', 'auto');
     const gate = await evaluatePublishGate(env, id);
     assert.equal(gate.eligible, false, 'the toggle must also be on');
@@ -210,7 +218,7 @@ describe('evaluatePublishGate', () => {
   it('Emergency Stop ON blocks eligibility but not content readiness', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     setSetting(db, 'publishing_mode', 'auto');
     setSetting(db, 'auto_publishing', 'on');
     setEmergencyStop(db, true);
@@ -223,7 +231,7 @@ describe('evaluatePublishGate', () => {
   it('daily limit 0 blocks eligibility', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     setSetting(db, 'publishing_mode', 'auto');
     setSetting(db, 'auto_publishing', 'on');
     setSetting(db, 'max_articles_per_day', '0');
@@ -236,7 +244,7 @@ describe('evaluatePublishGate', () => {
   it('a failed fact-check blocks content readiness', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id, { factVerdict: 'failed' });
+    await makeContentReady(db, id, { factVerdict: 'failed' });
     // Mark the claims failed to match the failed verdict.
     db.prepare("UPDATE claim_checks SET verdict = 'UNSUPPORTED', evidence_url = NULL WHERE fact_check_id = (SELECT id FROM fact_checks WHERE article_id = ? ORDER BY id DESC LIMIT 1)").run(id);
     db.prepare('UPDATE fact_checks SET claims_failed = 2, claims_verified = 0 WHERE article_id = ?').run(id);
@@ -250,7 +258,7 @@ describe('evaluatePublishGate', () => {
   it('an open correction blocks content readiness', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    const fcId = makeContentReady(db, id);
+    const fcId = await makeContentReady(db, id);
     const claimId = db.prepare('SELECT id FROM claim_checks WHERE fact_check_id = ? LIMIT 1').get(fcId).id;
     db.prepare("INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status) VALUES (?, ?, 'old', NULL, 1, 'pending')").run(id, claimId);
     const gate = await evaluatePublishGate(env, id);
@@ -262,13 +270,17 @@ describe('evaluatePublishGate', () => {
     const { db, env } = freshEnv();
     const healthId = db.prepare('SELECT id FROM business_divisions WHERE slug = ?').get('health-wellness').id;
     const id = insertDraft(db, { divisionId: healthId });
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     const blocked = await evaluatePublishGate(env, id);
     assert.equal(blocked.contentReady, false);
     assert.equal(checkByName(blocked, 'special-review').ok, false);
     assert.match(checkByName(blocked, 'special-review').detail, /disclaimer missing/);
 
     db.prepare('UPDATE articles SET body = body || ? WHERE id = ?').run('\n\nGeneral information only — this is not medical advice.', id);
+    // The disclaimer edit changes the body, so the previous
+    // fact-check is stale by design (migration 019) — a fresh
+    // fact-check for the new body is required before the gate can pass.
+    await makeContentReady(db, id);
     const passed = await evaluatePublishGate(env, id);
     assert.equal(checkByName(passed, 'special-review').ok, true);
     assert.equal(passed.contentReady, true);
@@ -282,7 +294,7 @@ describe('evaluatePublishGate', () => {
 
     const { db, env: env2 } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     db.prepare("UPDATE articles SET status = 'published' WHERE id = ?").run(id);
     const pub = await evaluatePublishGate(env2, id);
     assert.equal(pub.eligible, false);
@@ -294,7 +306,7 @@ describe('publishGatePassed', () => {
   it('refuses a content-ready article while mode is approved_only — nothing changes', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     const r = await publishGatePassed(env, id);
     assert.equal(r.ok, false);
     assert.match(r.error, /approved_only|not passed/);
@@ -306,7 +318,7 @@ describe('publishGatePassed', () => {
   it('approves a fully eligible article: status approved, fact_checked=1, revision recorded', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     setSetting(db, 'publishing_mode', 'auto');
     setSetting(db, 'auto_publishing', 'on');
     const r = await publishGatePassed(env, id);
@@ -323,7 +335,7 @@ describe('publishGatePassed', () => {
   it('refuses when the Emergency Stop is on, and honours an explicit daily limit', async () => {
     const { db, env } = freshEnv();
     const id = insertDraft(db);
-    makeContentReady(db, id);
+    await makeContentReady(db, id);
     setSetting(db, 'publishing_mode', 'auto');
     setSetting(db, 'auto_publishing', 'on');
     setEmergencyStop(db, true);

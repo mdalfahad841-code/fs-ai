@@ -38,6 +38,7 @@ const { checkArticle, runCorrection } = require('../backend/agents/autonomy/fact
 const { convertScaffoldToDraft } = require('../backend/agents/autonomy/content.js');
 const { runSeo } = require('../backend/agents/autonomy/seo.js');
 const { evaluatePublishGate } = require('../backend/publishing/gate.js');
+const { bodyHash } = require('../backend/utils/bodyHash.js');
 const { fetchSource, loadAllSources } = require('../backend/rss/sources.js');
 const { DIVISION_RESEARCH_REGISTRY } = require('../backend/agents/autonomy-runner.js');
 const { WORKERS_AI_MODELS, NEURON_RATES } = require('../backend/llm/providers/cloudflare-workers-ai.js');
@@ -114,6 +115,7 @@ function freshEnv() {
     'database/migrations/010_pipeline.sql',
     'database/migrations/011_backup.sql',
     'database/migrations/012_source_links.sql',
+    'database/migrations/019_factcheck_body_hash.sql',
   ]);
   return { db, env: { DB: makeRealD1(db) } };
 }
@@ -370,8 +372,11 @@ describe('repair F — gate visibility data', () => {
     const id = insertArticle(db, 'Home charging is simple and cheap.');
     // A passing fact-check + SEO run + one recorded source, so every
     // content check passes; only the publishing-rules check (approved_only)
-    // keeps the article from being eligible.
-    db.prepare("INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed) VALUES (?, 'pass', 1, 1, 0)").run(id);
+    // keeps the article from being eligible. The seeded fact-check is a
+    // genuinely FRESH run: its body_hash matches the article body,
+    // exactly as checkArticle would record it (migration 019) — a
+    // hash-less legacy row is stale at the gate.
+    db.prepare("INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, body_hash) VALUES (?, 'pass', 1, 1, 0, ?)").run(id, await bodyHash('Home charging is simple and cheap.'));
     db.prepare("INSERT INTO seo_checks (article_id, verdict, checks_json) VALUES (?, 'pass', ?)").run(id, JSON.stringify([{ name: 'duplicate', ok: true, status: 'pass', detail: 'No duplicate found.' }]));
     db.prepare("INSERT INTO article_sources (article_id, source_title, source_url, source_type, accessed_at) VALUES (?, 'Test Source', 'https://example.com/source', 'research', ?)").run(id, new Date().toISOString());
     const gate = await evaluatePublishGate(env, id);

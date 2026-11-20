@@ -1237,16 +1237,22 @@ async function handleRecheckArticle(request, env, id) {
     // Phase 3, Priority 6: the re-check must be recorded as
     // check_kind 'recheck' even when the task row is reused from an
     // earlier run, so the fact_checks audit trail names the run type.
+    // The reused row's KIND is forced to 'fact-check' too: the
+    // dashboard Correct button creates kind='correct' rows, and
+    // reusing one as-is routed the re-check through runCorrection —
+    // which no-ops on a passing article and writes no new
+    // fact_checks row (live #31, runs #121/#122). A re-check must
+    // always run a real fact-check.
     try {
       const reusedPayload = {
         ...(typeof task.payload === 'string' ? JSON.parse(task.payload) : (task.payload || {})),
         check_kind: 'recheck',
       };
-      await d1Run(env, "UPDATE agent_tasks SET payload = ?, status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
+      await d1Run(env, "UPDATE agent_tasks SET kind = 'fact-check', payload = ?, status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
         [JSON.stringify(reusedPayload), nowIso(), task.id]);
     } catch {
       if (task.status !== 'queued') {
-        await d1Run(env, "UPDATE agent_tasks SET status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
+        await d1Run(env, "UPDATE agent_tasks SET kind = 'fact-check', status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
           [nowIso(), task.id]);
       }
     }
@@ -1277,8 +1283,23 @@ async function handleRecheckArticle(request, env, id) {
     return jsonError((result.result && result.result.error) || 'Fact-check run failed.', 500,
       { taskId: task.id, runId: result.runId, outcome: 'failed' });
   }
+  // A re-check must complete a FRESH check: any outcome other than
+  // 'done' (e.g. a correction no-op) means no new fact-check was
+  // produced, and presenting the previous result as a re-check would
+  // be stale data. Fail loudly instead.
+  if (result.outcome !== 'done') {
+    return jsonError(`Fact-check re-run did not complete a fresh check (outcome: ${result.outcome}). No new fact-check row was written — the previous result is stale and is NOT presented as a re-check.`, 500,
+      { taskId: task.id, runId: result.runId, outcome: result.outcome });
+  }
   const latest = await d1First(env,
     'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [articleId]);
+  // Belt and braces: the run claims 'done', but if the latest row is
+  // still the pre-run row, nothing was actually re-checked. Refuse to
+  // present it as a fresh result.
+  if (!latest || (before && latest.id === before.id)) {
+    return jsonError('Fact-check re-run completed but wrote no new fact-check row — the previous result is stale and is NOT presented as a re-check.', 500,
+      { taskId: task.id, runId: result.runId, outcome: result.outcome });
+  }
   const latestClaims = latest
     ? (await d1All(env, 'SELECT * FROM claim_checks WHERE fact_check_id = ? ORDER BY id ASC', [latest.id]) || [])
     : [];
@@ -1287,7 +1308,7 @@ async function handleRecheckArticle(request, env, id) {
     articleId, taskId: task.id, taskReused, runId: result.runId, outcome: result.outcome,
     status: 'completed',
     latest: latest
-      ? { id: latest.id, verdict: latest.verdict, claimsTotal: latest.claims_total, claimsVerified: latest.claims_verified, claimsFailed: latest.claims_failed, createdAt: latest.created_at, claims: latestClaims }
+      ? { id: latest.id, verdict: latest.verdict, claimsTotal: latest.claims_total, claimsVerified: latest.claims_verified, claimsFailed: latest.claims_failed, createdAt: latest.created_at, bodyHash: latest.body_hash || null, claims: latestClaims }
       : null,
     previous,
     factChecked: afterArticle ? Number(afterArticle.fact_checked || 0) : 0,
