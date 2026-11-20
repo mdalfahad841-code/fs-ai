@@ -72,7 +72,7 @@ export async function generateText(input, env) {
         await recordUsage(env, {
           provider: id, model: result.model || model, purpose, outcome: 'ok',
           tokensIn: result.tokensIn || 0, tokensOut: result.tokensOut || 0,
-          neurons: result.neurons || 0,
+          neurons: result.neurons || 0, neuronsEstimated: !!result.neuronsEstimated,
         });
         return {
           ok: true,

@@ -183,9 +183,9 @@ describe('frontend-data path: shipped division.html rendered', () => {
     assert.equal(els.divisionArticlesHeading.style.display, 'none');
     assert.equal(els.divisionGrid.style.display, 'none');
     // A way back: link to the all-divisions page (this page, no query).
-    assert.match(els.divisionBackLinks.innerHTML, /href="division\.html"/);
+    assert.match(els.divisionBackLinks.innerHTML, /href="division"/);
     assert.match(els.divisionBackLinks.innerHTML, /Browse all divisions/);
-    assert.match(els.divisionBackLinks.innerHTML, /href="\.\.\/index\.html"/, 'Back to home must be kept');
+    assert.match(els.divisionBackLinks.innerHTML, /href="\.\.\/"/, 'Back to home must be kept');
   });
 
   it('?division=automotive still renders that division and its articles', () => {

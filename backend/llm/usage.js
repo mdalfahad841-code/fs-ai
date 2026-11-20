@@ -8,7 +8,7 @@
  * never a throw. generateText() must never throw because usage
  * bookkeeping failed.
  */
-import { d1All, d1First, d1Run } from '../middleware/validation.js';
+import { d1All, d1First, d1Run, isMissingColumnError } from '../middleware/validation.js';
 
 export const DEFAULT_NEURON_CAP = 9000;
 export const DEFAULT_GROQ_TOKEN_CAP = 190000;
@@ -31,56 +31,110 @@ function toNum(v) {
  * Record one attempt. outcome must be one of the llm_usage CHECK values:
  * 'ok', 'quota-exhausted', 'error', 'not-configured'. Returns true when
  * the row was written, false otherwise (no D1 / no table / any error).
- * Never throws.
+ * Never throws. neuronsEstimated marks a neuron figure computed from
+ * pricing rates / estimated tokens rather than provider-reported usage
+ * (migration 016); when the column is not yet applied live the write
+ * falls back to the old column list and the flag is lost (the usage
+ * itself is still recorded).
  */
 export async function recordUsage(env, attempt) {
   if (!env || !env.DB || !attempt || typeof attempt !== 'object') return false;
   const outcome = ['ok', 'quota-exhausted', 'error', 'not-configured'].includes(attempt.outcome)
     ? attempt.outcome
     : 'error';
+  const values = [
+    String(attempt.provider || 'unknown').slice(0, 100),
+    String(attempt.model || '').slice(0, 200),
+    attempt.purpose ? String(attempt.purpose).slice(0, 100) : null,
+    outcome,
+    Math.max(0, Math.round(toNum(attempt.tokensIn))),
+    Math.max(0, Math.round(toNum(attempt.tokensOut))),
+    Math.max(0, Math.round(toNum(attempt.neurons))),
+    attempt.error ? String(attempt.error).slice(0, 500) : null,
+  ];
   try {
     const res = await d1Run(env,
-      'INSERT INTO llm_usage (provider, model, purpose, outcome, tokens_in, tokens_out, neurons, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        String(attempt.provider || 'unknown').slice(0, 100),
-        String(attempt.model || '').slice(0, 200),
-        attempt.purpose ? String(attempt.purpose).slice(0, 100) : null,
-        outcome,
-        Math.max(0, Math.round(toNum(attempt.tokensIn))),
-        Math.max(0, Math.round(toNum(attempt.tokensOut))),
-        Math.max(0, Math.round(toNum(attempt.neurons))),
-        attempt.error ? String(attempt.error).slice(0, 500) : null,
-      ]);
+      'INSERT INTO llm_usage (provider, model, purpose, outcome, tokens_in, tokens_out, neurons, error, neurons_estimated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [...values, attempt.neuronsEstimated ? 1 : 0]);
     return !!(res && res.meta && (res.meta.changes === 1 || res.meta.last_row_id));
-  } catch {
-    return false;
+  } catch (e) {
+    if (!isMissingColumnError(e)) return false;
+    try {
+      const res = await d1Run(env,
+        'INSERT INTO llm_usage (provider, model, purpose, outcome, tokens_in, tokens_out, neurons, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        values);
+      return !!(res && res.meta && (res.meta.changes === 1 || res.meta.last_row_id));
+    } catch {
+      return false;
+    }
   }
 }
 
 /**
- * Today's usage for one provider (UTC date). requests counts only rows
- * that actually reached a provider (outcome != 'not-configured'), so a
- * missing key never consumes a request quota. Returns zeros on any error.
+ * THE authoritative daily-usage rule (Phase 3, Priority 7) — every
+ * surface (dashboard header via providerStatus, dashboard KPI via the
+ * orchestrator analytics payload, cap checks) reads through this
+ * function, so the numbers can no longer disagree.
+ *  - requests counts only rows that actually reached a provider:
+ *    outcome IN ('ok', 'error'). Cap-refusal rows ('quota-exhausted',
+ *    written when the cap is hit BEFORE a call) and 'not-configured'
+ *    rows are audit-only and never count as calls.
+ *  - neurons / tokens are summed from 'ok' rows only (error and
+ *    cap-refusal rows carry no usage).
+ *  - neuronsEstimated is the part of today's Neurons that is an
+ *    ESTIMATE (pricing-rate / estimated-token calculation, never
+ *    provider-reported); null when the neurons_estimated column is
+ *    not yet applied live (migration 016), so the dashboard never
+ *    labels a figure "estimated" on unknown data.
+ * Today's usage for one provider (UTC date). Returns zeros on error.
  */
 export async function getDailyUsage(env, provider, date = todayStr()) {
-  const empty = { provider, date, requests: 0, tokensIn: 0, tokensOut: 0, neurons: 0 };
+  const empty = { provider, date, requests: 0, tokensIn: 0, tokensOut: 0, neurons: 0, neuronsEstimated: null };
   if (!env || !env.DB || !provider) return empty;
   try {
-    const rows = await d1All(env,
-      'SELECT outcome, tokens_in, tokens_out, neurons FROM llm_usage WHERE provider = ? AND substr(created_at, 1, 10) = ?',
-      [String(provider), String(date)]);
-    if (!rows) return empty;
-    const usage = { ...empty };
-    for (const r of rows) {
-      if (r.outcome !== 'not-configured') usage.requests += 1;
-      usage.tokensIn += toNum(r.tokens_in);
-      usage.tokensOut += toNum(r.tokens_out);
-      usage.neurons += toNum(r.neurons);
+    let rows = null;
+    try {
+      rows = await d1All(env,
+        'SELECT outcome, tokens_in, tokens_out, neurons, neurons_estimated FROM llm_usage WHERE provider = ? AND substr(created_at, 1, 10) = ?',
+        [String(provider), String(date)]);
+    } catch (e) {
+      if (!isMissingColumnError(e)) throw e;
+      rows = await d1All(env,
+        'SELECT outcome, tokens_in, tokens_out, neurons FROM llm_usage WHERE provider = ? AND substr(created_at, 1, 10) = ?',
+        [String(provider), String(date)]);
     }
+    if (!rows) return empty;
+    const usage = { ...empty, neuronsEstimated: 0 };
+    let estimatedKnown = false;
+    for (const r of rows) {
+      if (r.outcome !== 'ok' && r.outcome !== 'error') continue; // audit-only rows never count
+      if (r.outcome === 'ok') {
+        usage.requests += 1;
+        usage.tokensIn += toNum(r.tokens_in);
+        usage.tokensOut += toNum(r.tokens_out);
+        usage.neurons += toNum(r.neurons);
+        if (r.neurons_estimated !== undefined && r.neurons_estimated !== null) {
+          estimatedKnown = true;
+          if (Number(r.neurons_estimated) === 1) usage.neuronsEstimated += toNum(r.neurons);
+        }
+      } else {
+        usage.requests += 1; // a call that errored still reached the provider
+      }
+    }
+    if (!estimatedKnown) usage.neuronsEstimated = null;
     return usage;
   } catch {
     return empty;
   }
+}
+
+/** Today's usage for every known provider, via the one rule above. */
+export async function getAllProvidersDailyUsage(env, date = todayStr()) {
+  const out = {};
+  for (const provider of ['workers-ai', 'groq', 'gemini']) {
+    out[provider] = await getDailyUsage(env, provider, date);
+  }
+  return out;
 }
 
 async function readSetting(env, key, fallback) {

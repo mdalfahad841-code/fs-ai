@@ -217,19 +217,22 @@
 
   /* Shared rendering: header, footer, division grid, article cards, tools grid. */
   function renderHeader(active) {
+    // Phase 3, Priority 8: internal links use the clean route form
+    // (no ".html") — the canonical form. Home is "/" from the root
+    // and "../" from a sub-page.
     var nav = [
-      ['index.html', 'Home'], ['pages/division.html', 'Divisions'], ['pages/tools.html', 'Tools']
+      ['/', 'Home'], ['pages/division', 'Divisions'], ['pages/tools', 'Tools']
     ];
     /* Pages live one level deeper; fix relative links when on a sub-page. */
     var inPages = window.location.pathname.indexOf('/pages/') !== -1;
     var prefix = inPages ? '../' : '';
     var links = nav.map(function (n) {
-      var href = n[0].indexOf('pages/') === 0 ? (inPages ? n[0].replace('pages/', '') : n[0]) : prefix + n[0];
+      var href = n[0] === '/' ? '/' : (n[0].indexOf('pages/') === 0 ? (inPages ? n[0].replace('pages/', '') : n[0]) : prefix + n[0]);
       var cls = (active === n[1]) ? ' class="active" aria-current="page"' : '';
       return '<a href="' + href + '"' + cls + '>' + n[1] + '</a>';
     }).join('');
     return '<header class="site-header"><div class="wrap header-inner">' +
-      '<a class="brand" href="' + prefix + 'index.html"><span class="brand-mark">FS</span><span class="brand-text"><strong>FS AI</strong><small>Fahad Somrat AI</small></span></a>' +
+      '<a class="brand" href="' + (prefix || '/') + '"><span class="brand-mark">FS</span><span class="brand-text"><strong>FS AI</strong><small>Fahad Somrat AI</small></span></a>' +
       '<nav class="main-nav" aria-label="Main navigation">' + links + '</nav>' +
       '<div class="header-actions"><button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch light and dark theme">' + svgIcon('sun', 'icon-sun') + svgIcon('moon', 'icon-moon') + '</button>' +
       '<button class="nav-toggle" id="navToggle" type="button" aria-label="Open menu" aria-expanded="false">' + svgIcon('menu') + '</button></div></div></header>';
@@ -248,14 +251,14 @@
     return '<footer class="site-footer"><div class="wrap footer-grid">' +
       '<div><h3>FS AI</h3><p>Fahad Somrat AI — One Platform. Multiple Possibilities.</p>' +
       '<p>Founded by Fahad Somrat. Zero-cost platform: no paid services, no fake numbers.</p></div>' +
-      '<div><h3>Divisions</h3><p>' + DIVISIONS.map(function (d) { return '<a href="' + prefix + 'pages/division.html?division=' + d.id + '">' + esc(d.name) + '</a>'; }).join(' · ') + '</p>' +
-      '<p><a href="' + prefix + 'pages/about.html">About</a> · <a href="' + prefix + 'pages/contact.html">Contact</a> · <a href="' + prefix + 'pages/privacy.html">Privacy</a> · <a href="' + prefix + 'pages/terms.html">Terms</a></p></div>' +
+      '<div><h3>Divisions</h3><p>' + DIVISIONS.map(function (d) { return '<a href="' + prefix + 'pages/division?division=' + d.id + '">' + esc(d.name) + '</a>'; }).join(' · ') + '</p>' +
+      '<p><a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div>' +
       '<div><h3>Accounts</h3><p>' + links + '</p>' +
       '<p>Verified / connected: ' + verified.map(function (a) { return esc(a.name) + (a.handle ? ' (' + esc(a.handle) + ')' : ''); }).join(', ') + '.</p>' +
       '<p>Paused by owner — not created yet: ' + paused.map(function (a) { return esc(a.name); }).join(', ') + '.</p>' +
       '<p>Pending: ' + pending.map(function (a) { return esc(a.name); }).join(', ') + '.</p></div>' +
       '<div><h3>Honest numbers</h3><p>Revenue: $0.00<br>Traffic: Data unavailable<br>Articles: ' + ARTICLES.length + ' · Divisions: ' + DIVISIONS.length + ' · Tools: ' + TOOLS.length + '</p></div>' +
-      '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. No personal or family content is used on this platform. <a href="' + prefix + 'pages/about.html">About</a> · <a href="' + prefix + 'pages/contact.html">Contact</a> · <a href="' + prefix + 'pages/privacy.html">Privacy</a> · <a href="' + prefix + 'pages/terms.html">Terms</a></p></div></footer>';
+      '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. No personal or family content is used on this platform. <a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div></footer>';
   }
 
   function articleCard(a) {
@@ -278,7 +281,7 @@
         '<div class="div-body"><h3>' + esc(d.name) + '</h3>' +
         '<p class="div-tagline">' + esc(d.tagline) + '</p><p>' + esc(d.description) + '</p>' +
         '<p class="div-count">' + d.articleCount + ' article' + (d.articleCount === 1 ? '' : 's') + '</p>' +
-        '<a class="btn btn-outline" href="pages/division.html?division=' + d.id + '">Explore ' + esc(d.short) + ' →</a></div></article>';
+        '<a class="btn btn-outline" href="pages/division?division=' + d.id + '">Explore ' + esc(d.short) + ' →</a></div></article>';
     }).join('');
     fixArticleLinks(root);
   }
@@ -294,7 +297,7 @@
     if (!root) return;
     root.innerHTML = TOOLS.map(function (t) {
       return '<article class="card tool-card reveal"><h3>' + esc(t.name) + '</h3><p class="card-tag">' + esc(t.category) + '</p><p>' + esc(t.description) + '</p>' +
-        '<a class="btn btn-outline" href="pages/tools.html?tool=' + t.id + '">Open tool →</a></article>';
+        '<a class="btn btn-outline" href="pages/tools?tool=' + t.id + '">Open tool →</a></article>';
     }).join('');
     fixArticleLinks(root);
   }

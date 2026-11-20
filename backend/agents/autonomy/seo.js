@@ -58,19 +58,69 @@ export function extractExternalLinks(body) {
   return [...urls].filter((u) => u.startsWith('https://')).slice(0, 5);
 }
 
+/**
+ * Classify a link-fetch outcome (Phase 3, Priority 4).
+ * A link is CONFIRMED BROKEN only on 404/410 (+400). HTTP 406 (and
+ * 401/403/429/5xx, timeouts, unreachable hosts) means the checker
+ * could not verify the link — it is UNVERIFIABLE, never confirmed
+ * broken: the Guardian answers 406 to plain HEAD requests, so every
+ * Guardian-sourced article used to fail SEO on a healthy link.
+ * Never auto-pass an unverifiable link as healthy either: it is
+ * reported as unverifiable with the exact reason.
+ */
+export function classifyLinkStatus(status, error) {
+  if (error) {
+    return { classification: 'unverifiable', reason: error === 'timeout' ? 'request timed out' : 'host unreachable' };
+  }
+  if (status >= 200 && status < 400) return { classification: 'ok', reason: `HTTP ${status}` };
+  if (status === 404 || status === 410 || status === 400) return { classification: 'broken', reason: `HTTP ${status}` };
+  if (status === 406) return { classification: 'unverifiable', reason: 'HTTP 406 — server refused the request format (common for HEAD requests; link not confirmed broken)' };
+  if (status === 401 || status === 403) return { classification: 'unverifiable', reason: `HTTP ${status} — access restricted (auth/paywall); never bypassed` };
+  if (status === 429) return { classification: 'unverifiable', reason: 'HTTP 429 — rate-limited' };
+  if (status >= 500) return { classification: 'unverifiable', reason: `HTTP ${status} — server error` };
+  return { classification: 'unverifiable', reason: `HTTP ${status}` };
+}
+
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+async function fetchLinkOnce(url, fetchImpl, { withBrowserUa = false } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const headers = withBrowserUa ? { 'User-Agent': BROWSER_UA, Accept: 'text/html,application/xhtml+xml' } : {};
+    const res = await fetchImpl(url, { method: 'HEAD', signal: controller.signal, redirect: 'follow', headers });
+    return { status: res.status, error: null };
+  } catch (err) {
+    return { status: 0, error: err && err.name === 'AbortError' ? 'timeout' : 'unreachable' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function checkBrokenLinks(urls, fetchImpl) {
   const results = [];
   for (const url of urls) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    try {
-      const res = await fetchImpl(url, { method: 'HEAD', signal: controller.signal, redirect: 'follow' });
-      results.push({ url, ok: res.ok || (res.status >= 200 && res.status < 400), status: res.status });
-    } catch (err) {
-      results.push({ url, ok: false, status: 0, error: err && err.name === 'AbortError' ? 'timeout' : 'unreachable' });
-    } finally {
-      clearTimeout(timer);
+    // First try: plain HEAD. On an unverifiable outcome caused by the
+    // request itself (406/403/429), retry ONCE with a legitimate
+    // browser-like User-Agent — many publishers reject bare HEAD
+    // requests but answer browsers. Never bypass auth/paywalls: a
+    // 401/403 after the retry stays unverifiable, never "ok".
+    let outcome = await fetchLinkOnce(url, fetchImpl);
+    let retried = false;
+    const first = classifyLinkStatus(outcome.status, outcome.error);
+    if (first.classification === 'unverifiable' && (outcome.status === 406 || outcome.status === 403 || outcome.status === 429)) {
+      retried = true;
+      outcome = await fetchLinkOnce(url, fetchImpl, { withBrowserUa: true });
     }
+    const final = classifyLinkStatus(outcome.status, outcome.error);
+    results.push({
+      url, status: outcome.status,
+      ok: final.classification === 'ok',
+      classification: final.classification,
+      reason: final.reason,
+      ...(retried ? { retriedWithBrowserUa: true } : {}),
+      ...(outcome.error ? { error: outcome.error } : {}),
+    });
   }
   return results;
 }
@@ -181,17 +231,26 @@ export async function runSeoCheckSuite(env, article, { fetchImpl } = {}) {
       : 'No other published articles to compare against.');
 
   // 10. Broken-link check (live fetch, capped at 5 links).
+  // Phase 3, Priority 4: confirmed-broken links fail the check;
+  // UNVERIFIABLE links (406/403/429/5xx/timeout/unreachable) are
+  // needs-review — never a pass, never a confirmed-broken fail.
   const externalLinks = extractExternalLinks(body);
   if (!externalLinks.length) {
     push('broken-links', true, 'needs-review', 'No external links in the body.');
   } else {
     const impl = fetchImpl || (env && env.__fetchImpl) || fetch;
     const linkResults = await checkBrokenLinks(externalLinks, impl);
-    const broken = linkResults.filter((r) => !r.ok);
-    push('broken-links', broken.length === 0, 'failed',
-      broken.length
-        ? `${broken.length}/${linkResults.length} external link(s) failed: ${broken.map((b) => `${b.url} (${b.error || b.status})`).join('; ')}`
-        : `All ${linkResults.length} external link(s) responded.`);
+    const broken = linkResults.filter((r) => r.classification === 'broken');
+    const unverifiable = linkResults.filter((r) => r.classification === 'unverifiable');
+    if (broken.length) {
+      push('broken-links', false, 'failed',
+        `${broken.length}/${linkResults.length} external link(s) confirmed broken: ${broken.map((b) => `${b.url} (${b.reason})`).join('; ')}${unverifiable.length ? ` ${unverifiable.length} link(s) could not be verified: ${unverifiable.map((u) => `${u.url} (${u.reason})`).join('; ')}` : ''}`);
+    } else if (unverifiable.length) {
+      push('broken-links', false, 'needs-review',
+        `No link confirmed broken, but ${unverifiable.length}/${linkResults.length} external link(s) could not be verified: ${unverifiable.map((u) => `${u.url} (${u.reason})`).join('; ')} Fix: open the link in a browser to confirm it loads; a 406/403 from a publisher usually means the link is fine but the checker was blocked.`);
+    } else {
+      push('broken-links', true, 'needs-review', `All ${linkResults.length} external link(s) responded.`);
+    }
   }
 
   // 11. Structured metadata presence.

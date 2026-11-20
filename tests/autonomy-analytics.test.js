@@ -118,7 +118,14 @@ describe('GET /api/autonomy/analytics — seeded database', () => {
     assert.equal(auto.published, 12);
     assert.equal(a.publishedToday, 0, 'seed articles are not published today');
     assert.deepEqual(a.drafts, []);
-    assert.deepEqual(a.llmToday, { calls: 0, neurons: 0 });
+    assert.deepEqual(a.llmToday, {
+      calls: 0, neurons: 0,
+      byProvider: {
+        'workers-ai': { requests: 0, neurons: 0 },
+        groq: { requests: 0, neurons: 0 },
+        gemini: { requests: 0, neurons: 0 },
+      },
+    });
     assert.deepEqual(a.llm7d, { calls: 0, neurons: 0 });
     assert.deepEqual(a.failedTasks, []);
     assert.equal(a.latestReport, null);
@@ -158,7 +165,14 @@ describe('GET /api/autonomy/analytics — live activity', () => {
     assert.equal(a.drafts[0].id, Number(draftId));
     assert.equal(a.drafts[0].contentReady, false, 'draft with no checks is not gate-ready');
     assert.ok(a.drafts[0].blockedBy.length > 0);
-    assert.deepEqual(a.llmToday, { calls: 2, neurons: 39 });
+    assert.deepEqual(a.llmToday, {
+      calls: 2, neurons: 39,
+      byProvider: {
+        'workers-ai': { requests: 2, neurons: 39 },
+        groq: { requests: 0, neurons: 0 },
+        gemini: { requests: 0, neurons: 0 },
+      },
+    });
     assert.deepEqual(a.llm7d, { calls: 2, neurons: 39 });
     assert.equal(a.taskOutcomes7d.done, 1);
     assert.equal(a.failedTasks.length, 1);

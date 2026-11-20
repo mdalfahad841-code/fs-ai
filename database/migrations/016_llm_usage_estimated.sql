@@ -1,0 +1,15 @@
+-- FS AI migration 016 - estimated Neurons flag on llm_usage
+-- Phase 3, Priority 7 (Neurons/usage reconciliation): distinguish
+-- ESTIMATED Neuron figures (pricing-rate / estimated-token
+-- calculation, when the provider returns no usage block) from
+-- provider-reported usage. getDailyUsage() sums the estimated part
+-- separately so the dashboard can label it "(estimated)" instead of
+-- presenting an estimate as an exact figure.
+-- Safe: one new nullable column, no default. Existing rows get NULL
+-- ("unknown" — getDailyUsage reports neuronsEstimated null when no
+-- row carries a known flag). No existing data is changed. Idempotent:
+-- the parent applies migrations via the D1 console / API; re-running
+-- an ADD COLUMN on an existing column errors, so apply once.
+-- Rollback: leave the column (inert — code falls back to the old
+-- column list when it is absent) or rebuild the table without it.
+ALTER TABLE llm_usage ADD COLUMN neurons_estimated INTEGER CHECK (neurons_estimated IN (0, 1));

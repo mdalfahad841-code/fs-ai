@@ -48,12 +48,13 @@ import { persistAgentStatus } from '../agents/business-manager.js';
 import { QUEUE_AGENTS, QUEUE_TO_REGISTRY } from '../agents/autonomy-runner.js';
 import { convertScaffoldToDraft } from '../agents/autonomy/content.js';
 import { providerStatus, getProviderOrder } from '../llm/registry.js';
+import { getAllProvidersDailyUsage } from '../llm/usage.js';
 import { fetchFeed, newExecutionId } from '../rss/rss.js';
 import { loadAllSources, loadSource, fetchSource } from '../rss/sources.js';
 import { evaluatePublishGate } from '../publishing/gate.js';
 import { isProtected, assertNotProtected, assertTaskNotProtected, PROTECTED_TEST_ARTICLES } from '../publishing/protection.js';
 import { runSeo, runSeoCheckOnly } from '../agents/autonomy/seo.js';
-import { findEvidence, judgeClaimDeterministic, MAX_CORRECTION_ATTEMPTS } from '../agents/autonomy/factcheck.js';
+import { findEvidence, judgeClaimDeterministic, MAX_CORRECTION_ATTEMPTS, claimKey } from '../agents/autonomy/factcheck.js';
 import {
   runTask, retryTask, runDailyWorkflow, runWeeklyWorkflow, enqueueTask,
   generateReportSnapshot, normaliseTaskRow, todayStr,
@@ -828,10 +829,26 @@ async function listResolutions(env, correctionId) {
  * means exactly that; a recheck_verdict names the verdict that
  * failed.
  */
+/** Human-readable text for a stored failure_reason (migration 017). */
+const FAILURE_REASON_TEXT = {
+  'truncated-reply': 'The LLM reply was cut off mid-sentence (token budget) — no incomplete correction was saved.',
+  'validation-rejected': 'The corrected body failed whole-body validation (garbled, repeated, incomplete or unsupported content) — nothing was saved.',
+  'rewrite-rejected': 'The LLM rewrite was not a single complete evidence-backed sentence.',
+  'rewrite-error': 'The LLM rewrite call failed.',
+  'rewrite-circuit-open': 'Rewrites were paused after repeated truncated replies (circuit breaker) to stop spending Neurons.',
+  'sentence-not-found': 'The claim sentence could not be located in the article body for replacement or removal.',
+  'context-dangling': 'Removing this sentence would leave a dangling reference — needs human review.',
+};
+
 function deriveFailureReason(correction) {
   const attempt = Number(correction.attempt || 1);
   const parts = [];
-  if (correction.status === 'failed') {
+  // Phase 3, Priority 2: prefer the stored failure_reason (migration
+  // 017) when present; the derived text below is the fallback for
+  // rows written before it existed.
+  if (correction.failure_reason && FAILURE_REASON_TEXT[correction.failure_reason]) {
+    parts.push(FAILURE_REASON_TEXT[correction.failure_reason]);
+  } else if (correction.status === 'failed') {
     parts.push(`Correction attempt ${attempt} failed.`);
     if (correction.recheck_verdict) {
       parts.push(`Re-check verdict: ${correction.recheck_verdict}.`);
@@ -930,8 +947,17 @@ async function handleListCorrections(request, env) {
   const rows = await d1All(env,
     "SELECT * FROM article_corrections WHERE article_id = ? AND status IN ('pending', 'failed') ORDER BY created_at ASC, id ASC",
     [articleId]) || [];
+  // Phase 3, Priority 5: the endpoint reports DISTINCT CLAIMS, not
+  // rows — one entry per claim key (the earliest open row), so the
+  // dashboard count matches the gate's distinct-claim count. The raw
+  // row count is returned alongside for reconciliation.
+  const seenKeys = new Set();
   const corrections = [];
+  let duplicateRows = 0;
   for (const row of rows) {
+    const key = row.claim_key || claimKey(row.original_text || '');
+    if (seenKeys.has(key)) { duplicateRows += 1; continue; }
+    seenKeys.add(key);
     corrections.push({
       id: row.id, articleId: row.article_id, claimCheckId: row.claim_check_id,
       originalText: row.original_text, attemptedCorrection: row.corrected_text || null,
@@ -941,7 +967,7 @@ async function handleListCorrections(request, env) {
       resolutions: await listResolutions(env, row.id),
     });
   }
-  return jsonOk({ articleId, corrections, total: corrections.length, source: 'd1' });
+  return jsonOk({ articleId, corrections, total: corrections.length, rows: rows.length, duplicateRows, source: 'd1' });
 }
 
 const CORRECTION_RESOLUTIONS = [
@@ -1155,13 +1181,25 @@ async function handleRecheckArticle(request, env, id) {
   let taskReused = false;
   if (task) {
     taskReused = true;
-    if (task.status !== 'queued') {
-      await d1Run(env, "UPDATE agent_tasks SET status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
-        [nowIso(), task.id]);
+    // Phase 3, Priority 6: the re-check must be recorded as
+    // check_kind 'recheck' even when the task row is reused from an
+    // earlier run, so the fact_checks audit trail names the run type.
+    try {
+      const reusedPayload = {
+        ...(typeof task.payload === 'string' ? JSON.parse(task.payload) : (task.payload || {})),
+        check_kind: 'recheck',
+      };
+      await d1Run(env, "UPDATE agent_tasks SET payload = ?, status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
+        [JSON.stringify(reusedPayload), nowIso(), task.id]);
+    } catch {
+      if (task.status !== 'queued') {
+        await d1Run(env, "UPDATE agent_tasks SET status = 'queued', scheduled_for = NULL, updated_at = ? WHERE id = ?",
+          [nowIso(), task.id]);
+      }
     }
   } else {
     const enqueued = await enqueueTask(env, {
-      agent: 'fact-checking', kind: 'fact-check', payload: { article_id: articleId },
+      agent: 'fact-checking', kind: 'fact-check', payload: { article_id: articleId, check_kind: 'recheck' },
       division_id: article.division_id || null,
       idempotency_key: `manual-recheck-${articleId}-${before ? before.id : 0}`,
     });
@@ -1296,10 +1334,22 @@ async function handleAnalytics(request, env) {
     const gate = await evaluatePublishGate(env, d.id);
     draftGates.push({ id: d.id, title: d.title, status: d.status, division: d.division, isProtected: Number(d.is_protected || 0) === 1, contentReady: gate.contentReady, eligible: gate.eligible, blockedBy: gate.blockedBy });
   }
-  const llmToday = await safeFirst(env,
-    "SELECT COUNT(*) AS calls, COALESCE(SUM(neurons), 0) AS neurons FROM llm_usage WHERE date(created_at) = date('now')");
+  // Phase 3, Priority 7: ONE counting rule for LLM usage, via
+  // getAllProvidersDailyUsage() (llm/usage.js) — the same function the
+  // dashboard header reads through providerStatus(). The old inline
+  // COUNT(*)/SUM(neurons) counted cap-refusal rows as calls, which is
+  // how the KPI (259 Neurons, all rows) disagreed with the header.
+  // Shape is unchanged (calls, neurons) plus neuronsEstimated and a
+  // per-provider breakdown; neuronsEstimated is null until migration
+  // 016 is applied live.
+  const llmByProvider = await getAllProvidersDailyUsage(env);
+  const llmTodayCalls = Object.values(llmByProvider).reduce((a, u) => a + (u.requests || 0), 0);
+  const llmTodayNeurons = Object.values(llmByProvider).reduce((a, u) => a + (u.neurons || 0), 0);
+  const llmTodayEstimated = Object.values(llmByProvider).some((u) => u.neuronsEstimated === null)
+    ? null
+    : Object.values(llmByProvider).reduce((a, u) => a + (u.neuronsEstimated || 0), 0);
   const llm7d = await safeFirst(env,
-    "SELECT COUNT(*) AS calls, COALESCE(SUM(neurons), 0) AS neurons FROM llm_usage WHERE created_at >= datetime('now', '-7 days')");
+    "SELECT COUNT(*) AS calls, COALESCE(SUM(neurons), 0) AS neurons FROM llm_usage WHERE outcome IN ('ok', 'error') AND created_at >= datetime('now', '-7 days')");
   const taskOutcomes7d = await d1All(env,
     "SELECT outcome, COUNT(*) AS n FROM agent_runs WHERE started_at >= datetime('now', '-7 days') GROUP BY outcome") || [];
   const failedTasks = await d1All(env,
@@ -1313,7 +1363,14 @@ async function handleAnalytics(request, env) {
     articlesByDivision: articlesByDivision.map((r) => ({ division: r.division, name: r.name, total: Number(r.total || 0), published: Number(r.published || 0) })),
     publishedToday: Number(publishedToday ? publishedToday.n : 0),
     drafts: draftGates,
-    llmToday: { calls: Number(llmToday ? llmToday.calls : 0), neurons: Number(llmToday ? llmToday.neurons : 0) },
+    llmToday: {
+      calls: llmTodayCalls, neurons: llmTodayNeurons,
+      ...(llmTodayEstimated === null ? {} : { neuronsEstimated: llmTodayEstimated }),
+      byProvider: Object.fromEntries(Object.entries(llmByProvider).map(([p, u]) => [p, {
+        requests: u.requests, neurons: u.neurons,
+        ...(u.neuronsEstimated === null ? {} : { neuronsEstimated: u.neuronsEstimated }),
+      }])),
+    },
     llm7d: { calls: Number(llm7d ? llm7d.calls : 0), neurons: Number(llm7d ? llm7d.neurons : 0) },
     taskOutcomes7d: Object.fromEntries(taskOutcomes7d.map((r) => [r.outcome, Number(r.n || 0)])),
     failedTasks: failedTasks.map((t) => ({ id: t.id, agent: t.agent, kind: t.kind, attempts: t.attempts, maxAttempts: t.max_attempts, updatedAt: t.updated_at })),

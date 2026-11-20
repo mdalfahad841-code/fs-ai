@@ -526,7 +526,7 @@
     if (grid) {
       grid.innerHTML = F.TOOLS.slice(0, 8).map(function (t) {
         return '<article class="card tool-card reveal visible"><h3>' + F.esc(t.name) + '</h3><p class="card-tag">' + F.esc(t.category) + '</p><p>' + F.esc(t.description) + '</p>' +
-          '<a class="btn btn-outline" href="pages/tools.html?tool=' + t.id + '">Open tool →</a></article>';
+          '<a class="btn btn-outline" href="pages/tools?tool=' + t.id + '">Open tool →</a></article>';
       }).join('');
     }
   });

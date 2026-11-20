@@ -32,14 +32,21 @@
         try { window.dispatchEvent(new CustomEvent('fsai:theme-change')); } catch (e) {}
       });
     }
-    /* Highlight the nav link for the current page (in case markup was static). */
+    /* Highlight the nav link for the current page (in case markup was static).
+       Phase 3, Priority 8: nav hrefs are the clean route form (no
+       ".html"), so matching strips a trailing ".html" from both sides
+       — a visitor who lands on the .html URL directly still gets the
+       active state. */
     var path = window.location.pathname;
+    var stripHtml = function (s) { return String(s || '').replace(/\.html$/, ''); };
     document.querySelectorAll('.main-nav a').forEach(function (a) {
       var href = a.getAttribute('href') || '';
-      if ((path.endsWith('index.html') || path.endsWith('/')) && href.indexOf('index.html') !== -1) a.classList.add('active');
-      if (path.indexOf('division.html') !== -1 && href.indexOf('division.html') !== -1) a.classList.add('active');
-      if (path.indexOf('tools.html') !== -1 && href.indexOf('tools.html') !== -1) a.classList.add('active');
-      if (path.indexOf('dashboard.html') !== -1 && href.indexOf('dashboard.html') !== -1) a.classList.add('active');
+      var p = stripHtml(path);
+      var h = stripHtml(href);
+      if ((p === '/' || p.endsWith('/index')) && (h === '/' || h === '../' || h === 'index' || h.endsWith('/index'))) a.classList.add('active');
+      if (p.indexOf('/division') !== -1 && h.indexOf('division') !== -1) a.classList.add('active');
+      if (p.indexOf('/tools') !== -1 && h.indexOf('tools') !== -1) a.classList.add('active');
+      if (p.indexOf('/dashboard') !== -1 && h.indexOf('dashboard') !== -1) a.classList.add('active');
     });
   });
 

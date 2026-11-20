@@ -18,7 +18,7 @@ describe('Contact / About / 404 pages', () => {
   it('about.html exists with GA4 tag, canonical and brand facts', () => {
     const html = read('frontend/pages/about.html');
     assert.ok(html.includes('G-JVSCJT2DHJ'), 'GA4 tag present');
-    assert.ok(html.includes('<link rel="canonical" href="https://fs-ai-5w5.pages.dev/pages/about.html">'));
+    assert.ok(html.includes('<link rel="canonical" href="https://fs-ai-5w5.pages.dev/pages/about">'));
     assert.ok(html.includes('FAHAD SOMRAT AI'));
     assert.ok(html.includes('25 articles'));
     assert.ok(html.includes('20 free tools'));
@@ -43,8 +43,10 @@ describe('Contact / About / 404 pages', () => {
 
   it('footer links About and Contact', () => {
     const appJs = read('frontend/scripts/app.js');
-    assert.ok(appJs.includes('pages/about.html'));
-    assert.ok(appJs.includes('pages/contact.html'));
+    assert.ok(appJs.includes('pages/about'));
+    assert.ok(appJs.includes('pages/contact'));
+    assert.ok(!appJs.includes('pages/about.html'), 'clean route — no .html');
+    assert.ok(!appJs.includes('pages/contact.html'), 'clean route — no .html');
   });
 
   it('sitemap lists the About and Contact pages (60 URLs total)', () => {

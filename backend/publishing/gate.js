@@ -15,7 +15,7 @@
  * mode explicitly. When the gate does publish, it sets fact_checked=1
  * and records a revision first — the fact-checker itself never sets it.
  */
-import { d1All, d1First, d1Run, nowIso, DISCLAIMER_DIVISIONS } from '../middleware/validation.js';
+import { d1All, d1First, d1Run, nowIso, DISCLAIMER_DIVISIONS, isMissingColumnError } from '../middleware/validation.js';
 import { getEmergencyStop } from '../routes/admin.js';
 
 async function setting(env, key, fallback) {
@@ -80,11 +80,24 @@ export async function evaluatePublishGate(env, articleId) {
   push('sources-verified', sourcesOk, sourcesDetail);
 
   // 4. Correction re-check: no correction left pending/failed.
-  const openCorrections = await d1First(env,
-    "SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = ? AND status IN ('pending', 'failed')", [id]);
+  // Phase 3, Priority 5: the gate counts unresolved CLAIMS, not rows.
+  // A claim is unresolved when its LATEST correction row is still
+  // pending/failed — an earlier failed row followed by an applied row
+  // is resolved, and duplicate open rows for one claim count once.
+  // Before migration 017 (no claim_key column) the old row-count
+  // query is used instead.
+  let openCorrections = null;
+  try {
+    openCorrections = await d1First(env,
+      "SELECT COUNT(*) AS n FROM (SELECT COALESCE(claim_key, original_text) AS k, MAX(id) AS max_id FROM article_corrections WHERE article_id = ? GROUP BY k) latest JOIN article_corrections c ON c.id = latest.max_id WHERE c.status IN ('pending', 'failed')", [id]);
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    openCorrections = await d1First(env,
+      "SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = ? AND status IN ('pending', 'failed')", [id]);
+  }
   push('correction-recheck', !(openCorrections && Number(openCorrections.n) > 0),
     openCorrections && Number(openCorrections.n) > 0
-      ? `${openCorrections.n} correction(s) still pending or failed.`
+      ? `${openCorrections.n} correction claim(s) still pending or failed.`
       : 'No open corrections (re-check passes or nothing to correct).');
 
   // 5. SEO passes (latest run).

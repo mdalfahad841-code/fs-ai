@@ -393,7 +393,13 @@
       var lines = providers.map(function (p) {
         var usage = p.todayUsage || {};
         var used = '';
-        if (p.id === 'workers-ai' && usage.neurons != null) used = ' — ' + usage.neurons + ' of 10,000 free Neurons used today';
+        // Phase 3, Priority 7: the header re-reads live usage after
+        // every task run (see runTask/runWeekly/daily below) — the old
+        // code called loadLlm() only once at dashboard init, so the
+        // header froze at a stale snapshot (55) while D1 showed 259.
+        // Neuron figures are ESTIMATES unless provider-reported; the
+        // estimated part is labelled, never silently presented as exact.
+        if (p.id === 'workers-ai' && usage.neurons != null) used = ' — ' + usage.neurons + ' of 10,000 free Neurons used today' + (usage.neuronsEstimated ? ' (' + usage.neuronsEstimated + ' estimated)' : '');
         else if (p.id === 'groq' && usage.tokensIn != null) used = ' — ' + ((usage.tokensIn || 0) + (usage.tokensOut || 0)) + ' of 200,000 free tokens used today';
         else if (p.id === 'gemini' && usage.requests != null) used = ' — ' + usage.requests + ' free-tier requests used today';
         return 'Provider: ' + (p.name || p.id) + ' — ' + (p.status || 'unknown') + used +
@@ -471,6 +477,7 @@
       loadTasks();
       loadStatus();
       loadPipeline();
+      loadLlm(); // Phase 3, P7: a task run can consume LLM usage — re-read the header instead of leaving a stale snapshot.
     }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
   }
 
@@ -721,7 +728,7 @@
           { label: 'Articles published', value: String(byStatus.published || 0), note: 'Live on the site' },
           { label: 'Drafts', value: String(byStatus.draft || 0), note: 'Awaiting review' },
           { label: 'Published today', value: String(d.publishedToday != null ? d.publishedToday : '—'), note: 'UTC day, from D1' },
-          { label: 'LLM calls today', value: String((d.llmToday && d.llmToday.calls) || 0), note: ((d.llmToday && d.llmToday.neurons) || 0) + ' Neurons today (free allowance 10,000/day)' },
+          { label: 'LLM calls today', value: String((d.llmToday && d.llmToday.calls) || 0), note: ((d.llmToday && d.llmToday.neurons) || 0) + ' Neurons today (free allowance 10,000/day)' + ((d.llmToday && d.llmToday.neuronsEstimated) ? ' — ' + d.llmToday.neuronsEstimated + ' estimated' : '') },
           { label: 'LLM calls (7 days)', value: String((d.llm7d && d.llm7d.calls) || 0), note: ((d.llm7d && d.llm7d.neurons) || 0) + ' Neurons in 7 days' },
           { label: 'Failed tasks', value: String((d.failedTasks || []).length), note: 'Retry them from the task queue' },
           { label: 'Research sources', value: String((d.research && d.research.activeSources) || 0), note: ((d.research && d.research.itemsDiscovered) || 0) + ' items discovered in total' },
@@ -844,6 +851,7 @@
         '. fact_checked stays ' + (d.factChecked != null ? d.factChecked : '0') + ' (advisory only).';
       setText('autonomyFactCheckDetail', msg);
       loadPipeline();
+      loadLlm(); // Phase 3, P7: a re-check runs the LLM judge — re-read live usage.
     }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
   }
 
@@ -979,6 +987,7 @@
       loadTasks();
       loadReports();
       loadPipeline();
+      loadLlm(); // Phase 3, P7: the weekly workflow can consume LLM usage — re-read the header.
     }).catch(function () { if (btn) btn.disabled = false; setText('autonomyRunWeeklyStatus', 'Could not reach the FS AI server.'); });
   }
 
@@ -1069,6 +1078,7 @@
           loadTasks();
           loadReports();
           loadPipeline();
+          loadLlm(); // Phase 3, P7: the daily workflow can consume LLM usage — re-read the header.
         }).catch(function () { dailyBtn.disabled = false; setText('autonomyRunDailyStatus', 'Could not reach the FS AI server.'); });
       });
     }

@@ -27,6 +27,53 @@ import {
   disclaimerForDivision, deriveSeoDescription,
 } from '../../middleware/validation.js';
 import { generateText } from '../../llm/index.js';
+import { normalizeUrl } from '../../services/urls.js';
+
+/**
+ * Find one stored research item by URL — exact match first, then a
+ * safe normalised match (Phase 3, Priority 1). Returns
+ * { item, matchMethod, matchedStoredUrl } or null. The normalised
+ * fallback fetches the (id, url, fetched_at) list once and compares
+ * canonical forms in JS, so a trailing slash / www / http-vs-https /
+ * fragment / default-port variation still resolves to the stored
+ * research instead of silently failing generation. The full row is
+ * fetched by id only for the match actually used.
+ */
+const RESEARCH_ITEM_COLS = 'id, source_id, title, url, published_at, summary, evidence_text, is_outdated';
+
+async function findResearchItemByUrl(env, suppliedUrl, urlIndexCache) {
+  const text = String(suppliedUrl || '').trim();
+  if (!text || !/^https?:\/\//i.test(text)) return null;
+  try {
+    const exact = await d1First(env,
+      `SELECT ${RESEARCH_ITEM_COLS} FROM research_items WHERE url = ? ORDER BY fetched_at DESC LIMIT 1`, [text]);
+    if (exact) return { item: exact, matchMethod: 'exact', matchedStoredUrl: text };
+  } catch { /* fall through to the normalised match */ }
+  const canonical = normalizeUrl(text);
+  if (!canonical) return null;
+  try {
+    let index = urlIndexCache && urlIndexCache.list;
+    if (!index) {
+      const rows = await d1All(env,
+        'SELECT id, url, fetched_at FROM research_items WHERE url IS NOT NULL ORDER BY fetched_at DESC') || [];
+      index = [];
+      for (const r of rows) {
+        const c = normalizeUrl(r.url);
+        if (c) index.push({ id: r.id, url: r.url, canonical: c });
+      }
+      if (urlIndexCache) urlIndexCache.list = index;
+    }
+    // Index is fetched_at DESC, so the first canonical match is the latest fetch.
+    const hit = index.find((c) => c.canonical === canonical);
+    if (!hit) return null;
+    const full = await d1First(env,
+      `SELECT ${RESEARCH_ITEM_COLS} FROM research_items WHERE id = ? LIMIT 1`, [hit.id]);
+    if (!full) return null;
+    return { item: full, matchMethod: 'normalized', matchedStoredUrl: hit.url };
+  } catch {
+    return null;
+  }
+}
 
 const LLM_SYSTEM_PROMPT =
   'You write plain-language educational articles for a general audience. ' +
@@ -62,38 +109,48 @@ function buildLlmPrompt({ title, divisionName, outline, sources, evidence }) {
 /**
  * Resolve each supplied source URL against the stored research items.
  * Returns { resolved: [{ url, title, summary, evidenceText,
- * publishedAt, researchItemId, sourceId, sourceName, isOutdated }],
+ * publishedAt, researchItemId, sourceId, sourceName, isOutdated,
+ * canonicalUrl, matchMethod, matchedStoredUrl }],
  * unresolved: [url, ...] }. Only stored research counts as evidence:
  * a URL the system never fetched has no usable content (the LLM cannot
  * open links), so it is reported unresolved — never passed off as
- * research. Deduplicated by URL; at most one row per URL (latest fetch).
+ * research. Deduplicated by canonical URL; at most one row per URL
+ * (latest fetch). `url` is ALWAYS the original supplied URL (display
+ * and audit); `canonicalUrl` is the normalised form and `matchMethod`
+ * is 'exact' or 'normalized' (see backend/services/urls.js) — the
+ * matching decision is recorded on every resolved item.
  */
 export async function resolveEvidence(env, sources) {
   const resolved = [];
   const unresolved = [];
   const seenUrls = new Set();
+  const urlIndexCache = {};
   for (const s of sources || []) {
     const text = String(s || '').trim();
     if (!text) continue;
     if (!/^https?:\/\//i.test(text)) { unresolved.push(text); continue; }
-    if (seenUrls.has(text)) continue;
-    seenUrls.add(text);
-    let items = [];
-    try {
-      items = await d1All(env,
-        'SELECT ri.id, ri.source_id, ri.title, ri.url, ri.published_at, ri.summary, ri.evidence_text, ri.is_outdated, rs.name AS source_name ' +
-        'FROM research_items ri LEFT JOIN research_sources rs ON rs.id = ri.source_id ' +
-        'WHERE ri.url = ? ORDER BY ri.fetched_at DESC LIMIT 1', [text]) || [];
-    } catch { items = []; }
-    if (items.length) {
-      const it = items[0];
+    const dedupeKey = normalizeUrl(text) || text;
+    if (seenUrls.has(dedupeKey)) continue;
+    seenUrls.add(dedupeKey);
+    const found = await findResearchItemByUrl(env, text, urlIndexCache);
+    if (found) {
+      const it = found.item;
       resolved.push({
         url: text, title: it.title, summary: it.summary || '',
         evidenceText: it.evidence_text || it.summary || it.title,
         publishedAt: it.published_at || null, researchItemId: it.id,
-        sourceId: it.source_id, sourceName: it.source_name || null,
+        sourceId: it.source_id, sourceName: null,
         isOutdated: it.is_outdated === 1,
+        canonicalUrl: normalizeUrl(text),
+        matchMethod: found.matchMethod,
+        matchedStoredUrl: found.matchedStoredUrl,
       });
+      // Source name comes from research_sources; resolved lazily so a
+      // missing sources row never breaks resolution.
+      try {
+        const src = await d1First(env, 'SELECT name FROM research_sources WHERE id = ? LIMIT 1', [it.source_id]);
+        if (src) resolved[resolved.length - 1].sourceName = src.name;
+      } catch { /* name stays null */ }
     } else {
       unresolved.push(text);
     }
@@ -339,6 +396,7 @@ export async function convertScaffoldToDraft(env, scaffold) {
   let sourcesRecorded = 0;
   let sourcesDeduped = 0;
   const sourceErrors = [];
+  const urlIndexCache = {};
   for (const s of sources) {
     const text = String(s || '').trim();
     if (!text) continue;
@@ -346,10 +404,11 @@ export async function convertScaffoldToDraft(env, scaffold) {
     let researchItemId = evidenceByUrl.get(text) || null;
     let sourceType = isUrl ? 'other' : 'other';
     if (isUrl && !researchItemId) {
-      try {
-        const fromRss = await d1First(env, 'SELECT id FROM research_items WHERE url = ? ORDER BY fetched_at DESC LIMIT 1', [text]);
-        if (fromRss) { researchItemId = fromRss.id; sourceType = 'research'; }
-      } catch { /* lookup failure: keep 'other' with no link */ }
+      // Exact match first, then the safe normalised match (Phase 3,
+      // Priority 1): a supplied URL with a trailing slash / www /
+      // http-vs-https variation still links to the stored research.
+      const found = await findResearchItemByUrl(env, text, urlIndexCache);
+      if (found) { researchItemId = found.item.id; sourceType = 'research'; }
     } else if (researchItemId) {
       sourceType = 'research';
     }

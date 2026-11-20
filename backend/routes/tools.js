@@ -8,7 +8,23 @@
  * different slugs from the frontend tool ids, so the API returns the D1
  * rows as stored, with the division slug joined in. `?category=` filters
  * by division slug (e.g. automotive) or by tool_type.
+ *
+ * FRONTEND_TOOL_IDS — the 20 tool ids the FRONTEND tools page
+ * (frontend/scripts/tools.js, DEFS) actually renders, in sitemap
+ * order. These are NOT the D1 slugs (e.g. D1 'currency-manual-rate'
+ * vs frontend 'currency-converter', D1 'storage' vs frontend
+ * 'storage-converter'): the `?tool=` URL parameter is read by the
+ * frontend, so the sitemap must list the frontend ids. A parity test
+ * (tests/sitemap-canonical.test.js) fails if this list drifts from
+ * the frontend DEFS.
  */
+export const FRONTEND_TOOL_IDS = [
+  'fuel-cost', 'mileage', 'maintenance-planner', 'tyre-pressure',
+  'monthly-budget', 'savings', 'loan-payment', 'currency-converter',
+  'storage-converter', 'internet-speed', 'data-unit', 'file-size',
+  'travel-budget', 'distance-planner', 'trip-cost', 'age-calculator',
+  'percentage', 'date-calculator', 'unit-converter', 'time-calculator',
+];
 import { jsonOk, jsonError, d1All } from '../middleware/validation.js';
 
 export const TOOLS = [

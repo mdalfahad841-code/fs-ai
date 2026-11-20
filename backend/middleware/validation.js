@@ -180,3 +180,16 @@ export async function d1Run(env, sql, params = []) {
   const bound = params.length ? stmt.bind(...params) : stmt;
   return bound.run();
 }
+
+/**
+ * True when an error means "the referenced column does not exist".
+ * SQLite (local tests) says "table X has no column named Y"; Cloudflare
+ * D1 says "no such column: Y". Phase 3 migrations 016–018 add columns
+ * the parent applies live AFTER deploy, so code that writes the new
+ * columns must fall back to the old column list while they are absent
+ * — and must only fall back for THIS error, never for any other failure.
+ */
+export function isMissingColumnError(err) {
+  const text = String((err && err.message) || err || '');
+  return /no such column/i.test(text) || /has no column named/i.test(text);
+}

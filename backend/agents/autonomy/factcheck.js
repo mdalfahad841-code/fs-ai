@@ -41,7 +41,7 @@
  * lines and bibliography sections but keeps factual claims that carry
  * a trailing citation URL (citation stripped, claim kept).
  */
-import { d1All, d1First, d1Run, DISCLAIMER_DIVISIONS } from '../../middleware/validation.js';
+import { d1All, d1First, d1Run, DISCLAIMER_DIVISIONS, isMissingColumnError } from '../../middleware/validation.js';
 import { generateText } from '../../llm/index.js';
 
 export const MAX_CLAIMS_PER_ARTICLE = 20;
@@ -102,6 +102,42 @@ const CITATION_SECTION_RE = /^\s*(sources?|references?|related reading|further r
  *  - Real claims that merely sit near citations, and list items that
  *    DO assert something ("- **Fast charging** is available …" stays).
  */
+/**
+ * Strip a leading bracketed citation label ("[The Guardian] ",
+ * "[BBC] ", "[Source] ") from a claim. The citation itself is NOT
+ * lost: claim_checks rows keep evidence_url, so the source linkage
+ * survives separately. (Phase 3, Priority 3 — the live #30 fact-check
+ * carried the label into 5 claim texts.)
+ */
+export function stripCitationPrefix(text) {
+  return String(text || '').replace(/^\s*\[[^\]\n]{1,60}\]\s*/, '');
+}
+
+/**
+ * Stable identity for a claim across fact-check runs: citation
+ * prefix stripped, lower-cased, whitespace collapsed, first 200
+ * chars. Two fact-check runs generate different claim_check ids for
+ * the same claim text, so identity must be the TEXT, never the id.
+ * (Phase 3, Priority 5 — the duplicate-correction root cause.)
+ */
+export function claimKey(text) {
+  return stripCitationPrefix(text).toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+/**
+ * Lines that are publishing/meta scaffolding, never factual claims:
+ * the AI-DRAFT banner (ALL its lines — Phase 2's strip removed only
+ * line 1, so #30's claims 1–2 were the banner's 2nd/3rd lines),
+ * the SCAFFOLD marker, and bracketed editorial instructions such as
+ * "[Write this section — no content yet.]".
+ */
+const BANNER_LINE_RE = /^\s*(AI-DRAFT\b.*|This draft was written by\b.*|It has NOT been fact-checked\b.*|SCAFFOLD\b.*)$/i;
+const EDITORIAL_LINE_RE = /^\s*\[[^\]\n]*(write|todo|placeholder|no content yet)[^\]\n]*\]\s*$/i;
+
+export function isBannerOrMetaLine(line) {
+  return BANNER_LINE_RE.test(line) || EDITORIAL_LINE_RE.test(line);
+}
+
 function stripLeadingCitationPrefix(line) {
   // A line that opens with a parenthesised citation URL: drop the URL
   // (and a following dash) and keep whatever statement follows it.
@@ -149,6 +185,8 @@ function stripCitationLines(body) {
   const kept = [];
   let inCitationSection = false;
   for (const line of lines) {
+    // Publishing/meta scaffolding is never a claim (Phase 3, P3).
+    if (isBannerOrMetaLine(line)) continue;
     if (/^\s*#{1,6}\s/.test(line)) { inCitationSection = false; kept.push(line); continue; }
     if (CITATION_SECTION_RE.test(line.trim())) { inCitationSection = true; continue; }
     if (inCitationSection) continue;
@@ -162,7 +200,6 @@ function stripCitationLines(body) {
 /** Split a body into checkable claim sentences (headings + the AI-DRAFT marker excluded). */
 export function extractClaims(body, { maxClaims = MAX_CLAIMS_PER_ARTICLE } = {}) {
   const text = stripCitationLines(String(body || ''))
-    .replace(/^AI-DRAFT[^\n]*\n?/im, '')
     .replace(/^#{1,6}\s+.*$/gm, ' ')
     .replace(/\n+/g, ' ')
     // Strip citation material from inside sentences, keeping the claim:
@@ -178,7 +215,10 @@ export function extractClaims(body, { maxClaims = MAX_CLAIMS_PER_ARTICLE } = {})
   const raw = text.split(/(?<=[.!?])\s+/);
   const claims = [];
   for (const sentence of raw) {
-    const s = sentence.trim().replace(/\s+/g, ' ');
+    // Strip a leading "[The Guardian]"-style citation label BEFORE
+    // the length/assertion checks (Phase 3, P3): the label is not
+    // part of the claim, and the citation survives via evidence_url.
+    const s = stripCitationPrefix(sentence.trim().replace(/\s+/g, ' '));
     if (s.length < 40 || s.length > 500) continue;
     if (!/[a-zA-Z]/.test(s)) continue;
     const hasNumber = /\d/.test(s);
@@ -310,13 +350,13 @@ async function loadEvidence(env, article) {
     let items = [];
     if (s.research_item_id) {
       const row = await d1First(env,
-        'SELECT id, source_id, title, url, published_at, summary, evidence_text, is_outdated FROM research_items WHERE id = ? LIMIT 1',
+        'SELECT id, source_id, title, url, published_at, fetched_at, summary, evidence_text, is_outdated FROM research_items WHERE id = ? LIMIT 1',
         [s.research_item_id]);
       if (row) items = [row];
     }
     if (!items.length && s.source_url) {
       items = await d1All(env,
-        'SELECT id, source_id, title, url, published_at, summary, evidence_text, is_outdated FROM research_items WHERE url = ? ORDER BY fetched_at DESC',
+        'SELECT id, source_id, title, url, published_at, fetched_at, summary, evidence_text, is_outdated FROM research_items WHERE url = ? ORDER BY fetched_at DESC',
         [s.source_url]) || [];
     }
     for (const it of items) {
@@ -325,13 +365,13 @@ async function loadEvidence(env, article) {
       pool.push({
         url: it.url, title: it.title, isOutdated: it.is_outdated === 1,
         text: [it.title, it.summary, it.evidence_text].filter(Boolean).join(' '),
-        researchItemId: it.id,
+        researchItemId: it.id, fetchedAt: it.fetched_at || null,
       });
     }
     if (!items.length) {
       // Recorded source, no stored research row: its title is the only
       // evidence text, and it is still article-specific.
-      pool.push({ url: s.source_url || null, title: s.source_title || '', text: s.source_title || '', isOutdated: false, researchItemId: null });
+      pool.push({ url: s.source_url || null, title: s.source_title || '', text: s.source_title || '', isOutdated: false, researchItemId: null, fetchedAt: null });
     }
   }
   return pool;
@@ -378,14 +418,77 @@ function structuralChecks(article, sources) {
   return { checks, flags };
 }
 
-export async function checkArticle(env, article) {
+/**
+ * Fact-check one article against its OWN recorded sources only.
+ *
+ * Phase 3, Priority 6 (verdict consistency): every run records
+ * check_kind ('initial' | 'recheck' | 'correction-recheck') and the
+ * evidence signature (the research-item ids + fetch times the run
+ * judged against). A claim whose text is IDENTICAL to a claim in the
+ * previous check AND whose evidence signature is unchanged is CARRIED
+ * FORWARD with its previous verdict — the LLM entailment judge is
+ * non-deterministic, and re-running it on unchanged text against
+ * unchanged evidence can only flip a verdict for no reason (live
+ * #30: claim 8 flipped UNSUPPORTED → VERIFIED with no correction
+ * saved). A claim whose text changed, or whose evidence changed (a
+ * newer fetch), is evaluated fresh. previous_verdict is stored on
+ * every claim_checks row so any flip is traceable. A correction
+ * attempt alone therefore never flips a verdict: the corrected claim
+ * is new text and is re-evaluated; unchanged claims keep theirs.
+ * options: { checkKind }.
+ */
+export async function checkArticle(env, article, options = {}) {
+  const checkKind = options.checkKind || 'initial';
   const sources = await d1All(env, 'SELECT * FROM article_sources WHERE article_id = ? ORDER BY id ASC', [article.id]) || [];
   const { checks, flags } = structuralChecks(article, sources);
   const claims = extractClaims(article.body);
   const pool = await loadEvidence(env, article);
   const poolEmpty = pool.length === 0;
+  // Evidence signature: which stored research rows (and which fetch
+  // of each) this run judged against. Identical signature + identical
+  // claim text = nothing new to judge.
+  const evidenceSignature = pool
+    .map((p) => `${p.researchItemId || 0}:${p.fetchedAt || ''}`)
+    .sort().join('|');
+  // Previous check, for carry-forward + previous_verdict (P6).
+  const previousCheck = await d1First(env,
+    'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [article.id]);
+  let previousByKey = new Map();
+  let previousSignature = null;
+  if (previousCheck) {
+    previousSignature = previousCheck.evidence_signature || null;
+    try {
+      const prevClaims = await d1All(env,
+        'SELECT claim_text, verdict, evidence_url, evidence_quote, explanation FROM claim_checks WHERE fact_check_id = ? ORDER BY id ASC',
+        [previousCheck.id]) || [];
+      for (const pc of prevClaims) {
+        previousByKey.set(claimKey(pc.claim_text), {
+          verdict: pc.verdict, explanation: pc.explanation || '',
+          evidenceUrl: pc.evidence_url || null, evidenceQuote: pc.evidence_quote || null,
+        });
+      }
+    } catch { previousByKey = new Map(); }
+  }
+  // Carry-forward is legitimate only when the previous run recorded a
+  // signature AND it matches this run's (rows written before
+  // migration 018 have no signature, so they never carry forward).
+  const signatureUnchanged = previousCheck !== null && previousSignature !== null && previousSignature === evidenceSignature;
   const claimResults = [];
   for (const claim of claims) {
+    const key = claimKey(claim);
+    const prev = previousByKey.get(key) || null;
+    const previousVerdict = prev ? prev.verdict : null;
+    // Same claim text, same evidence, not changed by the caller: keep
+    // the previous verdict. No LLM judge call, no flip, no Neurons.
+    if (prev && signatureUnchanged) {
+      claimResults.push({
+        claim, verdict: prev.verdict, previousVerdict,
+        evidenceUrl: prev.evidenceUrl, evidenceQuote: prev.evidenceQuote,
+        explanation: `${prev.explanation} (Unchanged — verdict carried forward: same claim text, same evidence.)`,
+        carriedForward: true,
+      });
+      continue;
+    }
     const evidence = findEvidence(claim, pool);
     let judged = judgeClaimDeterministic(claim, evidence, poolEmpty);
     // Borderline match (some keywords, not enough to verify): ask the LLM
@@ -400,8 +503,10 @@ export async function checkArticle(env, article) {
       }
     }
     claimResults.push({
-      claim, verdict: judged.verdict, evidenceUrl: evidence ? evidence.url : null,
+      claim, verdict: judged.verdict, previousVerdict,
+      evidenceUrl: evidence ? evidence.url : null,
       evidenceQuote: evidence ? evidence.quote : null, explanation: judged.explanation,
+      carriedForward: false,
     });
   }
 
@@ -413,38 +518,60 @@ export async function checkArticle(env, article) {
   else if (claimResults.some((c) => c.verdict === 'INCORRECT')) verdict = 'failed';
   else if (failed > 0 || flags.length > 0) verdict = 'needs-review';
 
-  const inserted = await d1Run(env,
-    'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed) VALUES (?, ?, ?, ?, ?)',
-    [article.id, verdict, claimResults.length, verified, failed]);
-  const factCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  // fact_checks gains check_kind + evidence_signature (migration 018);
+  // fall back to the old column list when the migration is not yet
+  // applied live (the parent applies migrations after deploy).
+  let factCheckId = null;
+  try {
+    const inserted = await d1Run(env,
+      'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, check_kind, evidence_signature) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [article.id, verdict, claimResults.length, verified, failed, checkKind, evidenceSignature]);
+    factCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    const inserted = await d1Run(env,
+      'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed) VALUES (?, ?, ?, ?, ?)',
+      [article.id, verdict, claimResults.length, verified, failed]);
+    factCheckId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  }
   if (factCheckId) {
     for (const c of claimResults) {
-      await d1Run(env,
-        'INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation) VALUES (?, ?, ?, ?, ?, ?)',
-        [factCheckId, c.claim, c.verdict, c.evidenceUrl, c.evidenceQuote, c.explanation]);
+      try {
+        await d1Run(env,
+          'INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation, previous_verdict) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [factCheckId, c.claim, c.verdict, c.evidenceUrl, c.evidenceQuote, c.explanation, c.previousVerdict]);
+      } catch (e) {
+        if (!isMissingColumnError(e)) throw e;
+        await d1Run(env,
+          'INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation) VALUES (?, ?, ?, ?, ?, ?)',
+          [factCheckId, c.claim, c.verdict, c.evidenceUrl, c.evidenceQuote, c.explanation]);
+      }
     }
   }
   return {
     factCheckId, articleId: article.id, title: article.title, division: article.division,
     status: article.status, verdict, claims: claimResults,
     claimsTotal: claimResults.length, claimsVerified: verified, claimsFailed: failed,
-    checks, flags,
+    checks, flags, checkKind,
+    carriedForward: claimResults.filter((c) => c.carriedForward).length,
   };
 }
 
 /**
  * Build a tolerant search pattern for a claim sentence in the body.
  * A claim extracted by extractClaims may have had its citation part
- * stripped (a parenthesised URL, or a " - <url>" tail), so the body can
- * hold citation material where the claim has only whitespace, or just
- * before its final punctuation. The pattern allows exactly that — an
- * optional parenthesised URL or dash-URL — at each whitespace run and
- * before the closing punctuation, and nothing else.
+ * stripped (a parenthesised URL, or a " - <url>" tail, or a leading
+ * "[The Guardian]"-style label — Phase 3, Priority 3), so the body
+ * can hold citation material where the claim has only whitespace, or
+ * just before its final punctuation. The pattern allows exactly that
+ * — an optional parenthesised URL or dash-URL — at each whitespace
+ * run and before the closing punctuation, plus an optional bracketed
+ * citation label before the sentence, and nothing else.
  */
 function claimPattern(sentence) {
   const escaped = String(sentence).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const citationInsert = '(?:\\([^)]*https?:\\/\\/[^)]*\\)|[–—-]\\s*https?:\\/\\/\\S+)';
-  let pattern = escaped.replace(/\s+/g, `\\s+(?:${citationInsert}\\s+)?`);
+  let pattern = `(?:\\[[^\\]\\n]{1,60}\\]\\s*)?` + escaped.replace(/\s+/g, `\\s+(?:${citationInsert}\\s+)?`);
   pattern = pattern.replace(/\\([.!?])$/, `(?:\\s*${citationInsert})?\\$1`);
   return new RegExp(pattern);
 }
@@ -511,14 +638,34 @@ function startsWithLowercaseFragment(s) {
 /** Strip an LLM reply down to its first complete sentence. A reply
  *  that runs two sentences (or a fragment + a sentence) together is
  *  never inserted whole — only its first sentence is even considered,
- *  and isValidReplacementSentence below must still accept it. */
+ *  and isValidReplacementSentence below must still accept it. A
+ *  leading meta sentence ("Here is the corrected sentence.") is a
+ *  reply wrapper, not the correction: it is dropped and the next
+ *  sentence is used (Phase 3, Priority 2 — the old code took only
+ *  parts[0], so a meta opener would be spliced in as the correction
+ *  itself). */
 function cleanCandidate(raw) {
   let text = String(raw || '').trim().replace(/\s+/g, ' ');
   text = text.replace(/^(corrected sentence|correction|rewritten sentence)\s*:\s*/i, '');
   text = text.replace(/^here is (the )?(corrected|rewritten)[^:]*:\s*/i, '');
   text = text.replace(/^["“']|["”']$/g, '').trim();
   const parts = text.split(/(?<=[.!?])\s+/);
-  return (parts[0] || '').trim().replace(/["”']$/, '').trim();
+  let first = (parts[0] || '').trim();
+  if (/^(here is|here'?s) (the )?(corrected|rewritten|updated|fixed|new)\b/i.test(first) && parts.length > 1) {
+    first = (parts[1] || '').trim();
+  }
+  return first.replace(/["”']$/, '').trim();
+}
+
+/** A reply that ends without terminal punctuation is incomplete:
+ *  the model was cut off (token budget) or never finished the
+ *  sentence. Such a reply must never be saved as a correction —
+ *  the caller retries once with a shorter evidence quote, then
+ *  marks the claim for human review. (Phase 3, Priority 2.) */
+export function isTruncatedReply(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return false;
+  return !/[.!?]["”')]?$/.test(text);
 }
 
 /** A rewrite is usable only as ONE whole evidence-backed sentence:
@@ -535,6 +682,10 @@ function isValidReplacementSentence(candidate, original) {
   if (/[a-z][.!?][A-Z]/.test(candidate)) return false;
   if (/https?:\/\//.test(candidate)) return false;
   if (/\b(as an ai|i (do not|don't|can ?not|cannot) (know|verify|confirm)|i'?m sorry|unable to verify)\b/i.test(candidate)) return false;
+  // A meta reply about the correction ("Here is the corrected
+  // sentence.") is not the correction itself (Phase 3, Priority 2).
+  if (/^(here is|here'?s) (the )?(corrected|rewritten|updated|fixed|new)\b/i.test(candidate)) return false;
+  if (/^(the )?(corrected|rewritten) (sentence|claim|statement) (is|:)/i.test(candidate)) return false;
   if (DOUBLED_WORD_RE.test(candidate)) return false;
   if (!/[a-zA-Z]/.test(candidate)) return false;
   return true;
@@ -794,6 +945,54 @@ export function validateCorrectedBody(originalBody, correctedBody, evidencePool)
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
+/**
+ * Record one correction attempt (Phase 3, Priority 5).
+ * Identity is (article_id, claim_key) — never claim_check_id, which
+ * changes on every fact-check (live #30: 11 rows / 6 claims).
+ *  - Success (applied/removed): always INSERT a new row — it closes
+ *    the claim, and the gate counts a key resolved when its LATEST
+ *    row is applied/removed.
+ *  - Failure: when an OPEN row (pending/failed) already exists for
+ *    the claim key, UPDATE it in place (attempt + latest
+ *    claim_check_id + failure reason) instead of inserting a second
+ *    open row for the same claim. Otherwise INSERT.
+ * claim_key + failure_reason are written when migration 017 is
+ * applied; when the columns do not exist yet the write falls back to
+ * the old column list (the parent applies migrations live after
+ * deploy). History is never deleted. Returns the row id written.
+ */
+async function recordCorrection(env, articleId, p) {
+  const key = p.key;
+  const failureReason = p.failureReason || null;
+  if (p.action === 'failed' && p.openRow) {
+    try {
+      await d1Run(env,
+        'UPDATE article_corrections SET claim_check_id = ?, attempt = ?, corrected_text = ?, failure_reason = ?, evidence_url = ?, claim_key = ? WHERE id = ?',
+        [p.failed.id, p.attempt, p.correctedText || null, failureReason, p.evidenceUrl || null, key, p.openRow.id]);
+      return p.openRow.id;
+    } catch (e) {
+      if (!isMissingColumnError(e)) throw e;
+      await d1Run(env,
+        'UPDATE article_corrections SET claim_check_id = ?, attempt = ?, corrected_text = ?, evidence_url = ? WHERE id = ?',
+        [p.failed.id, p.attempt, p.correctedText || null, p.evidenceUrl || null, p.openRow.id]);
+      return p.openRow.id;
+    }
+  }
+  const status = p.action === 'corrected' ? 'applied' : p.action;
+  try {
+    const inserted = await d1Run(env,
+      'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict, evidence_url, claim_key, failure_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [articleId, p.failed.id, p.failed.claim_text, p.correctedText || null, p.attempt, status, p.recheck ? p.recheck.verdict : null, p.evidenceUrl || null, key, failureReason]);
+    return inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    const inserted = await d1Run(env,
+      'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict, evidence_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [articleId, p.failed.id, p.failed.claim_text, p.correctedText || null, p.attempt, status, p.recheck ? p.recheck.verdict : null, p.evidenceUrl || null]);
+    return inserted && inserted.meta ? inserted.meta.last_row_id : null;
+  }
+}
+
 export async function runCorrection(env, article) {
   const latest = await d1First(env,
     'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [article.id]);
@@ -818,7 +1017,7 @@ export async function runCorrection(env, article) {
       claim: failed.claim_text, action: 'skipped', evidenceUrl: null,
       reason: 'No article-specific evidence on record — needs human review.',
     }));
-    const recheck = await checkArticle(env, article);
+    const recheck = await checkArticle(env, article, { checkKind: 'correction-recheck' });
     return {
       outcome: 'done', articleId: article.id, title: article.title, division: article.division,
       corrected: 0, removed: 0, skipped: failedClaims.length, results,
@@ -832,13 +1031,35 @@ export async function runCorrection(env, article) {
   let removed = 0;
   let skipped = 0;
   const results = [];
+  // Phase 3, Priority 5: correction identity is (article_id, claimKey).
+  // The old attempts count used claim_check_id, which changes on every
+  // fact-check — so a re-check reset the counter to 0 and a second run
+  // wrote duplicate rows for the same claim (live #30: 11 rows / 6
+  // claims). Attempts are now counted per claim key across runs, and
+  // recordCorrection() below never inserts a second OPEN row for a
+  // claim that already has one.
+  const existingCorrections = await d1All(env,
+    'SELECT * FROM article_corrections WHERE article_id = ? ORDER BY id ASC', [article.id]) || [];
+  const attemptsByKey = new Map();
+  const openRowByKey = new Map(); // key -> latest open (pending/failed) row
+  for (const row of existingCorrections) {
+    const key = row.claim_key || claimKey(row.original_text || '');
+    attemptsByKey.set(key, (attemptsByKey.get(key) || 0) + 1);
+    if (row.status === 'pending' || row.status === 'failed') openRowByKey.set(key, row);
+  }
+  // Phase 3, Priority 2: run-level circuit breaker. Two consecutive
+  // truncated LLM replies mean the model is stuck cutting replies off
+  // — stop spending Neurons on rewrites for the rest of this run and
+  // send the remaining claims to removal-or-human-review instead.
+  let consecutiveTruncations = 0;
+  let rewriteCircuitOpen = false;
   // Correction rows are collected here and written only after the
   // whole-body validation gate below passes — a rejected correction
   // must never leave 'applied' rows behind for a body that was not saved.
   const pending = [];
   for (const failed of failedClaims) {
-    const attemptsRow = await d1First(env, 'SELECT COUNT(*) AS n FROM article_corrections WHERE claim_check_id = ?', [failed.id]);
-    const attempts = Number(attemptsRow ? attemptsRow.n : 0);
+    const key = claimKey(failed.claim_text);
+    const attempts = attemptsByKey.get(key) || 0;
     if (attempts >= MAX_CORRECTION_ATTEMPTS) {
       skipped += 1;
       results.push({ claim: failed.claim_text, action: 'skipped', reason: `Already tried ${attempts} time(s) — max ${MAX_CORRECTION_ATTEMPTS} reached.` });
@@ -848,6 +1069,7 @@ export async function runCorrection(env, article) {
     let action = null;
     let correctedText = null;
     let actionReason = null;
+    let failureReason = null;
     // A rewrite is attempted whenever usable evidence exists — INCLUDING
     // conflicting evidence, because that is exactly the case where the
     // evidence holds the right number and the claim holds the wrong one.
@@ -856,17 +1078,41 @@ export async function runCorrection(env, article) {
     // The candidate validation below still rejects any rewrite that
     // re-introduces a number the evidence does not contain.
     if (evidence && evidence.score >= 0.3) {
-      // Try an LLM rewrite grounded in the evidence quote.
-      const rewrite = await generateText({
-        prompt: `Original statement (failed fact-check): "${failed.claim_text}"\nEvidence: "${evidence.quote}" (source: ${evidence.url || 'unknown'})\nRewrite the statement so it is exactly supported by the evidence, keeping the same topic and plain tone. Reply with only the corrected sentence, nothing else.`,
-        system: 'You correct a factual statement using only the supplied evidence. Never invent numbers or facts that are not in the evidence.',
-        maxTokens: 200,
-        purpose: 'fact-check-correct',
-      }, env);
+      // Phase 3, Priority 2: the old call used maxTokens 200 and took
+      // the first reply at face value — #30 burned 10 calls / 98
+      // Neurons on replies that were truncated mid-sentence or opened
+      // with a meta sentence ("Here is the corrected sentence.").
+      // Now: a 500-token budget, a prompt that forbids introductions,
+      // explicit truncation detection with ONE retry on a shorter
+      // evidence quote, and the run-level circuit breaker above.
+      let candidate = '';
+      if (!rewriteCircuitOpen) {
+        for (let attemptNo = 0; attemptNo < 2; attemptNo++) {
+          const quote = attemptNo === 0 ? evidence.quote : String(evidence.quote || '').slice(0, 150);
+          const rewrite = await generateText({
+            prompt: `Original statement (failed fact-check): "${failed.claim_text}"\nEvidence: "${quote}" (source: ${evidence.url || 'unknown'})\nRewrite the statement so it is exactly supported by the evidence, keeping the same topic and plain tone. Reply with ONLY the corrected sentence, under 40 words, ending with a period. No introduction, no explanation, no quotation marks.`,
+            system: 'You correct a factual statement using only the supplied evidence. Never invent numbers or facts that are not in the evidence.',
+            maxTokens: 500,
+            purpose: 'fact-check-correct',
+          }, env);
+          const raw = rewrite && rewrite.ok ? String(rewrite.text || '') : '';
+          if (!rewrite || !rewrite.ok) { failureReason = 'rewrite-error'; break; }
+          if (isTruncatedReply(raw)) {
+            consecutiveTruncations += 1;
+            failureReason = 'truncated-reply';
+            if (consecutiveTruncations >= 2) rewriteCircuitOpen = true;
+            continue; // retry once with the shorter quote
+          }
+          consecutiveTruncations = 0;
+          candidate = cleanCandidate(raw);
+          break;
+        }
+      } else {
+        failureReason = 'rewrite-circuit-open';
+      }
       // Fix 2: the reply is reduced to its first complete sentence and
       // must pass isValidReplacementSentence — a multi-sentence or
       // fragment reply (the #28 splice shape) is never inserted whole.
-      const candidate = cleanCandidate(rewrite && rewrite.ok ? String(rewrite.text || '') : '');
       // A rewrite is usable only if it is a real single sentence,
       // different from the original, and does not re-introduce a number
       // the evidence does not contain. Dropping the disputed number
@@ -878,7 +1124,7 @@ export async function runCorrection(env, article) {
       // because "2023" matched.)
       const candidateNumbers = claimNumbers(candidate);
       const evidenceNumbers = claimNumbers(evidence.quote || '');
-      const candidateOk = isValidReplacementSentence(candidate, failed.claim_text)
+      const candidateOk = candidate && isValidReplacementSentence(candidate, failed.claim_text)
         && (candidateNumbers.length === 0 || evidenceNumbers.length === 0
           || candidateNumbers.every((n) => evidenceNumbers.includes(n)));
       if (candidateOk) {
@@ -891,6 +1137,9 @@ export async function runCorrection(env, article) {
         }
       } else if (candidate) {
         actionReason = `LLM rewrite rejected (not a single complete evidence-backed sentence): "${candidate.slice(0, 120)}"`;
+        failureReason = failureReason || 'validation-rejected';
+      } else if (!failureReason) {
+        failureReason = 'rewrite-rejected';
       }
     }
     if (!action) {
@@ -907,10 +1156,12 @@ export async function runCorrection(env, article) {
         } else {
           action = 'failed';
           actionReason = 'Could not locate the sentence in the body to remove it.';
+          failureReason = failureReason || 'sentence-not-found';
         }
       } else {
         action = 'skipped';
         actionReason = 'Removing this sentence would leave a dangling reference — needs human review.';
+        failureReason = failureReason || 'context-dangling';
         skipped += 1;
       }
     }
@@ -920,13 +1171,20 @@ export async function runCorrection(env, article) {
     pending.push({
       failed, action, correctedText, recheck, attempt: attempts + 1,
       evidenceUrl: action === 'corrected' && evidence ? evidence.url : null,
-      reason: actionReason,
+      reason: actionReason, key,
+      // The stored row records a failure reason only when the attempt
+      // FAILED (a corrected/removed row is a success). The returned
+      // results below keep it in all cases — it explains why the claim
+      // was removed rather than corrected.
+      failureReason: (action === 'corrected' || action === 'removed') ? null : failureReason,
+      openRow: openRowByKey.get(key) || null,
     });
     results.push({
       claim: failed.claim_text, action, correctedText,
       evidenceUrl: action === 'corrected' && evidence ? evidence.url : null,
       recheckVerdict: recheck ? recheck.verdict : null,
       ...(actionReason ? { reason: actionReason } : {}),
+      ...(failureReason ? { failureReason } : {}),
     });
   }
 
@@ -936,24 +1194,32 @@ export async function runCorrection(env, article) {
   // every attempted correction is recorded as a 'failed' row, and the
   // article is left for human review (the re-check below runs on the
   // unchanged body, verdict needs-review; fact_checked is never set).
-  // The failure reason is recorded in three places: this returned
+  // The failure reason is recorded in four places: this returned
   // result (the run/task log), each correction row's corrected_text
-  // ("VALIDATION REJECTED — …"), and the results below. It is NOT in
-  // recheck_verdict: that column has a CHECK constraint allowing only
-  // verdict words, so free text would violate it; no new column (and
-  // therefore no migration) is in scope for this fix.
+  // ("VALIDATION REJECTED — …"), the row's failure_reason column
+  // ('validation-rejected', migration 017 — Phase 3, Priority 2),
+  // and the results below. It is NOT in recheck_verdict: that column
+  // has a CHECK constraint allowing only verdict words, so free text
+  // would violate it.
   if (body !== originalBody) {
     const validation = validateCorrectedBody(originalBody, body, pool);
     if (!validation.ok) {
+      // Every attempted correction is recorded as a 'failed' row with
+      // failure_reason 'validation-rejected' (Phase 3, P2/P5) — via
+      // recordCorrection(), so a claim that already has an open row is
+      // updated in place instead of duplicated.
+      const failedRowByKey = new Map();
       for (const p of pending) {
         if (p.action === 'skipped') continue; // 'skipped' is not a valid status value — no row
-        await d1Run(env,
-          'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict, evidence_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [article.id, p.failed.id, p.failed.claim_text,
-            p.action === 'failed' ? null : `VALIDATION REJECTED — ${validation.reasons.join('; ')}`,
-            p.attempt, 'failed', null, null]);
+        if (p.action === 'failed' && failedRowByKey.has(p.key)) p.openRow = failedRowByKey.get(p.key);
+        const rowId = await recordCorrection(env, article.id, {
+          ...p, action: 'failed',
+          correctedText: p.action === 'failed' ? null : `VALIDATION REJECTED — ${validation.reasons.join('; ')}`,
+          failureReason: 'validation-rejected',
+        });
+        if (rowId) failedRowByKey.set(p.key, { id: rowId });
       }
-      const recheck = await checkArticle(env, article);
+      const recheck = await checkArticle(env, article, { checkKind: 'correction-recheck' });
       return {
         outcome: 'done', articleId: article.id, title: article.title, division: article.division,
         corrected: 0, removed: 0, skipped,
@@ -961,7 +1227,7 @@ export async function runCorrection(env, article) {
         results: results.map((r) => (r.action === 'corrected' || r.action === 'removed'
           ? {
             ...r, action: 'failed', attemptedAction: r.action, correctedText: null,
-            evidenceUrl: null, recheckVerdict: null,
+            evidenceUrl: null, recheckVerdict: null, failureReason: 'validation-rejected',
             reason: `Validation rejected the corrected body: ${validation.reasons.join('; ')}`,
           }
           : r)),
@@ -974,12 +1240,14 @@ export async function runCorrection(env, article) {
   // Validation passed (or nothing changed): record the corrections.
   // 'skipped' has no row — the status CHECK allows only
   // pending/applied/failed/removed, and a skip is recorded in the
-  // returned results instead.
+  // returned results instead. recordCorrection() (Phase 3, P5) never
+  // inserts a second OPEN row for a claim that already has one.
+  const failedRowByKey = new Map();
   for (const p of pending) {
     if (p.action === 'skipped') continue;
-    await d1Run(env,
-      'INSERT INTO article_corrections (article_id, claim_check_id, original_text, corrected_text, attempt, status, recheck_verdict, evidence_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [article.id, p.failed.id, p.failed.claim_text, p.correctedText, p.attempt, p.action === 'corrected' ? 'applied' : p.action, p.recheck ? p.recheck.verdict : null, p.evidenceUrl]);
+    if (p.action === 'failed' && failedRowByKey.has(p.key)) p.openRow = failedRowByKey.get(p.key);
+    const rowId = await recordCorrection(env, article.id, p);
+    if (p.action === 'failed' && rowId) failedRowByKey.set(p.key, { id: rowId });
   }
 
   if (body !== originalBody) {
@@ -990,7 +1258,7 @@ export async function runCorrection(env, article) {
       [body, new Date().toISOString(), article.id]);
   }
   const updated = { ...article, body };
-  const recheck = await checkArticle(env, updated);
+  const recheck = await checkArticle(env, updated, { checkKind: 'correction-recheck' });
   return {
     outcome: 'done', articleId: article.id, title: article.title, division: article.division,
     corrected, removed, skipped, results, recheckVerdict: recheck.verdict, recheck,
@@ -1011,7 +1279,7 @@ export async function runFactChecking(task, env) {
   if (task && task.kind === 'correct') {
     return runCorrection(env, article);
   }
-  const result = await checkArticle(env, article);
+  const result = await checkArticle(env, article, { checkKind: payload.check_kind || 'initial' });
   return {
     outcome: 'done',
     ...result,

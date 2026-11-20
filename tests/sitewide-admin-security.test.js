@@ -87,7 +87,7 @@ describe('SEO files (sitemap / robots / canonicals)', () => {
   it('privacy and terms pages exist with canonicals', () => {
     for (const page of ['frontend/pages/privacy.html', 'frontend/pages/terms.html']) {
       assert.ok(fs.existsSync(path.join(ROOT, page)), `${page} must exist`);
-      assert.match(read(page), /<link rel="canonical" href="https:\/\/fs-ai-5w5\.pages\.dev\/pages\/(privacy|terms)\.html">/);
+      assert.match(read(page), /<link rel="canonical" href="https:\/\/fs-ai-5w5\.pages\.dev\/pages\/(privacy|terms)">/);
     }
   });
 });

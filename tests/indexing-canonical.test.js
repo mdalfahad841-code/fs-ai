@@ -14,9 +14,18 @@
 //   2. The SEO generator (backend/services/seo.js) emits only clean URLs:
 //      meta/OG/JSON-LD canonicals and every sitemap entry.
 //   3. Both committed sitemaps (frontend/sitemap.xml — the copy Pages
-//      serves — and public/sitemap.xml) contain no `.html` URL at all and
-//      list all 25 articles + all 8 divisions in the clean form.
+//      serves — and public/sitemap.xml) contain no `.html` URL at all,
+//      list all 25 articles + all 8 divisions + all 20 tool pages in
+//      the clean form, and are IDENTICAL to the generator output
+//      (60 entries — Phase 3, Priority 8: the old generator emitted
+//      35 while the files had 58/60; the files are now regenerated
+//      from the generator by scripts/regenerate-sitemap.mjs).
 //   4. Every article-link builder the codebase owns uses the clean form.
+//   5. Static page canonicals / og:url / JSON-LD urls and every
+//      internal nav href use the clean form (no ".html") — Phase 3,
+//      Priority 8 fixed division.html, the header/footer/cards in
+//      app.js, tools.js, navigation.js active-state, and the static
+//      pages themselves.
 //
 // Run: node --test tests/indexing-canonical.test.js (or: npm test)
 // Local files only — no network, no live D1/Pages, nothing published.
@@ -29,6 +38,7 @@ const path = require('node:path');
 
 const { ARTICLES } = require('../backend/routes/articles.js');
 const { DIVISIONS } = require('../backend/routes/divisions.js');
+const { FRONTEND_TOOL_IDS } = require('../backend/routes/tools.js');
 const seo = require('../backend/services/seo.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -105,8 +115,11 @@ describe('SEO generator (backend/services/seo.js): clean URLs only', () => {
     const xml = seo.sitemapXml();
     assert.ok(!xml.includes('.html'), 'generator output must not contain .html');
     const entries = seo.sitemapEntries();
-    assert.equal(entries.length, 35, 'home + 8 divisions + 25 articles + tools');
+    // 60 = home + all-divisions + 8 divisions + 25 articles + tools
+    // + 20 per-tool pages + about + contact + privacy + terms.
+    assert.equal(entries.length, 60, 'home + all-divisions + 8 divisions + 25 articles + tools + 20 tool pages + about + contact + privacy + terms');
     assert.equal(entries[0].loc, `${SITE}/`);
+    assert.ok(entries.some((e) => e.loc === `${SITE}/pages/division`), 'all-divisions page must be /pages/division');
     for (const d of DIVISIONS) {
       assert.ok(entries.some((e) => e.loc === `${SITE}/pages/division?division=${d.slug}`),
         `division ${d.slug} must be /pages/division?division=${d.slug}`);
@@ -116,14 +129,27 @@ describe('SEO generator (backend/services/seo.js): clean URLs only', () => {
         `article ${a.id} must be /pages/article?id=${a.id}`);
     }
     assert.ok(entries.some((e) => e.loc === `${SITE}/pages/tools`), 'tools entry must be /pages/tools');
+    assert.equal(FRONTEND_TOOL_IDS.length, 20, 'frontend tool list must have 20 ids');
+    for (const id of FRONTEND_TOOL_IDS) {
+      assert.ok(entries.some((e) => e.loc === `${SITE}/pages/tools?tool=${id}`),
+        `tool ${id} must be /pages/tools?tool=${id}`);
+    }
+    for (const page of ['about', 'contact', 'privacy', 'terms']) {
+      assert.ok(entries.some((e) => e.loc === `${SITE}/pages/${page}`), `${page} must be /pages/${page}`);
+    }
+    // Drafts and private routes are never listed.
+    for (const e of entries) {
+      assert.ok(!/dashboard|owner-setup|draft/i.test(e.loc), `private/draft route must never be listed: ${e.loc}`);
+    }
     assert.ok(entries.every((e) => !e.loc.includes('.html')), 'no entry may use a .html URL');
+    assert.equal(new Set(entries.map((e) => e.loc)).size, entries.length, 'no duplicate locs');
   });
 });
 
 describe('committed sitemaps: clean forms, full coverage, no .html', () => {
   for (const [name, xml, expectedLocs] of [
     ['frontend/sitemap.xml (served copy)', FRONTEND_SITEMAP, 60],
-    ['public/sitemap.xml', PUBLIC_SITEMAP, 58],
+    ['public/sitemap.xml', PUBLIC_SITEMAP, 60],
   ]) {
     it(`${name} contains no .html URL`, () => {
       assert.ok(!xml.includes('.html'), `${name} must not contain .html anywhere`);
@@ -152,13 +178,27 @@ describe('committed sitemaps: clean forms, full coverage, no .html', () => {
     });
   }
 
-  it('generator output is a subset of both committed sitemaps', () => {
-    // The generator emits the 35 core URLs; the committed files keep their
-    // fuller sets (per-tool URLs, legal pages, bare division index) in the
-    // same clean forms. Every generated URL must appear verbatim in both.
-    for (const e of seo.sitemapEntries()) {
-      assert.ok(FRONTEND_SITEMAP.includes(`<loc>${e.loc}</loc>`), e.loc);
-      assert.ok(PUBLIC_SITEMAP.includes(`<loc>${e.loc}</loc>`), e.loc);
+  it('generator output EQUALS both committed sitemaps (loc sets)', () => {
+    // Phase 3, Priority 8: the committed files are regenerated from
+    // the generator (scripts/regenerate-sitemap.mjs), so they must
+    // match it exactly — the old 35-vs-58/60 gap cannot come back.
+    const generated = new Set(seo.sitemapEntries().map((e) => e.loc));
+    for (const [name, xml] of [['frontend/sitemap.xml', FRONTEND_SITEMAP], ['public/sitemap.xml', PUBLIC_SITEMAP]]) {
+      const committed = new Set(locs(xml));
+      assert.deepEqual(committed, generated, `${name} loc set must equal the generator output`);
+    }
+    assert.equal(FRONTEND_SITEMAP, PUBLIC_SITEMAP, 'the two committed sitemaps must be identical files');
+  });
+
+  it('both committed sitemaps list all 20 tool pages and the legal/about pages', () => {
+    for (const xml of [FRONTEND_SITEMAP, PUBLIC_SITEMAP]) {
+      const found = locs(xml);
+      for (const id of FRONTEND_TOOL_IDS) {
+        assert.ok(found.includes(`${SITE}/pages/tools?tool=${id}`), `tool ${id}`);
+      }
+      for (const page of ['division', 'about', 'contact', 'privacy', 'terms']) {
+        assert.ok(found.includes(`${SITE}/pages/${page}`), page);
+      }
     }
   });
 });
