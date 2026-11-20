@@ -7,6 +7,7 @@
 import {
   jsonOk, jsonError, parseQuery, d1All, nowIso, disclaimerForDivision,
 } from '../middleware/validation.js';
+import { stripAllDraftBannerLines } from '../utils/draftBanner.js';
 
 // Public-article visibility rule (D1): status = 'published' AND
 // (publish_at IS NULL OR publish_at <= now) AND the division is active.
@@ -80,6 +81,22 @@ function withDisclaimer(article) {
   return disclaimer ? { ...article, disclaimer } : article;
 }
 
+/**
+ * Defense-in-depth for the public read path (2026-11-20): the API never
+ * serves an internal AI-DRAFT banner line, even if a body stored before
+ * the publish-layer fix somehow still carries one. The publish layer
+ * (routes/admin-articles.js) already strips + validates before any
+ * article can become published, so this is a second net, not the first —
+ * and it is a no-op for the banner-free bodies every published article
+ * has today. Only lines starting with a banner marker are dropped;
+ * legitimate prose is returned untouched.
+ */
+function publicArticle(article) {
+  if (!article || typeof article.body !== 'string') return article;
+  const cleaned = stripAllDraftBannerLines(article.body);
+  return cleaned === article.body ? article : { ...article, body: cleaned };
+}
+
 // Fallback catalogue slugs MUST match database/seed.sql and the live D1
 // slugs exactly (audit B11, 2026-11-13: 13 of 25 used to differ, so a
 // D1 single-article lookup by a fallback slug 404d). tests/divisions-articles.test.js
@@ -125,11 +142,11 @@ export async function handleArticles(request, env) {
     if (env.DB) {
       const article = await queryPublicSingle(env, slug);
       if (!article) return jsonError('Article not found', 404);
-      return jsonOk({ article: withDisclaimer(article), source: 'd1' });
+      return jsonOk({ article: withDisclaimer(publicArticle(article)), source: 'd1' });
     }
     const article = ARTICLES.find((a) => a.slug === slug);
     if (!article) return jsonError('Article not found', 404);
-    return jsonOk({ article: withDisclaimer(article), source: 'fallback' });
+    return jsonOk({ article: withDisclaimer(publicArticle(article)), source: 'fallback' });
   }
 
   const q = parseQuery(url);
@@ -139,12 +156,14 @@ export async function handleArticles(request, env) {
 
   if (env.DB) {
     const rows = await queryPublicList(env, division, search, limit);
-    return jsonOk({ articles: rows, total: rows.length, source: 'd1' });
+    const articles = (rows || []).map(publicArticle);
+    return jsonOk({ articles, total: articles.length, source: 'd1' });
   }
 
   // In-memory fallback — the real catalogue above, clearly labelled.
   let list = ARTICLES.filter((a) => a.status === 'published');
   if (division) list = list.filter((a) => a.division === division);
   if (search) list = list.filter((a) => (a.title + ' ' + a.excerpt).toLowerCase().includes(search));
-  return jsonOk({ articles: list.slice(0, limit), total: list.length, source: 'fallback' });
+  const articles = list.slice(0, limit).map(publicArticle);
+  return jsonOk({ articles, total: articles.length, source: 'fallback' });
 }

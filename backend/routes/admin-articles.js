@@ -21,6 +21,7 @@ import {
   d1All, d1First, d1Run, ARTICLE_STATUSES,
 } from '../middleware/validation.js';
 import { getEmergencyStop } from './admin.js';
+import { stripDraftBanner, hasDraftBanner } from '../utils/draftBanner.js';
 
 const ARTICLE_COLUMNS = 'a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt';
 
@@ -124,6 +125,15 @@ async function createArticle(request, env, auth) {
 
   const tags = cleanTags(body.tags) || [];
   const status = body.status || 'draft';
+  // Banner protection: creating an article already marked 'published'
+  // IS a publish transition, so the same strip-or-refuse rule applies.
+  // A draft create never touches the body.
+  let storedBody = body.body;
+  if (status === 'published') {
+    const prep = preparePublishBody(body.body);
+    if (!prep.ok) return jsonError(prep.error, 422);
+    storedBody = prep.body;
+  }
   const now = nowIso();
   const publishedAt = status === 'published' ? now : null;
   const result = await d1Run(env,
@@ -133,7 +143,7 @@ async function createArticle(request, env, auth) {
       sanitiseText(body.title, 200),
       slug,
       sanitiseText(body.excerpt || '', 500),
-      body.body,
+      storedBody,
       sanitiseText(body.author || 'FS AI', 100),
       status,
       body.fact_checked ? 1 : 0,
@@ -196,11 +206,6 @@ async function updateArticle(request, env, auth, id) {
   }
   const tags = body.tags !== undefined ? cleanTags(body.tags) : null;
 
-  // Store the pre-edit version first — the revision trail is the audit log.
-  await d1Run(env,
-    'INSERT INTO article_revisions (article_id, title, excerpt, body, status, revised_by, revised_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [current.id, current.title, current.excerpt, current.body, current.status, auth.owner || 'owner', nowIso()]);
-
   const next = {
     division_id: divisionId,
     title: body.title !== undefined ? sanitiseText(body.title, 200) : current.title,
@@ -217,6 +222,23 @@ async function updateArticle(request, env, auth, id) {
       ? (body.publish_at ? new Date(body.publish_at).toISOString() : null)
       : current.publish_at,
   };
+  // Banner protection: a PUT that transitions an article INTO 'published'
+  // is a publish action, so the same strip-or-refuse rule applies — and
+  // the refusal happens BEFORE the revision is stored, so a failed
+  // publish leaves no trace at all. A PUT that does not publish (a draft
+  // or approved edit, or an edit to an already-published article) never
+  // touches the body; the renderer strip is the net for those.
+  if (next.status === 'published' && current.status !== 'published') {
+    const prep = preparePublishBody(next.body);
+    if (!prep.ok) return jsonError(prep.error, 422);
+    next.body = prep.body;
+  }
+
+  // Store the pre-edit version first — the revision trail is the audit log.
+  await d1Run(env,
+    'INSERT INTO article_revisions (article_id, title, excerpt, body, status, revised_by, revised_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [current.id, current.title, current.excerpt, current.body, current.status, auth.owner || 'owner', nowIso()]);
+
   // Moving to published stamps published_at; moving away from published
   // leaves the last published date on the record.
   const publishedAt = next.status === 'published' && current.status !== 'published'
@@ -242,13 +264,47 @@ async function deleteArticle(env, id) {
   return jsonOk({ ok: true, deleted: Number(id) });
 }
 
+/**
+ * Banner protection shared by every transition INTO 'published'
+ * (2026-11-20): the manual publish endpoint, the scheduled publish run,
+ * creating an article already marked published, and a PUT that flips a
+ * draft to published. Strip the standard leading banner block; if ANY
+ * banner line survives, the transition is refused ({ ok: false }) and the
+ * caller must change NOTHING — no status change, no body save, no
+ * publish. A failed strip never silently publishes anything.
+ */
+function preparePublishBody(body) {
+  const cleaned = stripDraftBanner(body || '');
+  if (hasDraftBanner(cleaned)) {
+    return {
+      ok: false,
+      error: 'This article still contains an internal AI-DRAFT banner line that could not be removed automatically. ' +
+        'Remove the banner from the body and try again. Nothing was published.',
+    };
+  }
+  return { ok: true, body: cleaned };
+}
+
 async function setPublishState(env, id, publish) {
   if (!env.DB) return jsonError('CMS writes require the D1 database', 503);
   const current = await fetchArticle(env, id);
   if (!current) return jsonError('Article not found', 404);
   if (publish) {
-    await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, updated_at = ? WHERE id = ?',
-      ['published', nowIso(), nowIso(), id]);
+    // Banner protection (2026-11-20): an AI draft's internal AI-DRAFT
+    // warning block must never reach the public. Strip the standard
+    // leading block; if ANY banner line survives the strip, refuse to
+    // publish — the article stays exactly as it was (still a draft, body
+    // untouched) and the owner must remove the banner by hand. A failed
+    // strip never silently publishes anything.
+    const prep = preparePublishBody(current.body || '');
+    if (!prep.ok) return jsonError(prep.error, 422);
+    if (prep.body !== (current.body || '')) {
+      await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, body = ?, updated_at = ? WHERE id = ?',
+        ['published', nowIso(), prep.body, nowIso(), id]);
+    } else {
+      await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, updated_at = ? WHERE id = ?',
+        ['published', nowIso(), nowIso(), id]);
+    }
   } else {
     await d1Run(env, 'UPDATE articles SET status = ?, published_at = NULL, updated_at = ? WHERE id = ?',
       ['draft', nowIso(), id]);
@@ -301,13 +357,31 @@ export async function publishDueArticles(env) {
   }
   const now = nowIso();
   const due = await d1All(env,
-    'SELECT id, slug FROM articles WHERE status = ? AND publish_at IS NOT NULL AND publish_at <= ? ORDER BY publish_at ASC',
+    'SELECT id, slug, body FROM articles WHERE status = ? AND publish_at IS NOT NULL AND publish_at <= ? ORDER BY publish_at ASC',
     ['approved', now]);
   let published = 0;
   const publishedSlugs = [];
+  // Banner protection (2026-11-20): same shared rule as the manual
+  // publish handler. A due article whose banner strips cleanly publishes
+  // with the cleaned body; one whose banner survives the strip stays
+  // 'approved' (a draft in effect) and is never published — a scheduled
+  // run must never expose a banner either.
+  let skippedBanner = 0;
+  const skippedBannerSlugs = [];
   for (const row of due || []) {
-    await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, updated_at = ? WHERE id = ?',
-      ['published', now, now, row.id]);
+    const prep = preparePublishBody(row.body || '');
+    if (!prep.ok) {
+      skippedBanner += 1;
+      skippedBannerSlugs.push(row.slug);
+      continue;
+    }
+    if (prep.body !== (row.body || '')) {
+      await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, body = ?, updated_at = ? WHERE id = ?',
+        ['published', now, prep.body, now, row.id]);
+    } else {
+      await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, updated_at = ? WHERE id = ?',
+        ['published', now, now, row.id]);
+    }
     published += 1;
     publishedSlugs.push(row.slug);
   }
@@ -316,6 +390,6 @@ export async function publishDueArticles(env) {
   await d1Run(env,
     'INSERT INTO agent_activity_logs (agent_id, action, entity_type, details, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     [agent ? agent.id : null, 'scheduled_publish', 'article',
-     JSON.stringify({ outcome: 'completed', published, slugs: publishedSlugs }), 'success', nowIso()]).catch(() => {});
-  return { ok: true, published, slugs: publishedSlugs };
+     JSON.stringify({ outcome: 'completed', published, slugs: publishedSlugs, skippedBanner, skippedBannerSlugs }), 'success', nowIso()]).catch(() => {});
+  return { ok: true, published, slugs: publishedSlugs, skippedBanner, skippedBannerSlugs };
 }

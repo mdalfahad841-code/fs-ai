@@ -234,11 +234,11 @@ function makeFakeD1() {
       const row = tables.articles.find((a) => a.slug === params[0]);
       return { results: row ? [{ id: row.id }] : [] };
     }
-    if (q.startsWith('SELECT id, slug FROM articles WHERE status = ? AND publish_at IS NOT NULL')) {
+    if (q.startsWith('SELECT id, slug, body FROM articles WHERE status = ? AND publish_at IS NOT NULL')) {
       const rows = tables.articles
         .filter((a) => a.status === params[0] && a.publish_at !== null && a.publish_at !== undefined && a.publish_at <= params[1])
         .sort((a, b) => (a.publish_at < b.publish_at ? -1 : 1))
-        .map((a) => ({ id: a.id, slug: a.slug }));
+        .map((a) => ({ id: a.id, slug: a.slug, body: a.body }));
       return { results: rows };
     }
     if (q.startsWith('SELECT COUNT(*) AS count FROM articles WHERE division_id = ? AND status = ?')) {
@@ -407,6 +407,15 @@ function makeFakeD1() {
       const row = tables.articles.find((a) => a.id === Number(id));
       if (!row) return { success: true, meta: { changes: 0, last_row_id: 0 } };
       Object.assign(row, { status, published_at, updated_at });
+      return { success: true, meta: { changes: 1, last_row_id: 0 } };
+    }
+    // Banner protection (2026-11-20): the publish path also saves the
+    // cleaned body when it strips a banner.
+    if (q.startsWith("UPDATE articles SET status = ?, published_at = ?, body = ?, updated_at = ? WHERE id = ?")) {
+      const [status, published_at, body, updated_at, id] = params;
+      const row = tables.articles.find((a) => a.id === Number(id));
+      if (!row) return { success: true, meta: { changes: 0, last_row_id: 0 } };
+      Object.assign(row, { status, published_at, body, updated_at });
       return { success: true, meta: { changes: 1, last_row_id: 0 } };
     }
     if (q.startsWith("UPDATE articles SET status = ?, published_at = NULL, updated_at = ? WHERE id = ?")) {

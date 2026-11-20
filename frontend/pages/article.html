@@ -133,7 +133,7 @@ document.addEventListener('DOMContentLoaded', function () {
     (div ? '<a href="division?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
     (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
-    (a.body ? '<div class="article-full">' + a.body + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
+    (a.body ? '<div class="article-full">' + window.FSAI.stripDraftBanner(a.body) + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
     '<p>Found this useful? Explore the <a href="tools">free tools</a> — including the calculators that go with this topic — or browse the other articles in ' + window.FSAI.esc(a.division) + ' below.</p>';
   var related = window.FSAI.articlesByDivision(a.division).filter(function (x) { return x.id !== a.id; }).slice(0, 3);
   var grid = document.getElementById('relatedGrid');

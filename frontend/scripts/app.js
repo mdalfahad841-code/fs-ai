@@ -207,12 +207,41 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  /* Internal AI-draft banner strip (2026-11-20): the public article page
+     must never render the AI-DRAFT warning block. The publish layer
+     already strips + validates before anything can publish, and the API
+     strips again — this is the last net, on the page that actually renders
+     the body. Same markers as backend/utils/draftBanner.js: a line only
+     counts when it STARTS with one of them, so prose that merely mentions
+     AI-DRAFT mid-sentence is left alone. The leading banner block goes
+     together with its surrounding blank lines; any stray banner line
+     further down is dropped too. */
+  var DRAFT_BANNER_LINE_RE = /^\s*(AI-DRAFT\b.*|This draft was written by\b.*|It has NOT been fact-checked\b.*|SCAFFOLD\b.*)$/i;
+  function stripDraftBanner(body) {
+    if (typeof body !== 'string' || body === '') return body;
+    var lines = body.split('\n');
+    var i = 0;
+    var sawBanner = false;
+    while (i < lines.length) {
+      if (DRAFT_BANNER_LINE_RE.test(lines[i])) { sawBanner = true; i += 1; continue; }
+      if (lines[i].trim() === '') { i += 1; continue; }
+      break;
+    }
+    var rest = sawBanner ? lines.slice(i) : lines;
+    var out = [];
+    var j;
+    for (j = 0; j < rest.length; j += 1) {
+      if (!DRAFT_BANNER_LINE_RE.test(rest[j])) out.push(rest[j]);
+    }
+    var cleaned = out.join('\n');
+    return cleaned === body ? body : cleaned;
+  }
 
   window.FSAI = {
     SITE: SITE, DIVISIONS: DIVISIONS, ARTICLES: ARTICLES, TOOLS: TOOLS, AGENTS: AGENTS, ACCOUNTS: ACCOUNTS,
     DISCLAIMER: GENERAL_DISCLAIMER,
     divisionById: divisionById, divisionPageState: divisionPageState, articlesByDivision: articlesByDivision, articleById: articleById,
-    countsByDivision: countsByDivision, formatDate: formatDate, esc: esc
+    countsByDivision: countsByDivision, formatDate: formatDate, esc: esc, stripDraftBanner: stripDraftBanner
   };
 
   /* Shared rendering: header, footer, division grid, article cards, tools grid. */
