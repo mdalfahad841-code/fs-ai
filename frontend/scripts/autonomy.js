@@ -20,6 +20,15 @@
   // The article whose corrections the review section is showing.
   var correctionArticleId = null;
   var queuedTasks = [];
+  // Phase 4 (2026-11-20) — in-flight guards. The dashboard must not
+  // re-fire a manual run or a re-check while one is already running
+  // for the same target: the duplicate request used to hit the
+  // server's 'already running' guard and surface as a 409 failure
+  // while the real run was still in progress. The sets survive
+  // list re-renders (loadTasks/loadPipeline rebuild the DOM); the
+  // clicked button is also disabled for immediate feedback.
+  var inFlightTasks = {};
+  var inFlightRechecks = {};
 
   function token() {
     try {
@@ -207,6 +216,8 @@
       '<select id="autonomyTaskSelect"><option value="">No queued tasks loaded yet</option></select></div>' +
       '<p><button class="btn btn-primary" type="button" id="autonomyRunTaskBtn">Run selected task</button></p>' +
       '<p id="autonomyRunTaskStatus" aria-live="polite"></p>' +
+      '<p><button class="btn btn-outline" type="button" id="autonomyRecoverStaleBtn">Recover stale running tasks</button></p>' +
+      '<p class="muted">A task stuck “running” for over 10 minutes (a stalled run) is marked failed here so it can be retried — the same recovery the daily and weekly workflows run first. A task that is genuinely still running is left alone.</p>' +
       '<h3>Convert a content scaffold to a draft</h3>' +
       '<p class="muted">This converts an existing content scaffold — or an AI-written draft from a content run — into a CMS draft for owner review. AI drafts are marked “AI-DRAFT — needs fact-check + owner approval” and are never published automatically.</p>' +
       '<div class="field"><label for="autonomyScaffoldRunId">Scaffold run ID</label>' +
@@ -436,10 +447,15 @@
         var retryBtn = t.status === 'failed'
           ? '<button class="btn btn-small" type="button" data-autonomy-retry="' + esc(String(t.id)) + '">Retry</button>'
           : '';
+        // Phase 4: a running task can be cancelled (it lands in
+        // 'failed' and becomes retryable). Run/Retry are unchanged.
+        var cancelBtn = t.status === 'running'
+          ? '<button class="btn btn-small" type="button" data-autonomy-cancel="' + esc(String(t.id)) + '">Cancel</button>'
+          : '';
         return '<tr><td>' + esc(String(t.id)) + '</td><td>' + esc(t.agent || '') + '</td><td>' + esc(t.kind || '') + '</td>' +
           '<td>' + esc(t.priority == null ? '' : String(t.priority)) + '</td><td>' + statusPill(t.status) + '</td>' +
           '<td>' + esc((t.attempts == null ? '0' : String(t.attempts)) + ' / ' + (t.max_attempts == null ? '—' : String(t.max_attempts))) + '</td>' +
-          '<td>' + fmtDate(t.scheduled_for) + '</td><td>' + fmtDate(t.created_at) + '</td><td>' + runBtn + retryBtn + '</td></tr>';
+          '<td>' + fmtDate(t.scheduled_for) + '</td><td>' + fmtDate(t.created_at) + '</td><td>' + runBtn + retryBtn + cancelBtn + '</td></tr>';
       }).join('') || '<tr><td colspan="9">No tasks found.</td></tr>';
     }).catch(function () { setText('autonomyTaskStatus', 'Could not reach the FS AI server.'); });
   }
@@ -456,11 +472,29 @@
     }).join('');
   }
 
-  function runTask(id, statusElId) {
+  // Phase 4: never re-fire a manual run while one is already in
+  // flight for the same task — the duplicate used to surface as a
+  // 409 while the real run was still in progress. A 202 in-flight
+  // answer from the server is shown as "already running", not an error.
+  function runTask(id, statusElId, btn) {
     if (!id) { setText(statusElId, 'Select a queued task first.'); return; }
+    if (inFlightTasks[id]) { setText(statusElId, 'Task ' + id + ' is already running — wait for it to finish, or cancel it from the task queue.'); return; }
+    inFlightTasks[id] = true;
+    if (btn) btn.disabled = true;
     setText(statusElId, 'Running task ' + id + '…');
     api('/api/autonomy/tasks/' + encodeURIComponent(id) + '/run', { method: 'POST' }).then(function (r) {
-      if (!r.ok) { setText(statusElId, apiError(r)); return; }
+      delete inFlightTasks[id];
+      if (btn) btn.disabled = false;
+      if (r.data && r.data.inFlight) {
+        setText(statusElId, 'Task ' + id + ' is already running' + (r.data.updatedAt ? ' (since ' + r.data.updatedAt + ')' : '') + ' — wait for it to finish, or cancel it from the task queue.');
+        loadTasks();
+        return;
+      }
+      if (!r.ok) {
+        setText(statusElId, apiError(r) + (r.data && r.data.recoveredStale ? ' The stale lock was recovered — click Retry to run it again.' : ''));
+        if (r.data && r.data.recoveredStale) loadTasks();
+        return;
+      }
       var result = r.data.result || {};
       var outcome = r.data.outcome || result.outcome || 'done';
       var detail = result.reason || result.error || result.message || result.note || '';
@@ -473,12 +507,57 @@
         ? ' — AI draft ready. Convert run #' + r.data.runId + ' to a CMS draft below.'
         : '';
       setText(statusElId, 'Task ' + id + ': ' + outcome + runPart + (detail ? ' — ' + detail : '') + draftPart +
-        (result && result.articleId ? ' (article #' + result.articleId + ')' : ''));
+        (result && result.articleId ? ' (article #' + result.articleId + ')' : '') +
+        (r.data.cancelledDuringRun ? ' — note: the task was cancelled while this run was finishing, so the cancel stands.' : ''));
       loadTasks();
       loadStatus();
       loadPipeline();
       loadLlm(); // Phase 3, P7: a task run can consume LLM usage — re-read the header instead of leaving a stale snapshot.
-    }).catch(function () { setText(statusElId, 'Could not reach the FS AI server.'); });
+    }).catch(function () {
+      delete inFlightTasks[id];
+      if (btn) btn.disabled = false;
+      setText(statusElId, 'Could not reach the FS AI server.');
+    });
+  }
+
+  // Phase 4: cancel a running task — it lands in 'failed' and can be
+  // retried. Only running tasks have a Cancel button.
+  function cancelTask(id, statusElId, btn) {
+    if (!id) return;
+    if (btn) btn.disabled = true;
+    setText(statusElId, 'Cancelling task ' + id + '…');
+    api('/api/autonomy/tasks/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }).then(function (r) {
+      if (btn) btn.disabled = false;
+      if (!r.ok) { setText(statusElId, apiError(r)); return; }
+      setText(statusElId, 'Task ' + id + ' cancelled — it is now failed and can be retried.');
+      loadTasks();
+      loadStatus();
+      loadPipeline();
+    }).catch(function () {
+      if (btn) btn.disabled = false;
+      setText(statusElId, 'Could not reach the FS AI server.');
+    });
+  }
+
+  // Phase 4: recover every task stuck 'running' past the 10-minute
+  // lease. Each recovered task is marked failed so it can be retried.
+  function recoverStaleTasks(statusElId, btn) {
+    if (btn) btn.disabled = true;
+    setText(statusElId, 'Recovering stale running tasks…');
+    api('/api/autonomy/tasks/recover-stale', { method: 'POST' }).then(function (r) {
+      if (btn) btn.disabled = false;
+      if (!r.ok) { setText(statusElId, apiError(r)); return; }
+      var recovered = r.data.recovered || [];
+      var msg = recovered.length
+        ? 'Recovered ' + recovered.length + ' stale task(s) — now failed, retry them from the task queue: ' + recovered.map(function (t) { return '#' + t.taskId + ' (' + (t.agent || '') + ')'; }).join(', ') + '.'
+        : 'No stale running tasks found — nothing to recover.';
+      setText(statusElId, msg);
+      loadTasks();
+      loadStatus();
+    }).catch(function () {
+      if (btn) btn.disabled = false;
+      setText(statusElId, 'Could not reach the FS AI server.');
+    });
   }
 
   function retryTask(id, statusElId) {
@@ -838,9 +917,22 @@
 
   // Fix 5: per-article fact-check re-run — reuses the existing task,
   // records a new run, keeps history, never sets fact_checked.
-  function recheckArticle(articleId) {
+  // Phase 4: never re-fire a re-check while one is already in flight
+  // for the same article — the duplicate used to surface as a 409
+  // while the real run was still in progress. A 202 in-flight answer
+  // from the server is shown as "already running", not an error.
+  function recheckArticle(articleId, btn) {
+    if (inFlightRechecks[articleId]) { setText('autonomyFactCheckDetail', 'Re-check for article #' + articleId + ' is already running — wait for it to finish.'); return; }
+    inFlightRechecks[articleId] = true;
+    if (btn) btn.disabled = true;
     setText('autonomyFactCheckDetail', 'Re-checking article #' + articleId + '…');
     api('/api/autonomy/articles/' + encodeURIComponent(articleId) + '/recheck', { method: 'POST' }).then(function (r) {
+      delete inFlightRechecks[articleId];
+      if (btn) btn.disabled = false;
+      if (r.data && (r.data.inFlight || r.data.status === 'already-running')) {
+        setText('autonomyFactCheckDetail', 'Re-check for article #' + articleId + ' is already running (task #' + (r.data.taskId != null ? r.data.taskId : '—') + (r.data.runningSince ? ', started ' + r.data.runningSince : '') + ') — wait for it to finish, or cancel it from the task queue.');
+        return;
+      }
       if (!r.ok) { setText('autonomyFactCheckDetail', 'Re-check failed for article #' + articleId + ' — ' + apiError(r) + '.'); return; }
       var d = r.data || {};
       var latest = d.latest || {};
@@ -852,7 +944,11 @@
       setText('autonomyFactCheckDetail', msg);
       loadPipeline();
       loadLlm(); // Phase 3, P7: a re-check runs the LLM judge — re-read live usage.
-    }).catch(function () { setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.'); });
+    }).catch(function () {
+      delete inFlightRechecks[articleId];
+      if (btn) btn.disabled = false;
+      setText('autonomyFactCheckDetail', 'Could not reach the FS AI server.');
+    });
   }
 
   // Fix 6: per-article SEO — Check is check-only (nothing changes),
@@ -1119,6 +1215,14 @@
       });
     }
 
+    // Phase 4: recover tasks stuck 'running' past the 10-minute lease.
+    var recoverStaleBtn = el('autonomyRecoverStaleBtn');
+    if (recoverStaleBtn) {
+      recoverStaleBtn.addEventListener('click', function () {
+        recoverStaleTasks('autonomyRunTaskStatus', recoverStaleBtn);
+      });
+    }
+
     var convertBtn = el('autonomyConvertScaffoldBtn');
     if (convertBtn) {
       convertBtn.addEventListener('click', function () {
@@ -1148,9 +1252,11 @@
     if (taskList) {
       taskList.addEventListener('click', function (e) {
         var runBtn = e.target.closest('[data-autonomy-run]');
-        if (runBtn) { runTask(runBtn.getAttribute('data-autonomy-run'), 'autonomyRunTaskStatus'); return; }
+        if (runBtn) { runTask(runBtn.getAttribute('data-autonomy-run'), 'autonomyRunTaskStatus', runBtn); return; }
         var retryBtn = e.target.closest('[data-autonomy-retry]');
-        if (retryBtn) { retryTask(retryBtn.getAttribute('data-autonomy-retry'), 'autonomyRunTaskStatus'); }
+        if (retryBtn) { retryTask(retryBtn.getAttribute('data-autonomy-retry'), 'autonomyRunTaskStatus'); return; }
+        var cancelBtn = e.target.closest('[data-autonomy-cancel]');
+        if (cancelBtn) { cancelTask(cancelBtn.getAttribute('data-autonomy-cancel'), 'autonomyRunTaskStatus', cancelBtn); }
       });
     }
 
@@ -1230,7 +1336,7 @@
         var fcBtn = e.target.closest('[data-autonomy-factcheck]');
         if (fcBtn) { enqueueAgentTask('fact-checking', 'fact-check', fcBtn.getAttribute('data-autonomy-factcheck'), 'autonomyFactCheckDetail'); return; }
         var recheckBtn = e.target.closest('[data-autonomy-recheck]');
-        if (recheckBtn) { recheckArticle(recheckBtn.getAttribute('data-autonomy-recheck')); return; }
+        if (recheckBtn) { recheckArticle(recheckBtn.getAttribute('data-autonomy-recheck'), recheckBtn); return; }
         var corrBtn = e.target.closest('[data-autonomy-correct]');
         if (corrBtn) { enqueueAgentTask('fact-checking', 'correct', corrBtn.getAttribute('data-autonomy-correct'), 'autonomyFactCheckDetail'); return; }
         var seoCheckBtn = e.target.closest('[data-autonomy-seo-check]');

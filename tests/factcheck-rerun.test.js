@@ -97,20 +97,35 @@ describe('POST /api/autonomy/articles/:id/recheck', () => {
     assert.equal(db.prepare('SELECT fact_checked FROM articles WHERE id = ?').get(101).fact_checked, 0);
   });
 
-  it('an in-flight re-check returns already-running (409) and starts no second run', async () => {
+  it('an in-flight re-check returns already-running (202) and starts no second run', async () => {
     const { db, env } = freshEnv();
     seedCybercabArticle(db, 101);
     const now = new Date().toISOString();
-    db.prepare(
+    const seeded = db.prepare(
       "INSERT INTO agent_tasks (agent, kind, payload, division_id, priority, status, attempts, max_attempts, idempotency_key, scheduled_for, created_at, updated_at) VALUES ('fact-checking', 'fact-check', ?, NULL, 5, 'running', 1, 3, ?, NULL, ?, ?)",
     ).run(JSON.stringify({ article_id: 101 }), 'guard-test-101', now, now);
+    const taskId = Number(seeded.lastInsertRowid);
     const r = await callAutonomy(env, 'POST', '/api/autonomy/articles/101/recheck');
-    assert.equal(r.status, 409, JSON.stringify(r.body));
+    // Phase 4: a duplicate request for an in-flight operation answers
+    // 202 with the in-flight status — never a 409. The 409 was a
+    // duplicate-request artifact: the dashboard re-firing while the
+    // first request was still running, then displaying the 409 as a
+    // failure. The new form asserts MORE than the old one (ok, inFlight,
+    // taskId, runningSince, no error field) while keeping both safety
+    // assertions (no second run started, still exactly one running task).
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    assert.equal(r.body.ok, true, '202 is a status answer, not an error');
     assert.equal(r.body.status, 'already-running');
-    assert.match(r.body.error, /already running/);
+    assert.equal(r.body.inFlight, true);
+    assert.equal(r.body.taskId, taskId, 'the in-flight response names the running task');
+    assert.equal(r.body.runningSince, now, 'the in-flight response names when the run started');
+    assert.equal(r.body.error, undefined, 'no error field on an in-flight answer');
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM fact_checks WHERE article_id = ?').get(101).n, 0,
       'no second run started');
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM agent_tasks WHERE agent = 'fact-checking' AND status = 'running'").get().n, 1);
+    const row = db.prepare('SELECT status, attempts FROM agent_tasks WHERE id = ?').get(taskId);
+    assert.equal(row.status, 'running', 'the in-flight run is untouched');
+    assert.equal(row.attempts, 1, 'no attempt is consumed by a refused duplicate');
   });
 
   it('Emergency Stop blocks the re-check (423) with no task and no new fact-check row', async () => {

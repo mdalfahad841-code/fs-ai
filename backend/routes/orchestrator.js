@@ -56,8 +56,10 @@ import { isProtected, assertNotProtected, assertTaskNotProtected, PROTECTED_TEST
 import { runSeo, runSeoCheckOnly } from '../agents/autonomy/seo.js';
 import { findEvidence, judgeClaimDeterministic, MAX_CORRECTION_ATTEMPTS, claimKey } from '../agents/autonomy/factcheck.js';
 import {
-  runTask, retryTask, runDailyWorkflow, runWeeklyWorkflow, enqueueTask,
+  runTask, retryTask, cancelTask, recoverStaleTasks, recoverStaleTask,
+  runDailyWorkflow, runWeeklyWorkflow, enqueueTask,
   generateReportSnapshot, normaliseTaskRow, todayStr,
+  TASK_RUN_LEASE_MS, parseDbTime, isTaskStale,
 } from './scheduler.js';
 
 const RESEARCH_AGENT_IDS = [
@@ -380,13 +382,49 @@ async function handleCreateTask(request, env) {
 async function handleRunTask(request, env, id) {
   if (!env.DB) return jsonError('Task runs require the D1 database', 503);
   const result = await runTask(env, id);
-  if (!result.ok) return jsonError(result.error || 'Task could not run.', result.status || 500, result.skipped ? { skipped: true } : {});
+  // Phase 4: a second run on an in-flight task answers 202 with the
+  // in-flight status — never a 409. A stale lock recovered by runTask
+  // is reported so the dashboard can offer Retry.
+  if (result.inFlight) {
+    return jsonOk({
+      taskId: result.taskId, status: 'running', inFlight: true,
+      attempts: result.attempts, updatedAt: result.updatedAt,
+      note: 'This task is already running — wait for it to finish, or cancel it from the task queue.',
+    }, 202);
+  }
+  if (!result.ok) return jsonError(result.error || 'Task could not run.', result.status || 500,
+    { ...(result.skipped ? { skipped: true } : {}), ...(result.recoveredStale ? { recoveredStale: true } : {}) });
   return jsonOk({
     taskId: result.taskId, runId: result.runId, outcome: result.outcome,
     attempts: result.attempts, requeued: result.requeued,
     ...(result.scheduled_for ? { scheduled_for: result.scheduled_for } : {}),
+    ...(result.cancelledDuringRun ? { cancelledDuringRun: true } : {}),
     result: result.result,
   });
+}
+
+/**
+ * POST /api/autonomy/tasks/:id/cancel — cancel a 'running' task
+ * (Phase 4). The task lands in 'failed' so the existing retry
+ * endpoint can re-queue it. Only running tasks can be cancelled.
+ */
+async function handleCancelTask(request, env, id) {
+  if (!env.DB) return jsonError('Task cancel requires the D1 database', 503);
+  const result = await cancelTask(env, id);
+  if (!result.ok) return jsonError(result.error || 'Task could not be cancelled.', result.status || 500);
+  return jsonOk({ taskId: result.taskId, agent: result.agent, status: 'failed', cancelled: true });
+}
+
+/**
+ * POST /api/autonomy/tasks/recover-stale — recover every task stuck
+ * 'running' past the run lease (Phase 4). Each recovered task is
+ * marked failed (reason 'stale-lock') and becomes retryable.
+ */
+async function handleRecoverStale(request, env) {
+  if (!env.DB) return jsonError('Stale-lock recovery requires the D1 database', 503);
+  const result = await recoverStaleTasks(env);
+  if (!result.ok) return jsonError(result.error || 'Stale-lock recovery failed.', result.status || 500);
+  return jsonOk({ recovered: result.recovered, count: result.count, skipped: result.skipped });
 }
 
 async function handleControl(request, env) {
@@ -1139,10 +1177,12 @@ async function handleResolveCorrection(request, env, id, auth) {
  * none exists exactly one new task is enqueued. The run itself is
  * recorded as a NEW agent_runs row and checkArticle() writes a NEW
  * fact_checks row + new claim_checks rows, so every run is kept and
- * the previous result is returned alongside the latest. An in-flight
- * re-check for the same article answers 409 already-running instead
- * of starting a second run. fact_checked is never set here (advisory
- * only — only the publish gate sets it when it approves).
+ * the previous result is returned alongside the latest. Phase 4: an
+ * in-flight re-check for the same article answers 202 already-running
+ * (taskId + status) instead of 409 — the 409 was a duplicate-request
+ * artifact; a STALE running lock is recovered first and the re-check
+ * runs fresh. fact_checked is never set here (advisory only — only
+ * the publish gate sets it when it approves).
  */
 async function handleRecheckArticle(request, env, id) {
   if (!env.DB) return jsonError('Fact-check re-run requires the D1 database', 503);
@@ -1167,10 +1207,23 @@ async function handleRecheckArticle(request, env, id) {
   // inconsistent with the daily workflow, which fact-checks protected
   // articles; see tests/factcheck-rerun.test.js.)
   const existingTasks = await findFactCheckTasksForArticle(env, articleId);
-  if (existingTasks.some((t) => t.status === 'running')) {
-    const running = existingTasks.find((t) => t.status === 'running');
-    return jsonError('A fact-check re-check is already running for this article.', 409,
-      { status: 'already-running', taskId: running.id, articleId });
+  const running = existingTasks.find((t) => t.status === 'running');
+  if (running) {
+    // Phase 4: a stale lock heals itself — recover it and run fresh.
+    // A genuinely in-flight re-check answers 202 with its status,
+    // never a 409: the 409 was a duplicate-request artifact (the
+    // dashboard re-firing while the first request was still running).
+    if (isTaskStale(running)) {
+      await recoverStaleTask(env, running.id);
+    } else {
+      const startedMs = parseDbTime(running.updated_at);
+      return jsonOk({
+        articleId, taskId: running.id, status: 'already-running', inFlight: true,
+        runningSince: running.updated_at,
+        leaseEndsAt: startedMs === null ? null : new Date(startedMs + TASK_RUN_LEASE_MS).toISOString(),
+        note: 'A fact-check re-check is already running for this article — wait for it to finish, or cancel it from the task queue.',
+      }, 202);
+    }
   }
   const before = await d1First(env,
     'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [articleId]);
@@ -1207,9 +1260,18 @@ async function handleRecheckArticle(request, env, id) {
     task = enqueued.task;
   }
   const result = await runTask(env, task.id);
+  // Phase 4: race guard — another request claimed the task between
+  // the guard above and the run. Answer in-flight (202), not 409.
+  if (result.inFlight) {
+    return jsonOk({
+      articleId, taskId: task.id, status: 'already-running', inFlight: true,
+      runningSince: result.updatedAt,
+      note: 'A fact-check re-check is already running for this article — wait for it to finish, or cancel it from the task queue.',
+    }, 202);
+  }
   if (!result.ok) {
     return jsonError(result.error || 'Fact-check re-run failed.', result.status || 500,
-      { taskId: task.id, ...(result.skipped ? { skipped: true } : {}) });
+      { taskId: task.id, ...(result.skipped ? { skipped: true } : {}), ...(result.recoveredStale ? { recoveredStale: true } : {}) });
   }
   if (result.outcome === 'failed') {
     return jsonError((result.result && result.result.error) || 'Fact-check run failed.', 500,
@@ -1418,6 +1480,12 @@ export async function handleAutonomy(request, env, ctx, auth) {
   }
   if (method === 'POST' && parts.length === 5 && parts[2] === 'tasks' && parts[4] === 'retry') {
     return handleRetryTask(request, env, parts[3]);
+  }
+  if (method === 'POST' && parts.length === 5 && parts[2] === 'tasks' && parts[4] === 'cancel') {
+    return handleCancelTask(request, env, parts[3]);
+  }
+  if (method === 'POST' && path === '/api/autonomy/tasks/recover-stale') {
+    return handleRecoverStale(request, env);
   }
   if (method === 'POST' && path === '/api/autonomy/control') return handleControl(request, env);
   if (method === 'GET' && path === '/api/autonomy/settings') return handleGetSettings(request, env);

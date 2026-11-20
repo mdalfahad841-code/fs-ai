@@ -47,6 +47,160 @@ function plusMinutes(baseIso, minutes) {
   return new Date(new Date(baseIso).getTime() + minutes * 60 * 1000).toISOString();
 }
 
+// ---------------------------------------------------------------------
+// Phase 4 (2026-11-20) — run lease + stale-lock recovery + cancel.
+// Live Phase 3 finding: a long synchronous manual run dies mid-flight
+// after ~4-5 minutes with no error, no save, no agent_runs row, and
+// the task left 'running' forever (task #32 stuck twice with 0 LLM
+// calls; re-check probes died after 3 and 5 judge calls; task #31
+// orphaned since the Phase 2 era). Root cause: runTask claimed
+// queued -> running and then awaited runAutonomyTask with no timeout,
+// no lease and no try/finally, and generateWithWorkersAI awaited
+// env.AI.run with no timeout. The fixes:
+//   - TASK_RUN_LEASE_MS: a run that exceeds its lease fails with a
+//     clear reason and its status is ALWAYS resolved (try/finally in
+//     runTask) — a run ends done/failed/skipped, never stuck running.
+//   - recoverStaleTasks(): 'running' tasks older than the lease are
+//     marked failed (reason 'stale-lock') so the existing retry
+//     endpoint can re-queue them. Called by the dashboard endpoint
+//     and by the daily/weekly workflows (best-effort, never blocking).
+//   - cancelTask(): the owner can cancel a 'running' task; it lands
+//     in 'failed' (reason 'cancelled-by-owner') and is retryable.
+//   - A second run on a fresh 'running' task answers in-flight
+//     (202-shape) instead of 409; a stale one is recovered first.
+// No migration needed: only the existing status/updated_at columns
+// and agent_runs rows are used. The lease cannot abort an in-flight
+// AI call (the binding takes no signal) — it resolves the TASK state;
+// in Workers the abandoned execution is killed when the request ends.
+// ---------------------------------------------------------------------
+
+/** A single task run may take at most 10 minutes before it is failed. */
+export const TASK_RUN_LEASE_MS = 10 * 60 * 1000;
+
+/**
+ * Parse a D1/SQLite timestamp to epoch ms. D1 rows written by nowIso()
+ * are ISO with 'T' + 'Z'; SQLite DEFAULT (datetime('now')) rows are
+ * space-format 'YYYY-MM-DD HH:MM:SS' (UTC). Both read as UTC. Returns
+ * null when the value cannot be parsed (never throws).
+ */
+export function parseDbTime(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  let text = value.trim();
+  if (text.includes(' ')) text = text.replace(' ', 'T');
+  if (!/[zZ]$/.test(text) && !/[+-]\d{2}:?\d{2}$/.test(text)) text += 'Z';
+  const ms = Date.parse(text);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** True when a task has been 'running' longer than the lease. */
+export function isTaskStale(task, leaseMs = TASK_RUN_LEASE_MS, nowMs = Date.now()) {
+  if (!task || task.status !== 'running') return false;
+  const started = parseDbTime(task.updated_at);
+  if (started === null) return false; // unprovable — never guess stale
+  return nowMs - started > leaseMs;
+}
+
+/** Race a promise against the run lease; on timeout resolve a failed result. */
+function runWithLease(promise, leaseMs) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ __leaseTimeout: true }), leaseMs);
+  });
+  return Promise.race([promise, timeout]).then(
+    (value) => {
+      if (timer) clearTimeout(timer);
+      if (value && value.__leaseTimeout) {
+        return {
+          outcome: 'failed',
+          error: `Task exceeded its run lease of ${Math.round(leaseMs / 1000)}s — the run was still in progress and was stopped; the task was marked failed so it can be retried.`,
+        };
+      }
+      return value;
+    },
+    (err) => { if (timer) clearTimeout(timer); throw err; },
+  );
+}
+
+/**
+ * Recover ONE stale 'running' task: write a failed agent_runs row
+ * (detail reason 'stale-lock') and mark the task failed so the
+ * existing retry endpoint can re-queue it. Returns
+ * { ok, recovered, taskId, ... } — recovered:false when the task is
+ * not stale (fresh running, or any other status).
+ */
+export async function recoverStaleTask(env, taskId, { leaseMs = TASK_RUN_LEASE_MS, nowMs = Date.now() } = {}) {
+  if (!env || !env.DB) return { ok: false, status: 503, error: 'D1 database is not bound.' };
+  const id = Number(taskId);
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, status: 400, error: 'Task id must be a positive integer.' };
+  const row = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [id]);
+  if (!row) return { ok: false, status: 404, error: 'Task not found.' };
+  const task = normaliseTaskRow(row);
+  if (!isTaskStale(task, leaseMs, nowMs)) {
+    return { ok: true, recovered: false, taskId: id, status: task.status, reason: 'not-stale' };
+  }
+  const staleForMs = nowMs - (parseDbTime(task.updated_at) || nowMs);
+  await writeRun(env, {
+    taskId: id, agent: task.agent, outcome: 'failed',
+    detail: { reason: 'stale-lock', staleForMs, updatedAt: task.updated_at, leaseMs },
+    logs: [{ level: 'error', message: `Task ${id} (${task.agent}) recovered from a stale lock: running for ${Math.round(staleForMs / 1000)}s with no update (lease ${Math.round(leaseMs / 1000)}s). Marked failed so it can be retried.` }],
+  });
+  await d1Run(env, "UPDATE agent_tasks SET status = 'failed', updated_at = ? WHERE id = ?", [nowIso(), id]);
+  return { ok: true, recovered: true, taskId: id, agent: task.agent, staleForMs };
+}
+
+/**
+ * Sweep every 'running' task and recover the stale ones. Never throws
+ * for a single bad row — one failure is skipped, the rest still run.
+ * Returns { ok, recovered: [{taskId, agent, staleForMs, updatedAt}],
+ * skipped: [ids], count }.
+ */
+export async function recoverStaleTasks(env, { leaseMs = TASK_RUN_LEASE_MS, nowMs = Date.now() } = {}) {
+  if (!env || !env.DB) return { ok: false, status: 503, error: 'D1 database is not bound.' };
+  const rows = await d1All(env, "SELECT * FROM agent_tasks WHERE status = 'running' ORDER BY updated_at ASC") || [];
+  const recovered = [];
+  const skipped = [];
+  for (const row of rows) {
+    const task = normaliseTaskRow(row);
+    if (!isTaskStale(task, leaseMs, nowMs)) { skipped.push(task.id); continue; }
+    try {
+      const res = await recoverStaleTask(env, task.id, { leaseMs, nowMs });
+      if (res.recovered) recovered.push({ taskId: task.id, agent: task.agent, staleForMs: res.staleForMs, updatedAt: task.updated_at });
+      else skipped.push(task.id);
+    } catch {
+      skipped.push(task.id);
+    }
+  }
+  return { ok: true, recovered, skipped, count: recovered.length };
+}
+
+/**
+ * Cancel a 'running' task. It lands in 'failed' with a 'cancelled-
+ * by-owner' run row, so the existing retry endpoint can re-queue it.
+ * Only running tasks can be cancelled; anything else is a 409. This
+ * flips the row only — it cannot stop an execution already in flight
+ * in another request (no handle exists on it); runTask's final status
+ * write is conditional on still-'running', so a late completion never
+ * resurrects a cancelled task.
+ */
+export async function cancelTask(env, taskId) {
+  if (!env || !env.DB) return { ok: false, status: 503, error: 'D1 database is not bound.' };
+  const id = Number(taskId);
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, status: 400, error: 'Task id must be a positive integer.' };
+  const row = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [id]);
+  if (!row) return { ok: false, status: 404, error: 'Task not found.' };
+  const task = normaliseTaskRow(row);
+  if (task.status !== 'running') {
+    return { ok: false, status: 409, error: `Task is '${task.status}' — only running tasks can be cancelled.` };
+  }
+  await writeRun(env, {
+    taskId: id, agent: task.agent, outcome: 'failed',
+    detail: { reason: 'cancelled-by-owner', cancelledAt: nowIso() },
+    logs: [{ level: 'warn', message: `Task ${id} (${task.agent}) cancelled by the owner while running — marked failed so it can be retried.` }],
+  });
+  await d1Run(env, "UPDATE agent_tasks SET status = 'failed', updated_at = ? WHERE id = ?", [nowIso(), id]);
+  return { ok: true, taskId: id, agent: task.agent, status: 'failed', cancelled: true };
+}
+
 async function writeRun(env, { taskId = null, agent, outcome, detail = {}, logs = [] }) {
   let runId = null;
   try {
@@ -262,15 +416,43 @@ async function registryStatus(env, registryId) {
  * paused state, dispatches via runAutonomyTask, writes agent_runs +
  * agent_logs, and sets the task done/failed (failure with attempts left
  * re-queues with attempts*15-minute backoff).
+ *
+ * Phase 4 (2026-11-20) — the execution is raced against TASK_RUN_LEASE_MS
+ * and the whole post-claim section runs in try/finally, so the task
+ * status is ALWAYS resolved: a run ends done/failed/skipped, never
+ * stuck 'running'. A second call on a fresh 'running' task returns
+ * { ok: true, inFlight: true } (the caller maps it to 202) instead of
+ * 409; a stale 'running' task is recovered to 'failed' first
+ * (recoveredStale: true). The final status write is conditional on
+ * still-'running', so a concurrent owner cancel is never overwritten
+ * by a late completion (reported as cancelledDuringRun).
+ * options.leaseMs overrides TASK_RUN_LEASE_MS (tests).
  */
-export async function runTask(env, taskId) {
+export async function runTask(env, taskId, options = {}) {
   if (!env || !env.DB) return { ok: false, status: 503, error: 'D1 database is not bound.' };
   const id = Number(taskId);
   if (!Number.isInteger(id) || id <= 0) return { ok: false, status: 400, error: 'Task id must be a positive integer.' };
+  const leaseMs = options && Number.isFinite(Number(options.leaseMs)) && Number(options.leaseMs) > 0
+    ? Number(options.leaseMs) : TASK_RUN_LEASE_MS;
   const row = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [id]);
   if (!row) return { ok: false, status: 404, error: 'Task not found.' };
   const task = normaliseTaskRow(row);
   if (task.status !== 'queued') {
+    if (task.status === 'running') {
+      // Phase 4: a stale lock heals itself — recover it and tell the
+      // caller to retry; a genuinely in-flight run answers in-flight
+      // (the HTTP layer maps it to 202), never a 409.
+      if (isTaskStale(task, leaseMs)) {
+        const recovered = await recoverStaleTask(env, id, { leaseMs });
+        if (recovered.recovered) {
+          return {
+            ok: false, status: 409, recoveredStale: true, taskId: id,
+            error: `Task was stuck 'running' with no update for over ${Math.round(leaseMs / 60000)} minute(s) — recovered as failed. Retry it to run it again.`,
+          };
+        }
+      }
+      return { ok: true, inFlight: true, taskId: id, status: 'running', attempts: task.attempts, updatedAt: task.updated_at };
+    }
     return { ok: false, status: 409, error: `Task is '${task.status}' — only queued tasks can run.` };
   }
 
@@ -326,39 +508,69 @@ export async function runTask(env, taskId) {
     [attempts, nowIso(), id]);
 
   const startedAt = nowIso();
-  let result;
+  let result = null;
+  let outcome = 'failed';
+  let runId = null;
+  let finishedAt = null;
+  let requeued = false;
+  let backoffUntil = null;
+  let cancelledDuringRun = false;
   try {
-    result = await runAutonomyTask(task, env);
+    result = await runWithLease(runAutonomyTask(task, env), leaseMs);
+    outcome = result && (result.outcome === 'done' || result.outcome === 'no-op') ? result.outcome : 'failed';
   } catch (err) {
     result = { outcome: 'failed', error: String(err && err.message ? err.message : err).slice(0, 300) };
+    outcome = 'failed';
+  } finally {
+    // The status is resolved here, ALWAYS — even when the run-row
+    // insert below throws. A run ends done/failed (or re-queued), never
+    // stuck 'running'. The status writes are conditional on
+    // still-'running': a concurrent owner cancel wins over a late
+    // completion, so a cancelled task is never resurrected.
+    finishedAt = nowIso();
+    try {
+      const inserted = await d1Run(env,
+        'INSERT INTO agent_runs (task_id, agent, started_at, finished_at, outcome, detail) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, task.agent, startedAt, finishedAt, outcome, JSON.stringify(result || {})]);
+      runId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
+      const logMessage = outcome === 'failed'
+        ? `Task ${id} (${task.agent}) failed: ${String(result.error || 'unknown error').slice(0, 300)}`
+        : `Task ${id} (${task.agent}) finished: ${outcome}.`;
+      await d1Run(env, 'INSERT INTO agent_logs (run_id, level, message, created_at) VALUES (?, ?, ?, ?)',
+        [runId, outcome === 'failed' ? 'error' : 'info', logMessage.slice(0, 1000), nowIso()]).catch(() => {});
+    } catch {
+      runId = null;
+    }
+    const resolveStatus = async () => {
+      if (outcome === 'failed' && attempts < (task.max_attempts || 3)) {
+        backoffUntil = plusMinutes(finishedAt, attempts * 15);
+        const r = await d1Run(env,
+          "UPDATE agent_tasks SET status = 'queued', scheduled_for = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+          [backoffUntil, nowIso(), id]);
+        if (r && r.meta && r.meta.changes === 0) { cancelledDuringRun = true; return; }
+        requeued = true;
+        return;
+      }
+      const finalStatus = outcome === 'failed' ? 'failed' : 'done';
+      const r = await d1Run(env,
+        "UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+        [finalStatus, nowIso(), id]);
+      if (r && r.meta && r.meta.changes === 0) { cancelledDuringRun = true; }
+    };
+    try {
+      await resolveStatus();
+    } catch {
+      // One retry: the run row still records the outcome even if the
+      // status write keeps failing.
+      try { await resolveStatus(); } catch { /* status stays as claimed; the sweeper recovers it */ }
+    }
   }
-  const outcome = result && (result.outcome === 'done' || result.outcome === 'no-op') ? result.outcome : 'failed';
-  const finishedAt = nowIso();
-
-  let runId = null;
-  try {
-    const inserted = await d1Run(env,
-      'INSERT INTO agent_runs (task_id, agent, started_at, finished_at, outcome, detail) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, task.agent, startedAt, finishedAt, outcome, JSON.stringify(result || {})]);
-    runId = inserted && inserted.meta ? inserted.meta.last_row_id : null;
-    const logMessage = outcome === 'failed'
-      ? `Task ${id} (${task.agent}) failed: ${String(result.error || 'unknown error').slice(0, 300)}`
-      : `Task ${id} (${task.agent}) finished: ${outcome}.`;
-    await d1Run(env, 'INSERT INTO agent_logs (run_id, level, message, created_at) VALUES (?, ?, ?, ?)',
-      [runId, outcome === 'failed' ? 'error' : 'info', logMessage.slice(0, 1000), nowIso()]).catch(() => {});
-  } catch {
-    runId = null;
-  }
-
-  if (outcome === 'failed' && attempts < (task.max_attempts || 3)) {
-    const backoffUntil = plusMinutes(finishedAt, attempts * 15);
-    await d1Run(env, "UPDATE agent_tasks SET status = 'queued', scheduled_for = ?, updated_at = ? WHERE id = ?",
-      [backoffUntil, nowIso(), id]);
-    return { ok: true, taskId: id, runId, outcome, attempts, requeued: true, scheduled_for: backoffUntil, result };
-  }
-  const finalStatus = outcome === 'failed' ? 'failed' : 'done';
-  await d1Run(env, 'UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ?', [finalStatus, nowIso(), id]);
-  return { ok: true, taskId: id, runId, outcome, attempts, requeued: false, result };
+  return {
+    ok: true, taskId: id, runId, outcome, attempts, requeued,
+    ...(requeued && backoffUntil ? { scheduled_for: backoffUntil } : {}),
+    ...(cancelledDuringRun ? { cancelledDuringRun: true } : {}),
+    result,
+  };
 }
 
 /**
@@ -509,6 +721,9 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
     await logSkip(env, 'scheduler', 'Emergency Stop is on — daily workflow skipped.');
     return { ok: true, skipped: true, reason: 'Emergency Stop is on.', date };
   }
+  // Phase 4: recover any task orphaned in 'running' by a stalled run
+  // before starting new work — best effort, never blocks the workflow.
+  try { await recoverStaleTasks(env); } catch { /* recovery is best-effort */ }
   if (!force) {
     const existing = await d1First(env, "SELECT id FROM daily_reports WHERE date = ? AND kind = 'daily' LIMIT 1", [date]);
     if (existing) {
@@ -761,6 +976,9 @@ export async function runWeeklyWorkflow(env, { force = false } = {}) {
     await logSkip(env, 'scheduler', 'Emergency Stop is on — weekly workflow skipped.');
     return { ok: true, skipped: true, reason: 'Emergency Stop is on.', date };
   }
+  // Phase 4: recover any task orphaned in 'running' by a stalled run
+  // before starting new work — best effort, never blocks the workflow.
+  try { await recoverStaleTasks(env); } catch { /* recovery is best-effort */ }
   if (!force) {
     const existing = await d1First(env, "SELECT id FROM daily_reports WHERE date = ? AND kind = 'weekly' LIMIT 1", [date]);
     if (existing) {

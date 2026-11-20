@@ -42,6 +42,29 @@ export const WORKERS_AI_MODELS = [
   '@cf/ibm-granite/granite-4.0-h-micro',
 ];
 
+// Phase 4 (2026-11-20) — per-model call timeout. A single env.AI.run
+// call that never settles used to hang the whole generation /
+// fact-check run forever (live 2026-11-20: task #32 stuck twice with
+// 0 calls; re-check probes died after 3 and 5 judge calls). The AI
+// binding takes no AbortSignal, so the timeout is a Promise.race:
+// a timed-out call is treated as a per-model failure and the loop
+// falls through to the next model. Observed successful calls take
+// seconds; 2 minutes is generous. The timed-out call itself cannot
+// be cancelled — in Workers it is killed when the request ends; in
+// tests its promise simply never settles and holds nothing.
+export const WORKERS_AI_CALL_TIMEOUT_MS = 120000;
+
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).then(
+    (value) => { if (timer) clearTimeout(timer); return value; },
+    (err) => { if (timer) clearTimeout(timer); throw err; },
+  );
+}
+
 // Neurons per 1M tokens { in, out } — official Workers AI pricing page.
 export const NEURON_RATES = {
   '@cf/openai/gpt-oss-20b': { in: 18182, out: 27273 },
@@ -114,14 +137,17 @@ function extractUsage(result) {
  *   retiredModels } — reason is 'not-configured' (no env.AI binding),
  * 'quota-exhausted' (error 3036 — account-wide daily cap, no point
  * trying further models) or 'error'. Never throws.
+ * options.timeoutMs overrides WORKERS_AI_CALL_TIMEOUT_MS (tests).
  */
-export async function generateWithWorkersAI(env, { prompt, system, maxTokens }) {
+export async function generateWithWorkersAI(env, { prompt, system, maxTokens }, options = {}) {
   if (!env || !env.AI || typeof env.AI.run !== 'function') {
     return {
       ok: false, reason: 'not-configured',
       detail: 'Workers AI binding (env.AI) is not bound — add [ai] binding = "AI" to config/wrangler.toml and redeploy the Worker.',
     };
   }
+  const timeoutMs = options && Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+    ? Number(options.timeoutMs) : WORKERS_AI_CALL_TIMEOUT_MS;
   const messages = [];
   if (system) messages.push({ role: 'system', content: String(system) });
   messages.push({ role: 'user', content: String(prompt || '') });
@@ -129,10 +155,10 @@ export async function generateWithWorkersAI(env, { prompt, system, maxTokens }) 
   let lastError = '';
   for (const model of WORKERS_AI_MODELS) {
     try {
-      const result = await env.AI.run(model, {
+      const result = await withTimeout(env.AI.run(model, {
         messages,
         max_tokens: Math.max(1, Math.min(4096, Number(maxTokens) || 1500)),
-      });
+      }), timeoutMs, `Workers AI model ${model}`);
       const text = extractText(result).trim();
       if (!text) {
         lastError = `Model ${model} returned an empty response.`;
