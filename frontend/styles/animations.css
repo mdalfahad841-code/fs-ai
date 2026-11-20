@@ -1,16 +1,17 @@
-/* FS AI — animations. All motion is disabled under prefers-reduced-motion. */
-.reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+/* FS AI — animations. All motion is disabled under prefers-reduced-motion.
+   Unslop run 2026-11-20: one easing curve, one entrance (short fade and
+   rise, small stagger), hover is a border-colour change only. The looping
+   hero glow, the card lift and the particle canvas are gone. */
+.reveal { opacity: 0; transform: translateY(8px); transition: opacity .4s cubic-bezier(0.22, 1, 0.36, 1), transform .4s cubic-bezier(0.22, 1, 0.36, 1); }
 .reveal.visible { opacity: 1; transform: translateY(0); }
-@keyframes heroGlow {
-  0%, 100% { box-shadow: 0 0 40px rgba(40,120,255,.35), inset 0 0 30px rgba(40,120,255,.2); }
-  50% { box-shadow: 0 0 80px rgba(40,120,255,.6), inset 0 0 50px rgba(40,120,255,.35); }
-}
-.hero-ring { animation: heroGlow 4s ease-in-out infinite; }
+.grid .reveal:nth-child(2) { transition-delay: .05s; }
+.grid .reveal:nth-child(3) { transition-delay: .1s; }
+.grid .reveal:nth-child(4) { transition-delay: .15s; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-.fade-in { animation: fadeIn .5s ease both; }
-.card { transition: transform .2s ease, border-color .2s ease; }
-.card:hover { transform: translateY(-3px); border-color: var(--blue); }
-.btn { transition: background .2s ease, border-color .2s ease; }
+.fade-in { animation: fadeIn .4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.card { transition: border-color .18s cubic-bezier(0.22, 1, 0.36, 1); }
+.card:hover { border-color: var(--border-strong); }
+.btn { transition: background-color .18s cubic-bezier(0.22, 1, 0.36, 1), border-color .18s cubic-bezier(0.22, 1, 0.36, 1); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -20,5 +21,4 @@
     scroll-behavior: auto !important;
   }
   .reveal { opacity: 1; transform: none; }
-  .hero-ring { animation: none; }
 }

@@ -1,19 +1,23 @@
 /* FS AI — themes. Dark is the default (see main.css :root).
-   Light theme is applied with <html data-theme="light"> and stored in localStorage. */
+   Light theme is applied with <html data-theme="light"> and stored in localStorage.
+   Unslop run 2026-11-20: the light ramp is warm paper, matching the dark
+   warm ramp — paper, ink, index numbers. */
 :root[data-theme="light"] {
-  --bg: #f4f7fb; --surface: #ffffff; --surface-2: #eef2f8;
-  --text: #10141c; --text-muted: #5a6a80;
-  --border: #d3dce8; --shadow: 0 8px 24px rgba(16,32,56,.12);
+  --bg: #f7f4ee; --surface: #fdfbf7; --surface-2: #efe9df;
+  --text: #1f1b16; --text-secondary: #5e554a; --text-muted: #7b7266;
+  --blue: #1c5fd6; --blue-fill: #1c5fd6; --blue-fill-hover: #174fb4;
+  --border: rgba(31, 27, 22, 0.10); --border-strong: rgba(31, 27, 22, 0.18);
+  --shadow: 0 1px 2px rgba(31, 27, 22, 0.05);
+  --success: #16a34a; --danger-text: #dc2626;
 }
-:root[data-theme="light"] .site-header { background: rgba(244,247,251,.94); }
+:root[data-theme="light"] .site-header { background: rgba(247, 244, 238, 0.94); }
 :root[data-theme="light"] .hero {
-  background: radial-gradient(900px 480px at 70% -10%, rgba(40,120,255,.22), transparent 60%), linear-gradient(180deg, #dbe7f7, #f4f7fb);
+  background: linear-gradient(180deg, #efe9df, #f7f4ee);
 }
-:root[data-theme="light"] .hero p.lead { color: #33465e; }
-:root[data-theme="light"] .card p { color: #33465e; }
-:root[data-theme="light"] .hero-ring strong { color: #10141c; }
-:root[data-theme="light"] .site-footer { background: #e8eef6; }
-:root[data-theme="light"] .footer-grid a { color: #33465e; }
-:root[data-theme="light"] .newsletter { background: #dbe7f7; }
-:root[data-theme="light"] .article-body p { color: #33465e; }
-:root[data-theme="light"] .card h3 a { color: #10141c; }
+:root[data-theme="light"] .hero p.lead { color: var(--text-secondary); }
+:root[data-theme="light"] .card p { color: var(--text-secondary); }
+:root[data-theme="light"] .site-footer { background: #efe9df; }
+:root[data-theme="light"] .footer-grid a { color: var(--text-secondary); }
+:root[data-theme="light"] .newsletter { background: var(--surface); }
+:root[data-theme="light"] .article-body p { color: var(--text-secondary); }
+:root[data-theme="light"] .card h3 a { color: var(--text); }

@@ -129,7 +129,7 @@ document.addEventListener('DOMContentLoaded', function () {
   body.innerHTML =
     '<p class="card-tag">' + window.FSAI.esc(a.division) + ' · ' + window.FSAI.esc(a.category) + '</p>' +
     '<h1>' + window.FSAI.esc(a.title) + '</h1>' +
-    '<p class="article-meta">Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
+    '<p class="article-meta"><span class="article-no">' + window.FSAI.articleNo(a.id) + '</span> · Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
     (div ? '<a href="division?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
     (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
@@ -140,7 +140,7 @@ document.addEventListener('DOMContentLoaded', function () {
   grid.innerHTML = related.map(function (x) {
     return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(x.category) + '</div>' +
       '<h3><a href="article?id=' + x.id + '">' + window.FSAI.esc(x.title) + '</a></h3>' +
-      '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time></article>';
+      '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time> <span class="article-no">' + window.FSAI.articleNo(x.id) + '</span></article>';
   }).join('') || '<p>No other articles in this division yet.</p>';
 });
 </script>

@@ -6,15 +6,40 @@
      wording the API returns in its `disclaimer` field for those divisions. */
   var GENERAL_DISCLAIMER = 'General information only — not medical/financial advice. Consult a qualified professional.';
 
+  /* One line-icon set for the whole site (unslop run 2026-11-20): hand-drawn
+     inline SVG, 24x24 viewBox, 1.5 stroke, currentColor. No emoji anywhere.
+     The `icon` field on each division below now holds the icon name. */
+  var ICON_PATHS = {
+    car: '<path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/>',
+    cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+    smartphone: '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
+    banknote: '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+    send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+    sliders: '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+    heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+    graduation: '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    menu: '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>'
+  };
+  function svgIcon(name, cls) {
+    return '<svg' + (cls ? ' class="' + cls + '"' : '') + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICON_PATHS[name] || '') + '</svg>';
+  }
+  /* Field-guide index number — the signature detail (unslop run 2026-11-20):
+     every guide carries a quiet mono number, "No. 04". */
+  function articleNo(id) {
+    return 'No. ' + String(id).padStart(2, '0');
+  }
+
   var DIVISIONS = [
-    { id: 'automotive', name: 'Automotive', short: 'Automotive', tagline: 'Cars, bikes and the road ahead.', description: 'Practical guides to buying, maintaining and understanding cars and motorcycles — from EV charging to warning lights.', icon: '🚗', color: '#2878FF', articleCount: 12 },
-    { id: 'ai-technology', name: 'AI & Technology', short: 'AI & Technology', tagline: 'AI explained in plain English.', description: 'Beginner-friendly explainers and honest guides to free AI tools that actually save time.', icon: '🤖', color: '#19C37D', articleCount: 2 },
-    { id: 'gadgets-electronics', name: 'Gadgets & Electronics', short: 'Gadgets & Electronics', tagline: 'Buy the right device, once.', description: 'Buying guides for phones, laptops and tablets — what matters, what does not, and what to pay.', icon: '📱', color: '#F5A623', articleCount: 2 },
-    { id: 'finance-money', name: 'Finance & Money', short: 'Finance & Money', tagline: 'Money, explained simply.', description: 'Budgeting, saving and borrowing explained in plain language — no jargon, no promises.', icon: '💰', color: '#19C37D', articleCount: 3 },
-    { id: 'travel-lifestyle', name: 'Travel & Lifestyle', short: 'Travel & Lifestyle', tagline: 'Travel well, spend wisely.', description: 'Budget trips, road-trip checklists and planning guides for travel that fits your pocket.', icon: '✈️', color: '#2878FF', articleCount: 2 },
-    { id: 'digital-tools', name: 'Digital Tools', short: 'Digital Tools', tagline: 'Free tools, ready to use.', description: 'Converters and calculators you can use today — no sign-up, no download, no cost.', icon: '🧰', color: '#8995A7', articleCount: 1 },
-    { id: 'health-wellness', name: 'Health & Wellness', short: 'Health & Wellness', tagline: 'Small steps, every day.', description: 'Beginner fitness and wellbeing guides — walking, home workouts and habits that stick.', icon: '❤️', color: '#F5A623', articleCount: 2 },
-    { id: 'education-learning', name: 'Education & Learning', short: 'Education & Learning', tagline: 'Learn a new skill in 30 days.', description: 'Practical learning guides for digital skills — structured, realistic and free to start.', icon: '🎓', color: '#2878FF', articleCount: 1 }
+    { id: 'automotive', name: 'Automotive', short: 'Automotive', tagline: 'Cars, bikes and the road ahead.', description: 'Practical guides to buying, maintaining and understanding cars and motorcycles — from EV charging to warning lights.', icon: 'car', color: '#2878FF', articleCount: 12 },
+    { id: 'ai-technology', name: 'AI & Technology', short: 'AI & Technology', tagline: 'AI explained in plain English.', description: 'Beginner-friendly explainers and honest guides to free AI tools that actually save time.', icon: 'cpu', color: '#19C37D', articleCount: 2 },
+    { id: 'gadgets-electronics', name: 'Gadgets & Electronics', short: 'Gadgets & Electronics', tagline: 'Buy the right device, once.', description: 'Buying guides for phones, laptops and tablets — what matters, what does not, and what to pay.', icon: 'smartphone', color: '#F5A623', articleCount: 2 },
+    { id: 'finance-money', name: 'Finance & Money', short: 'Finance & Money', tagline: 'Money, explained simply.', description: 'Budgeting, saving and borrowing explained in plain language — no jargon, no promises.', icon: 'banknote', color: '#19C37D', articleCount: 3 },
+    { id: 'travel-lifestyle', name: 'Travel & Lifestyle', short: 'Travel & Lifestyle', tagline: 'Travel well, spend wisely.', description: 'Budget trips, road-trip checklists and planning guides for travel that fits your pocket.', icon: 'send', color: '#2878FF', articleCount: 2 },
+    { id: 'digital-tools', name: 'Digital Tools', short: 'Digital Tools', tagline: 'Free tools, ready to use.', description: 'Converters and calculators you can use today — no sign-up, no download, no cost.', icon: 'sliders', color: '#8995A7', articleCount: 1 },
+    { id: 'health-wellness', name: 'Health & Wellness', short: 'Health & Wellness', tagline: 'Small steps, every day.', description: 'Beginner fitness and wellbeing guides — walking, home workouts and habits that stick.', icon: 'heart', color: '#F5A623', articleCount: 2 },
+    { id: 'education-learning', name: 'Education & Learning', short: 'Education & Learning', tagline: 'Learn a new skill in 30 days.', description: 'Practical learning guides for digital skills — structured, realistic and free to start.', icon: 'graduation', color: '#2878FF', articleCount: 1 }
   ];
 
   var ARTICLES = [
@@ -163,10 +188,10 @@
       return '<a href="' + href + '"' + cls + '>' + n[1] + '</a>';
     }).join('');
     return '<header class="site-header"><div class="wrap header-inner">' +
-      '<a class="brand" href="' + prefix + 'index.html"><span class="brand-mark">FS</span><span class="brand-text"><strong>FS AI</strong><small>FAHAD SOMRAT AI</small></span></a>' +
+      '<a class="brand" href="' + prefix + 'index.html"><span class="brand-mark">FS</span><span class="brand-text"><strong>FS AI</strong><small>Fahad Somrat AI</small></span></a>' +
       '<nav class="main-nav" aria-label="Main navigation">' + links + '</nav>' +
-      '<div class="header-actions"><button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch light and dark theme">☀️ / 🌙</button>' +
-      '<button class="nav-toggle" id="navToggle" type="button" aria-label="Open menu" aria-expanded="false">☰</button></div></div></header>';
+      '<div class="header-actions"><button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch light and dark theme">' + svgIcon('sun', 'icon-sun') + svgIcon('moon', 'icon-moon') + '</button>' +
+      '<button class="nav-toggle" id="navToggle" type="button" aria-label="Open menu" aria-expanded="false">' + svgIcon('menu') + '</button></div></div></header>';
   }
 
   function renderFooter() {
@@ -180,7 +205,7 @@
       return '<a href="' + a.url + '" target="_blank" rel="noopener">' + esc(a.name) + ' (' + esc(a.handle) + ')</a>';
     }).join(' · ');
     return '<footer class="site-footer"><div class="wrap footer-grid">' +
-      '<div><h3>FS AI</h3><p>FAHAD SOMRAT AI — One Platform. Multiple Possibilities.</p>' +
+      '<div><h3>FS AI</h3><p>Fahad Somrat AI — One Platform. Multiple Possibilities.</p>' +
       '<p>Founded by Fahad Somrat. Zero-cost platform: no paid services, no fake numbers.</p></div>' +
       '<div><h3>Divisions</h3><p>' + DIVISIONS.map(function (d) { return '<a href="' + prefix + 'pages/division.html?division=' + d.id + '">' + esc(d.name) + '</a>'; }).join(' · ') + '</p>' +
       '<p><a href="' + prefix + 'pages/about.html">About</a> · <a href="' + prefix + 'pages/contact.html">Contact</a> · <a href="' + prefix + 'pages/privacy.html">Privacy</a> · <a href="' + prefix + 'pages/terms.html">Terms</a></p></div>' +
@@ -196,6 +221,7 @@
     return '<article class="card article-card reveal"><div class="card-tag">' + esc(a.division) + ' · ' + esc(a.category) + '</div>' +
       '<h3><a href="pages/article?id=' + a.id + '">' + esc(a.title) + '</a></h3>' +
       '<p>' + esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + formatDate(a.date) + '</time> ' +
+      '<span class="article-no">' + articleNo(a.id) + '</span> ' +
       '<a class="read-more" href="pages/article?id=' + a.id + '">Read article →</a></article>';
   }
   /* articleCard links are written from the site root; fix them when rendered on a sub-page. */
@@ -207,8 +233,8 @@
   function renderDivisions(root) {
     if (!root) return;
     root.innerHTML = DIVISIONS.map(function (d) {
-      return '<article class="card division-card reveal" style="--div-color:' + d.color + '">' +
-        '<div class="div-icon" aria-hidden="true">' + d.icon + '</div><h3>' + esc(d.name) + '</h3>' +
+      return '<article class="card division-card reveal">' +
+        '<div class="div-icon" aria-hidden="true">' + svgIcon(d.icon) + '</div><h3><span class="div-dot" style="background:' + d.color + '"></span>' + esc(d.name) + '</h3>' +
         '<p class="div-tagline">' + esc(d.tagline) + '</p><p>' + esc(d.description) + '</p>' +
         '<p class="div-count">' + d.articleCount + ' article' + (d.articleCount === 1 ? '' : 's') + '</p>' +
         '<a class="btn btn-outline" href="pages/division.html?division=' + d.id + '">Explore ' + esc(d.short) + ' →</a></article>';
@@ -232,18 +258,39 @@
     fixArticleLinks(root);
   }
 
+  /* Hero moment (unslop run 2026-11-20): the latest guide rendered as a real
+     card, instead of the glowing ring. Same data as the article grid. */
+  function renderHeroPreview(root) {
+    if (!root) return;
+    var latest = ARTICLES.slice().sort(function (a, b) { return b.date.localeCompare(a.date); })[0];
+    if (!latest) return;
+    root.innerHTML = '<article class="card hero-preview"><p class="card-tag">' + esc(latest.division) + ' · ' + esc(latest.category) + '</p>' +
+      '<h3><a href="pages/article?id=' + latest.id + '">' + esc(latest.title) + '</a></h3>' +
+      '<p>' + esc(latest.excerpt) + '</p>' +
+      '<p class="hero-preview-meta"><span class="article-no">' + articleNo(latest.id) + '</span> · <time datetime="' + latest.date + '">' + formatDate(latest.date) + '</time></p>' +
+      '<a class="read-more" href="pages/article?id=' + latest.id + '">Read article →</a></article>';
+  }
+
   window.FSAI.renderHeader = renderHeader;
   window.FSAI.renderFooter = renderFooter;
   window.FSAI.renderDivisions = renderDivisions;
   window.FSAI.renderArticles = renderArticles;
   window.FSAI.renderTools = renderTools;
   window.FSAI.articleCard = articleCard;
+  window.FSAI.articleNo = articleNo;
+  window.FSAI.divisionIcon = function (id) {
+    var d = DIVISIONS.find(function (x) { return x.id === id; });
+    return d ? svgIcon(d.icon) : '';
+  };
+  window.FSAI.renderHeroPreview = renderHeroPreview;
 
   document.addEventListener('DOMContentLoaded', function () {
     var h = document.getElementById('siteHeader');
     if (h) h.innerHTML = renderHeader(h.getAttribute('data-active') || 'Home');
     var f = document.getElementById('siteFooter');
     if (f) f.innerHTML = renderFooter();
+    var hp = document.getElementById('heroPreview');
+    if (hp) renderHeroPreview(hp);
     var dg = document.getElementById('divisionGrid');
     if (dg) renderDivisions(dg);
     var ag = document.getElementById('articleGrid');

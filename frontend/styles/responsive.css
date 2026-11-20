@@ -1,7 +1,6 @@
 /* FS AI — responsive layout. Breakpoints: 900px (tablet), 640px (phone). */
 @media (max-width: 900px) {
   .hero-inner { grid-template-columns: 1fr; }
-  .hero-ring { display: none; }
   .tool-layout { grid-template-columns: 1fr; }
   /* Mobile: the form sits below 20 tool chips and is invisible without a
      long scroll — show the workspace first, the tool list second. */
@@ -23,7 +22,7 @@
   .main-nav.open { display: flex; }
   .main-nav a { padding: 12px 14px; }
   .header-actions { margin-left: auto; }
-  .hero { padding: 44px 0 40px; }
+  .hero { padding: 48px 0 40px; }
   .hero h1 { font-size: 32px; }
   .hero p.lead { font-size: 16px; }
   .search-box { flex-direction: column; }

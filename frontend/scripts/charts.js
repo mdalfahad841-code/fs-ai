@@ -22,7 +22,12 @@
     var padL = cssW < 480 ? 96 : 150, padB = 28, padT = 12;
     var barH = (cssH - padT - padB) / data.length - 10;
     var barW = cssW - padL - 24;
-    ctx.font = '13px Arial, sans-serif';
+    /* Unslop run 2026-11-20: one accent only — the largest bar (the thing
+       that matters) gets the brand blue; every other bar is a neutral step
+       of the ramp, so the chart has a hierarchy. Labels are muted mono. */
+    var accent = '#2878FF';
+    var neutralBar = light ? '#c9c2b2' : '#3a352f';
+    ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
     /* Narrow screens (e.g. 320px phones): the fixed 150px label gutter
        clipped long division names on the left and the caption on the
        right. Shorten any label that does not fit the gutter, and shorten
@@ -39,7 +44,7 @@
       ctx.fillStyle = labelColor;
       ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
       ctx.fillText(fitText(d.division, padL - 12), padL - 10, y + barH / 2);
-      ctx.fillStyle = '#2878FF';
+      ctx.fillStyle = d.count === max ? accent : neutralBar;
       ctx.fillRect(padL, y, w, barH);
       ctx.fillStyle = labelColor;
       ctx.textAlign = 'left';
