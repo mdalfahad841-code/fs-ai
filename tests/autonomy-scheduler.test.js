@@ -390,9 +390,12 @@ describe('daily workflow — protected test articles #26/#27', () => {
   }
 
   // Long enough (plain text >= 120 chars) for deriveSeoDescription, with
-  // no internal link and no headings — WITHOUT the guard, repairSeoFields
-  // would rewrite the description, fill the SEO title and append a
-  // Related reading link to every one of these drafts.
+  // no internal link and no headings. repairSeoFields rewrites the
+  // description and fills the SEO title — but it appends a Related
+  // reading link ONLY to a genuinely relevant sibling (Workstream A,
+  // task A, 2026-11-21): these "Guard Test Article N" fixtures share
+  // no topical title keyword with any published sibling, so NO link
+  // is appended and the body is unchanged by the SEO step.
   const bodyFor = (n) =>
     `Protected test article number ${n} has a plain body about the topic, with enough words to derive a meta description from the article text itself. ` +
     `A second sentence adds more real content here for the description. A third sentence keeps the text long enough to repair.`;
@@ -436,7 +439,15 @@ describe('daily workflow — protected test articles #26/#27', () => {
     }
 
     const after28 = db.prepare('SELECT body, seo_title, seo_description FROM articles WHERE id = ?').get(28);
-    assert.ok(after28.body.includes('Related reading:'), '#28 got the Related reading link');
+    // WS-B forward / Workstream A task A (2026-11-21): the old
+    // assertion expected a Related reading link here, but the repair
+    // now appends one ONLY to a genuinely relevant sibling — and
+    // "Guard Test Article 28" shares no topical title keyword with
+    // any published sibling. No link is the CORRECT new behaviour
+    // (a fake same-division link was the live #31 -> #22 bug); the
+    // description repair and the seo_checks row still happen.
+    assert.ok(!after28.body.includes('Related reading:'), '#28 got NO Related reading link — no genuinely relevant published sibling exists, so none is faked');
+    assert.equal(after28.body, before[28].body, '#28 body is unchanged by the SEO step (no link appended)');
     assert.ok(after28.seo_description && after28.seo_description.length >= 120 && after28.seo_description.length <= 160,
       '#28 meta description was repaired into 120-160 characters');
     assert.equal(
@@ -472,12 +483,13 @@ describe('daily workflow — protected test articles #26/#27', () => {
     }
     // #28 was selected (no article-specific evidence, so its failed claim
     // was skipped for human review and the correction wrote nothing).
-    // Note: the same daily run's seoRun step legitimately appends a
-    // Related reading link to unprotected #28 — the correction itself
-    // must not change the body, so allow exactly that SEO append.
+    // The same daily run's seoRun step appends NO Related reading link
+    // to #28 (Workstream A, task A: no genuinely relevant sibling
+    // exists for this fixture), so the body must be byte-identical —
+    // neither the correction nor the SEO step changes it.
     const after28Body = db.prepare('SELECT body FROM articles WHERE id = 28').get().body;
-    assert.ok(after28Body === before[28] || after28Body.startsWith(before[28] + '\n\nRelated reading:'),
-      '#28 body was changed only by the SEO step (Related reading link), not by the correction');
+    assert.equal(after28Body, before[28],
+      '#28 body is unchanged — the correction wrote nothing and the SEO step appended no (unrelated) link');
     assert.equal(
       db.prepare('SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = 28').get().n, 0,
       'the no-evidence correction wrote no correction rows for #28');

@@ -137,8 +137,8 @@ describe('POST /api/autonomy/articles/:id/seo-optimize', () => {
   it('repairs an unprotected draft (description, H2 promotion, internal link) and records the version', async () => {
     const { db, env } = freshEnv();
     stubFetch(env);
-    db.prepare("INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, published_at) VALUES (1, 'Published Sibling Article', 'published-sibling', 'x', 'Sibling body text here.', 'FS AI', 'published', 0, '2026-11-19T00:00:00.000Z')").run();
-    const id = insertArticle(db, H3_BODY, { id: 101, seoTitle: GOOD_SEO_TITLE, seoDescription: 'Too short.' });
+    db.prepare("INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, published_at) VALUES (1, 'Published EV Charging Article', 'published-sibling', 'x', 'Sibling body text here.', 'FS AI', 'published', 0, '2026-11-19T00:00:00.000Z')").run();
+    const id = insertArticle(db, H3_BODY, { id: 101, title: 'EV Charging at Home', seoTitle: GOOD_SEO_TITLE, seoDescription: 'Too short.' });
     const r = await callAutonomy(env, 'POST', `/api/autonomy/articles/${id}/seo-optimize`);
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.action, 'optimize', 'Optimize is distinguishable from Check');
@@ -151,7 +151,7 @@ describe('POST /api/autonomy/articles/:id/seo-optimize', () => {
     const row = db.prepare('SELECT seo_description, body FROM articles WHERE id = ?').get(id);
     assert.ok(row.seo_description.length >= 120 && row.seo_description.length <= 160,
       `repaired description is ${row.seo_description.length} chars`);
-    assert.match(row.body, /Related reading: \[Published Sibling Article\]/, 'genuine internal link appended');
+    assert.match(row.body, /Related reading: \[Published EV Charging Article\]/, 'genuine internal link appended');
     assert.ok((row.body.match(/^##\s.+$/gm) || []).length >= 2, 'H3s promoted to H2s');
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?').get(id).n, 1,
       'pre-edit body stored as a revision first');

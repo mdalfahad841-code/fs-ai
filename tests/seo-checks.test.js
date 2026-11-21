@@ -125,7 +125,7 @@ const GOOD_BODY = [
   '',
   '## Charger types and costs',
   '',
-  'A complete beginner guide should explain the two main charger types. A slow charger uses a normal wall outlet and adds range slowly. A faster wall charger needs a dedicated circuit and an electrician to install it safely. The guide below links to a related article for more detail: https://fs-ai-5w5.pages.dev/pages/article?id=12',
+  'A complete beginner guide should explain the two main charger types. A slow charger uses a normal wall outlet and adds range slowly. A faster wall charger needs a dedicated circuit and an electrician to install it safely. The guide below links to a related article for more detail: https://fs-ai-5w5.pages.dev/pages/article?id=1',
   '',
   '## Installation basics',
   '',

@@ -103,19 +103,19 @@ function loadArticle(db, id) {
 
 // Explicit ids keep test articles clear of the protected fallback ids
 // (26/27) unless a test opts into them. Slug/title are unique per call.
-function insertArticle(db, body, { id = null, divisionId = 1, status = 'draft', seoTitle = null, seoDescription = null, isProtected = 0 } = {}) {
+function insertArticle(db, body, { id = null, divisionId = 1, status = 'draft', seoTitle = null, seoDescription = null, isProtected = 0, title = null } = {}) {
   const uniq = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const title = `Test Article ${id !== null ? id : uniq}`;
+  const articleTitle = title || `Test Article ${id !== null ? id : uniq}`;
   const slug = `test-article-${id !== null ? id : uniq}`;
   if (id !== null) {
     db.prepare(
       'INSERT INTO articles (id, division_id, title, slug, excerpt, body, author, status, fact_checked, seo_title, seo_description, is_protected) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
-    ).run(id, divisionId, title, slug, 'Test excerpt.', body, 'FS AI', status, seoTitle, seoDescription, isProtected ? 1 : 0);
+    ).run(id, divisionId, articleTitle, slug, 'Test excerpt.', body, 'FS AI', status, seoTitle, seoDescription, isProtected ? 1 : 0);
     return id;
   }
   const r = db.prepare(
     'INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, seo_title, seo_description) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
-  ).run(divisionId, title, slug, 'Test excerpt.', body, 'FS AI', status, seoTitle, seoDescription);
+  ).run(divisionId, articleTitle, slug, 'Test excerpt.', body, 'FS AI', status, seoTitle, seoDescription);
   return Number(r.lastInsertRowid);
 }
 

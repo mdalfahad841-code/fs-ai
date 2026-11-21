@@ -314,7 +314,11 @@ describe('social-media agent', () => {
     const { db, env } = freshEnv();
     const result = await runAutonomyTask(
       { agent: 'social-media', kind: 'social-pack', payload: { article_id: 1 } }, env);
-    assert.equal(result.outcome, 'done');
+    // S1 fix (2026-11-21): this test DB has no migration 022 tables, so
+    // every draft-post store fails — the pack must report 'failed', never
+    // 'done', while still returning the pack fields and posting nothing.
+    assert.equal(result.outcome, 'failed');
+    assert.match(result.error, /No social draft could be stored/);
     assert.equal(result.articleId, 1);
     assert.ok(result.url.includes('/pages/article?id=1'), 'pack links the real article URL');
     assert.ok(result.pinterest.caption.includes(result.title), 'Pinterest caption uses the real title');

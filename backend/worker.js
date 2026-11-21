@@ -16,6 +16,9 @@ import { handleTools } from './routes/tools.js';
 import { handleAgents } from './routes/agents.js';
 import { handleAccounts } from './routes/accounts.js';
 import { handleAnalytics } from './routes/analytics.js';
+import { handleAnalyticsDetail } from './routes/analytics.js';
+import { handleHealthLatest } from './routes/health.js';
+import { handleSocial } from './routes/social.js';
 import { handleAuth } from './routes/auth.js';
 import { handleAdminArticles, publishDueArticles } from './routes/admin-articles.js';
 import { handleNewsletter, handleAdminSubscribers } from './routes/newsletter.js';
@@ -54,6 +57,23 @@ function withCors(response, request) {
   const headers = new Headers(response.headers);
   const cors = corsHeaders(request);
   for (const [k, v] of Object.entries(cors)) headers.set(k, v);
+  return new Response(response.body, { status: response.status, headers });
+}
+
+// Security headers (H2 fix, 2026-11-21): applied to every Worker
+// response in fetch() below. CSP keeps 'unsafe-inline' for script and
+// style because the dashboard and article pages use inline scripts /
+// styles; framing is denied outright (the site is never embedded).
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'",
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+};
+
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -129,6 +149,33 @@ async function route(request, env, ctx) {
     return handleAutonomy(request, env, ctx, auth);
   }
 
+  // Control Center detail + health + social (owner-only, W5/W4/W1).
+  // /api/health (liveness, no auth) above is a different endpoint —
+  // do not confuse it with /api/health/latest (owner-only, D1-backed).
+  if (path === '/api/analytics/detail' && method === 'GET') {
+    const auth = await requireOwner(request, env);
+    if (!auth.ok) return auth.response;
+    return handleAnalyticsDetail(request, env, ctx);
+  }
+  if (path === '/api/health/latest' && method === 'GET') {
+    const auth = await requireOwner(request, env);
+    if (!auth.ok) return auth.response;
+    return handleHealthLatest(request, env, ctx);
+  }
+  if (path.startsWith('/api/social/')) {
+    // OAuth callback exemption (WS-C, 2026-11-21): a platform redirect
+    // carries no Bearer token. Its auth is the signed, 10-minute,
+    // platform-bound state token validated inside handleSocial — only
+    // the owner who started the flow holds one. Every other social
+    // route still requires the owner session below.
+    if (method === 'GET' && /^\/api\/social\/oauth\/[a-z]+\/callback$/.test(path)) {
+      return handleSocial(request, env, ctx);
+    }
+    const auth = await requireOwner(request, env);
+    if (!auth.ok) return auth.response;
+    return handleSocial(request, env, ctx);
+  }
+
   if (path === '/' && method === 'GET') {
     return jsonOk({ brand: BRAND_FULL, tagline: TAGLINE, api: '/api/health' });
   }
@@ -143,12 +190,12 @@ export default {
         return new Response(null, { status: 204, headers: corsHeaders(request) });
       }
       const limited = await rateLimit(request, env, ctx);
-      if (limited) return withCors(limited, request);
+      if (limited) return withSecurityHeaders(withCors(limited, request));
       const response = await route(request, env, ctx);
-      return withCors(response, request);
+      return withSecurityHeaders(withCors(response, request));
     } catch (err) {
       console.error('FS AI worker error:', err);
-      return withCors(jsonError('Internal server error', 500), request);
+      return withSecurityHeaders(withCors(jsonError('Internal server error', 500), request));
     }
   },
 

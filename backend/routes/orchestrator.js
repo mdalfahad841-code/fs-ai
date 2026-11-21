@@ -128,12 +128,29 @@ const ACCOUNT_STATES = {
 
 const SETTING_RULES = {
   autonomy_level: (v) => ['1', '2', '3'].includes(String(v)) ? null : "autonomy_level must be '1', '2' or '3'.",
-  publishing_mode: (v) => String(v) === 'approved_only' ? null : "publishing_mode must be 'approved_only' — publishing always needs owner approval.",
+  // publishing_mode 'auto' + auto_publishing 'on' + a set
+  // auto_publish_eligible_since cutoff are ALL required before anything
+  // auto-publishes, and only for articles created after the cutoff.
+  // Existing drafts (#28/#29/#30/#31) are refused unconditionally by
+  // the evaluator. Defaults stay approved_only/off/unset — code never
+  // flips a setting; enabling is a deliberate owner action.
+  publishing_mode: (v) => ['approved_only', 'auto'].includes(String(v)) ? null : "publishing_mode must be 'approved_only' or 'auto'.",
+  auto_publish_eligible_since: (v) => {
+    if (v === '' || v === null || v === undefined) return null; // clearing disables auto-publish
+    const s = String(v);
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/.test(s) && !Number.isNaN(Date.parse(s))
+      ? null : 'auto_publish_eligible_since must be an ISO 8601 timestamp.';
+  },
   max_articles_per_day: (v) => {
     const n = Number(v);
     return Number.isInteger(n) && n >= 0 && n <= 3 ? null : 'max_articles_per_day must be an integer from 0 to 3.';
   },
-  social_auto_post: (v) => String(v) === 'off' ? null : "social_auto_post must be 'off' — auto-posting is not allowed (no social API auth exists).",
+  // 'on' only arms the social routes/dispatcher; creation is always
+  // draft-only and publishing is only via an explicit owner action
+  // (POST /api/social/posts/:id/publish) — nothing auto-posts merely
+  // because this flag is on, and nothing posts without a connected
+  // account (owner OAuth per platform).
+  social_auto_post: (v) => ['off', 'draft_only', 'on'].includes(String(v)) ? null : "social_auto_post must be 'off', 'draft_only' or 'on'.",
   // Auto-pipeline switches. All default to 'off' (migration 010). Turning
   // auto_publishing 'on' only arms the gate's eligibility reporting —
   // nothing publishes while publishing_mode is 'approved_only'.
@@ -417,8 +434,10 @@ async function handleCancelTask(request, env, id) {
 
 /**
  * POST /api/autonomy/tasks/recover-stale — recover every task stuck
- * 'running' past the run lease (Phase 4). Each recovered task is
- * marked failed (reason 'stale-lock') and becomes retryable.
+ * 'running' past the run lease (Phase 4). A stale task with retries
+ * left is RE-QUEUED with backoff (terminal state RETRYING) so the next
+ * drain retries it automatically; only a stale task with retries
+ * exhausted is marked failed (FAILED_FINAL_WITH_RECOVERY_REPORT).
  */
 async function handleRecoverStale(request, env) {
   if (!env.DB) return jsonError('Stale-lock recovery requires the D1 database', 503);

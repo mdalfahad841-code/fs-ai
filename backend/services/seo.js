@@ -100,13 +100,16 @@ export function sitemapEntries() {
   return entries;
 }
 
-export function sitemapXml() {
-  const entries = sitemapEntries();
+export function renderSitemapXml(entries) {
   const urls = entries.map((e) => {
     const lastmod = e.lastmod ? `\n    <lastmod>${escapeHtml(e.lastmod)}</lastmod>` : '';
     return `  <url>\n    <loc>${escapeHtml(e.loc)}</loc>${lastmod}\n    <changefreq>${e.changefreq}</changefreq>\n    <priority>${e.priority}</priority>\n  </url>`;
   }).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>`;
+}
+
+export function sitemapXml() {
+  return renderSitemapXml(sitemapEntries());
 }
 
 export function robotsTxt() {

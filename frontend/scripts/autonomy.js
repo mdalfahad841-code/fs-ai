@@ -282,6 +282,52 @@
     bindControls();
   }
 
+  // Tell the Control Center (dashboard.js) that autonomy data changed,
+  // so it re-fetches queue / failed-task / automation blocks instead of
+  // showing stale counts until a reload. Same fsai:* window-event
+  // convention as the Emergency Stop sync above. One-way only:
+  // dashboard.js never dispatches this event, so there is no loop.
+  function notifyControlCenter() {
+    try { window.dispatchEvent(new CustomEvent('fsai:autonomy-refreshed')); } catch (e) {}
+  }
+
+  /* --- Control Center: recent activity (W5) ---
+     Latest agent runs from GET /api/analytics/detail?section=activity,
+     rendered into the Control Center section dashboard.js owns
+     (#ccActivityList). Fallback: the latest tasks from the autonomy
+     endpoint, honestly labelled as the task list — never invented runs. */
+  function loadControlCenterActivity() {
+    api('/api/analytics/detail?section=activity').then(function (r) {
+      var list = el('ccActivityList');
+      if (r.ok && r.data && Array.isArray(r.data.data)) {
+        var runs = r.data.data;
+        if (list) {
+          list.innerHTML = runs.map(function (run) {
+            return '<li><strong>' + esc(run.agent || '') + '</strong> — ' + esc(run.outcome || '') + ' ' + statusPill(run.outcome) +
+              ' <span class="muted">' + fmtDate(run.startedAt) + (run.reason ? ' — ' + esc(String(run.reason).slice(0, 120)) : '') + '</span></li>';
+          }).join('') || '<li>No agent runs recorded yet.</li>';
+        }
+        setText('ccActivityStatus', runs.length + ' latest run(s) from the API.');
+        return;
+      }
+      api('/api/autonomy/tasks?limit=10').then(function (r2) {
+        if (!r2.ok) {
+          if (list) list.innerHTML = '<li>Recent activity: Data unavailable — ' + esc(apiError(r2)) + '</li>';
+          setText('ccActivityStatus', 'Could not load recent activity.');
+          return;
+        }
+        var tasks = (r2.data && r2.data.tasks) || [];
+        if (list) {
+          list.innerHTML = tasks.map(function (t) {
+            return '<li><strong>' + esc(t.agent || '') + '</strong> — ' + esc(t.kind || '') + ' ' + statusPill(t.status) +
+              ' <span class="muted">task #' + esc(String(t.id)) + ' · ' + fmtDate(t.updated_at || t.created_at) + '</span></li>';
+          }).join('') || '<li>No tasks recorded yet.</li>';
+        }
+        setText('ccActivityStatus', 'Activity endpoint not wired yet — showing the latest tasks instead.');
+      }).catch(function () { setText('ccActivityStatus', 'Could not reach the FS AI server.'); });
+    }).catch(function () { setText('ccActivityStatus', 'Could not reach the FS AI server.'); });
+  }
+
   /* --- Status + agents (GET /api/autonomy/status) --- */
   // syncMessage=true when re-fetching because the OTHER section toggled:
   // the message line must match the server state too — the same
@@ -374,6 +420,7 @@
             ' ' + statusPill(a.status) + disabledNote + lastLine + '</li>';
         }).join('') || '<li>No agents reported by the API.</li>';
       }
+      notifyControlCenter();
     }).catch(function () { setText('autonomyStatus', 'Could not reach the FS AI server.'); });
   }
 
@@ -818,6 +865,7 @@
         }).join('');
       }
       setText('autonomyBackupStatus', 'Backup status comes from the status section above. “Run backup now” exports the database and records the run.');
+      notifyControlCenter();
     }).catch(function () { setText('autonomyPipelineStatus', 'Could not reach the FS AI server.'); });
   }
 
@@ -1408,6 +1456,7 @@
     loadReports();
     loadSettings();
     loadAccounts();
+    loadControlCenterActivity();
   }
 
   /* --- Gate: only run after a verified server session has revealed

@@ -11,6 +11,31 @@ import {
   isValidSlug, slugify, nowIso, d1All, d1First, d1Run,
 } from '../middleware/validation.js';
 import { ARTICLES } from './articles.js';
+import { DIVISION_CONFIG } from '../publishing/divisions.js';
+
+/**
+ * Per-division publishing support status (W3): one row per division
+ * with its research sources (migration 008 seeds), editorial rules,
+ * internal-link scoping, schedule slot, social hooks and special-review
+ * flag. Pure — no D1, no I/O. Live source counts come from
+ * research_sources; this table is the config side of that check.
+ */
+export function getDivisionSupportStatus() {
+  return DIVISION_CONFIG.map((d) => ({
+    id: d.id,
+    slug: d.slug,
+    name: d.name,
+    sources: d.sources.map((s) => s.name),
+    sourceCount: d.sources.length,
+    editorial: d.editorial,
+    internalLinkScope: d.internalLinkScope,
+    schedule: d.schedule,
+    social: d.social,
+    specialReview: d.specialReview,
+    neverAutoPublish: d.neverAutoPublish,
+    authoritativeHosts: d.authoritativeHosts,
+  }));
+}
 
 export const DIVISIONS = [
   { id: 1, slug: 'automotive', name: 'Automotive', tagline: 'Cars, bikes and driving, explained simply.', description: 'Buying guides, maintenance checklists, fuel saving and EV guides for everyday drivers.' },

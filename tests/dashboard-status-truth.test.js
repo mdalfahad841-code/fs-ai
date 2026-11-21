@@ -82,16 +82,21 @@ describe('no GA4 Reporting/Data API exists anywhere in the repo', () => {
     for (const file of files) {
       // Strip comments first: the honesty comments in analytics.js /
       // accounts.js name these APIs only to deny that they are used.
-      // Also strip the authorised Gemini LLM endpoint host
-      // (generativelanguage.googleapis.com, backend/llm/providers/
-      // gemini.js + registry.js): that is the Gemini text-generation
-      // API, NOT the GA4 Reporting/Data API this test guards against.
+      // Also strip the authorised YouTube Data API host
+      // (www.googleapis.com, backend/social/adapters/youtube.js):
+      // that is the official YouTube upload/read API, NOT the GA4
+      // Reporting/Data API this test guards against. Likewise strip
+      // oauth2.googleapis.com — the Google OAuth token endpoint used
+      // by the owner-authorized YouTube OAuth flow
+      // (backend/social/oauth.js), not a reporting integration.
       // Any other googleapis host (e.g. analyticsdata.googleapis.com)
       // still trips this test.
       const src = fs.readFileSync(file, 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, '')
         .replace(/(^|\s)\/\/.*$/gm, '')
-        .replace(/generativelanguage\.googleapis\.com/g, '');
+        .replace(/generativelanguage\.googleapis\.com/g, '')
+        .replace(/oauth2\.googleapis\.com/g, '')
+        .replace(/www\.googleapis\.com/g, '');
       for (const token of ['googleapis', 'analyticsdata', 'analyticsreporting']) {
         assert.ok(!src.toLowerCase().includes(token),
           path.relative(ROOT, file) + ' mentions ' + token + ' outside comments — a reporting integration must not exist silently');

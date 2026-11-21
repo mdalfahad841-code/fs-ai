@@ -1,0 +1,24 @@
+-- FS AI migration 023 - body hash + length on seo_checks (SEO staleness guard).
+--
+-- seo_checks.body_hash: SHA-256 of the article body as the SEO run
+-- checked it (same normalisation as fact_checks.body_hash, migration
+-- 019 — see backend/utils/bodyHash.js). seo_checks.body_length: the
+-- checked body's length in characters.
+--
+-- WHY (W2 fix, 2026-11-21): fact-check runs are tied to the exact body
+-- they judged (migration 019, fail-closed at the publish gate), but SEO
+-- runs had no such tie — an SEO PASS could silently survive a later
+-- body edit. Storing the hash + length on every seo_checks row lets
+-- the gate (and any reader) tell a fresh SEO result from a stale one,
+-- in the same style as fact_checks. The gate does NOT enforce this yet
+-- (backend/publishing/gate.js is owned by another workstream — see the
+-- W2 report for the exact snippet); the columns + writes land here so
+-- enforcement can follow without a second migration.
+--
+-- Safe: additive columns only. Existing seo_checks rows keep NULL
+-- body_hash/body_length, which readers must treat as "unknown — stale
+-- until re-checked", never as fresh. No existing data is changed.
+-- Rollback: leave the columns (inert — runSeo/runSeoCheckOnly fall
+-- back to the pre-023 column list when they are absent).
+ALTER TABLE seo_checks ADD COLUMN body_hash TEXT;
+ALTER TABLE seo_checks ADD COLUMN body_length INTEGER;

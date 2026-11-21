@@ -385,6 +385,12 @@ function makeFakeD1() {
       tables.article_tags = tables.article_tags.filter((t) => t.article_id !== Number(params[0]));
       return { success: true, meta: { changes: before - tables.article_tags.length, last_row_id: 0 } };
     }
+    if (q.startsWith('DELETE FROM article_sources WHERE article_id = ?')) {
+      // L4 orphan cleanup (2026-11-21): the fake D1 does not model
+      // article_sources rows, so there is nothing to delete — report
+      // success with 0 changes rather than an unsupported-statement error.
+      return { success: true, meta: { changes: 0, last_row_id: 0 } };
+    }
     if (q.startsWith('DELETE FROM articles WHERE id = ?')) {
       const before = tables.articles.length;
       tables.articles = tables.articles.filter((a) => a.id !== Number(params[0]));

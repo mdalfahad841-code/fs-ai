@@ -8,14 +8,17 @@
  * Idempotency: enqueueTask never creates a duplicate for the same
  * idempotency_key — it returns the existing task instead.
  */
-import { d1All, d1First, d1Run, nowIso } from '../middleware/validation.js';
+import { d1All, d1First, d1Run, nowIso, isMissingColumnError, slugify } from '../middleware/validation.js';
 import { getEmergencyStop } from './admin.js';
 import { publishDueArticles } from './admin-articles.js';
-import { runAutonomyTask, DIVISION_RESEARCH_REGISTRY, registryIdForTask } from '../agents/autonomy-runner.js';
+import { runAutonomyTask, DIVISION_RESEARCH_REGISTRY, registryIdForTask, QUEUE_AGENTS } from '../agents/autonomy-runner.js';
+import { convertScaffoldToDraft } from '../agents/autonomy/content.js';
+import { runHealthCheck } from '../services/healthcheck.js';
 import { runResearch } from '../agents/autonomy/research.js';
 import { runFactChecking } from '../agents/autonomy/factcheck.js';
 import { runSeo } from '../agents/autonomy/seo.js';
 import { evaluatePublishGate, publishGatePassed } from '../publishing/gate.js';
+import { runAutoPublish } from '../agents/autonomy/publishing.js';
 import { PROTECTED_TEST_ARTICLES, protectedExclusion, assertTaskNotProtected } from '../publishing/protection.js';
 
 // Re-exported so existing callers/tests keep reading the list from this
@@ -61,9 +64,14 @@ function plusMinutes(baseIso, minutes) {
 //     clear reason and its status is ALWAYS resolved (try/finally in
 //     runTask) — a run ends done/failed/skipped, never stuck running.
 //   - recoverStaleTasks(): 'running' tasks older than the lease are
-//     marked failed (reason 'stale-lock') so the existing retry
-//     endpoint can re-queue them. Called by the dashboard endpoint
-//     and by the daily/weekly workflows (best-effort, never blocking).
+//     recovered (reason 'stale-lock'): re-queued automatically with
+//     backoff while attempts remain, so the next drain retries them
+//     without a manual retry (self-healing per the owner zero-failure
+//     brief, 2026-11-21 — the pre-W1 behaviour of leaving them 'failed'
+//     for a manual retry is superseded); only when attempts are
+//     exhausted do they go 'failed' with FAILED_FINAL_WITH_RECOVERY_REPORT.
+//     Called by the dashboard endpoint and by the daily/weekly workflows
+//     (best-effort, never blocking).
 //   - cancelTask(): the owner can cancel a 'running' task; it lands
 //     in 'failed' (reason 'cancelled-by-owner') and is retryable.
 //   - A second run on a fresh 'running' task answers in-flight
@@ -76,6 +84,122 @@ function plusMinutes(baseIso, minutes) {
 
 /** A single task run may take at most 10 minutes before it is failed. */
 export const TASK_RUN_LEASE_MS = 10 * 60 * 1000;
+
+/**
+ * Queue drain bounds (W1, 2026-11-21): at most this many queued tasks
+ * per daily run, and the drain stops after this many consecutive
+ * failures so one broken handler cannot burn the whole run.
+ */
+export const MAX_DRAIN_TASKS_PER_RUN = 10;
+export const MAX_DRAIN_CONSECUTIVE_FAILURES = 3;
+
+/** Backoff cap: a re-queued task never waits longer than 4 hours. */
+export const DRAIN_BACKOFF_CAP_MINUTES = 240;
+
+// ---------------------------------------------------------------------
+// Task lifecycle — terminal states (W1, 2026-11-21; migration 020).
+// Every task must reach exactly one terminal state; the five states
+// live in agent_tasks.terminal_state (the legacy status column and its
+// CHECK are untouched). History is never deleted: agent_runs /
+// agent_logs keep every attempt. A FAILED_FINAL task stays visible and
+// is never retried automatically — only an explicit owner retryTask()
+// clears the terminal state and re-queues it.
+// ---------------------------------------------------------------------
+
+/** The five terminal states a task can end in. */
+export const TERMINAL_STATES = [
+  'COMPLETED',
+  'RETRYING',
+  'WAITING_FOR_AUTHORIZATION',
+  'BLOCKED_WITH_REASON',
+  'FAILED_FINAL_WITH_RECOVERY_REPORT',
+];
+
+/**
+ * Retry backoff in minutes: 15 * 2^(attempts-1), capped at 4 hours.
+ * Attempts 1-2 give 15/30 minutes — identical to the pre-W1 linear
+ * attempts*15 schedule — so existing retry timing is preserved.
+ */
+export function backoffMinutesForAttempt(attempts) {
+  const n = Number.isFinite(Number(attempts)) && Number(attempts) >= 1 ? Math.floor(Number(attempts)) : 1;
+  return Math.min(15 * (2 ** (n - 1)), DRAIN_BACKOFF_CAP_MINUTES);
+}
+
+/**
+ * True when a failure is permanent — retrying the same task the same
+ * way can never succeed. Deliberately narrow: only errors that prove
+ * the TASK itself is un-runnable (no handler exists for its agent, or
+ * its payload is malformed). A missing article, a failed fetch, an LLM
+ * quota error, or any handler error is TEMPORARY: the task re-queues
+ * with backoff (the existing retry test pins "Article 99999 not
+ * found" as retryable, so 'not found' is NOT permanent here).
+ */
+export function isPermanentTaskError(error) {
+  const text = String(error || '');
+  return /^Unknown autonomy agent:/i.test(text)
+    || /needs a valid (article_id|division|payload)/i.test(text)
+    || /invalid (payload|article_id|division|task)/i.test(text);
+}
+
+/**
+ * The failure alert / recovery report written into the agent_runs
+ * detail when a task reaches FAILED_FINAL (or is blocked permanently).
+ * Every failure record carries: task id, component, root cause,
+ * timestamp, retry history, recovery action, owner-action-required.
+ */
+export function buildRecoveryReport(task, result, attempts) {
+  const error = String((result && result.error) || 'unknown error').slice(0, 300);
+  const maxAttempts = (task && task.max_attempts) || 3;
+  const exhausted = attempts >= maxAttempts;
+  return {
+    taskId: task ? task.id : null,
+    component: task ? task.agent : null,
+    kind: task ? task.kind : null,
+    rootCause: error,
+    timestamp: nowIso(),
+    retryHistory: { attempts, maxAttempts, exhausted },
+    recoveryAction: exhausted
+      ? `Retries exhausted (${attempts}/${maxAttempts}) — the task will not auto-retry. Fix the cause, then retry it from the dashboard (retryTask resets attempts to 0).`
+      : 'Permanent failure — fix the task payload or agent configuration, then retry it from the dashboard.',
+    ownerActionRequired: true,
+  };
+}
+
+/**
+ * Best-effort terminal-state write (migration 020 columns). Silently
+ * no-ops on a pre-020 database (missing-column error) and on any other
+ * write failure — the legacy status column is always the source of
+ * truth for the task's status, so a terminal-state write must never
+ * break runTask / retryTask.
+ */
+export async function setTerminalState(env, taskId, state, reason = null, lastError = null) {
+  if (!env || !env.DB) return false;
+  if (state !== null && !TERMINAL_STATES.includes(state)) return false;
+  try {
+    await d1Run(env,
+      'UPDATE agent_tasks SET terminal_state = ?, terminal_reason = ?, last_error = ?, updated_at = ? WHERE id = ?',
+      [state, reason ? String(reason).slice(0, 500) : null, lastError ? String(lastError).slice(0, 500) : null, nowIso(), taskId]);
+    return true;
+  } catch (err) {
+    if (isMissingColumnError(err)) return false;
+    return false;
+  }
+}
+
+/** Clear the terminal state on an explicit owner retry (retryTask). */
+export async function clearTerminalState(env, taskId) {
+  return setTerminalState(env, taskId, null, null, null);
+}
+
+/** Articles created today (UTC) — the daily-content cap counts these. */
+export async function countArticlesCreatedToday(env) {
+  try {
+    const row = await d1First(env, "SELECT COUNT(*) AS n FROM articles WHERE date(created_at) = date('now')");
+    return Number(row ? row.n : 0);
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * Parse a D1/SQLite timestamp to epoch ms. D1 rows written by nowIso()
@@ -123,8 +247,11 @@ function runWithLease(promise, leaseMs) {
 
 /**
  * Recover ONE stale 'running' task: write a failed agent_runs row
- * (detail reason 'stale-lock') and mark the task failed so the
- * existing retry endpoint can re-queue it. Returns
+ * (detail reason 'stale-lock'), then — self-healing per the owner
+ * zero-failure brief (2026-11-21) — RE-QUEUE it automatically with
+ * backoff while attempts remain, so a Worker restart recovers
+ * without a manual retry. Only when attempts are exhausted does it
+ * go 'failed' with FAILED_FINAL_WITH_RECOVERY_REPORT. Returns
  * { ok, recovered, taskId, ... } — recovered:false when the task is
  * not stale (fresh running, or any other status).
  */
@@ -139,12 +266,34 @@ export async function recoverStaleTask(env, taskId, { leaseMs = TASK_RUN_LEASE_M
     return { ok: true, recovered: false, taskId: id, status: task.status, reason: 'not-stale' };
   }
   const staleForMs = nowMs - (parseDbTime(task.updated_at) || nowMs);
+  const finalFailure = (task.attempts || 0) >= (task.max_attempts || 3);
+  const recoveryReport = finalFailure
+    ? buildRecoveryReport(task, { error: `Task ran longer than the ${Math.round(leaseMs / 1000)}s lease with no update (stale lock).` }, task.attempts || 0)
+    : null;
   await writeRun(env, {
     taskId: id, agent: task.agent, outcome: 'failed',
-    detail: { reason: 'stale-lock', staleForMs, updatedAt: task.updated_at, leaseMs },
-    logs: [{ level: 'error', message: `Task ${id} (${task.agent}) recovered from a stale lock: running for ${Math.round(staleForMs / 1000)}s with no update (lease ${Math.round(leaseMs / 1000)}s). Marked failed so it can be retried.` }],
+    detail: { reason: 'stale-lock', staleForMs, updatedAt: task.updated_at, leaseMs, ...(recoveryReport ? { recoveryReport } : {}) },
+    logs: [{ level: 'error', message: `Task ${id} (${task.agent}) recovered from a stale lock: running for ${Math.round(staleForMs / 1000)}s with no update (lease ${Math.round(leaseMs / 1000)}s).${finalFailure ? ' Retries exhausted — final failure.' : ' Re-queued with backoff so the next drain retries it automatically.'}` }],
   });
-  await d1Run(env, "UPDATE agent_tasks SET status = 'failed', updated_at = ? WHERE id = ?", [nowIso(), id]);
+  if (finalFailure) {
+    await d1Run(env, "UPDATE agent_tasks SET status = 'failed', updated_at = ? WHERE id = ?", [nowIso(), id]);
+  } else {
+    // Self-healing (owner zero-failure brief 2026-11-21): a stale lock
+    // with attempts left RE-QUEUES automatically with the same
+    // exponential backoff as a failed run — the next drain picks it up
+    // once the backoff elapses. The task is never left 'failed'
+    // waiting for a manual retry.
+    const backoffUntil = new Date(nowMs + backoffMinutesForAttempt(task.attempts || 0) * 60000).toISOString();
+    await d1Run(env, 'UPDATE agent_tasks SET status = ?, scheduled_for = ?, updated_at = ? WHERE id = ?',
+      ['queued', backoffUntil, nowIso(), id]);
+  }
+  // Terminal state: a stale lock is retryable while attempts remain
+  // (RETRYING); once attempts are exhausted it is final, with the
+  // recovery report in the run detail above.
+  await setTerminalState(env, id,
+    finalFailure ? 'FAILED_FINAL_WITH_RECOVERY_REPORT' : 'RETRYING',
+    finalFailure ? 'Stale lock with retries exhausted.' : 'Stale lock recovered — re-queued with backoff for automatic retry.',
+    `Stale lock: running for ${Math.round(staleForMs / 1000)}s with no update.`);
   return { ok: true, recovered: true, taskId: id, agent: task.agent, staleForMs };
 }
 
@@ -198,6 +347,7 @@ export async function cancelTask(env, taskId) {
     logs: [{ level: 'warn', message: `Task ${id} (${task.agent}) cancelled by the owner while running — marked failed so it can be retried.` }],
   });
   await d1Run(env, "UPDATE agent_tasks SET status = 'failed', updated_at = ? WHERE id = ?", [nowIso(), id]);
+  await setTerminalState(env, id, 'BLOCKED_WITH_REASON', 'Cancelled by the owner — owner action required to retry.', 'Cancelled by the owner while running.');
   return { ok: true, taskId: id, agent: task.agent, status: 'failed', cancelled: true };
 }
 
@@ -411,6 +561,44 @@ async function registryStatus(env, registryId) {
 }
 
 /**
+ * Result for runTask() when the task is not 'queued' at the moment of
+ * the call. A fresh 'running' task answers in-flight (202-shape);
+ * a stale one is recovered to 'failed' first; anything else is a 409.
+ * Shared by the pre-claim check and by a lost conditional claim (the
+ * race path), so both agree on the outcome.
+ */
+async function handleNonQueuedRun(env, task, leaseMs) {
+  if (task.status === 'running') {
+    // Phase 4: a stale lock heals itself — recover it and tell the
+    // caller to retry; a genuinely in-flight run answers in-flight
+    // (the HTTP layer maps it to 202), never a 409.
+    if (isTaskStale(task, leaseMs)) {
+      const recovered = await recoverStaleTask(env, task.id, { leaseMs });
+      if (recovered.recovered) {
+        return {
+          ok: false, status: 409, recoveredStale: true, taskId: task.id,
+          error: `Task was stuck 'running' with no update for over ${Math.round(leaseMs / 60000)} minute(s) — recovered and re-queued with backoff, so the next drain retries it automatically once the backoff elapses.`,
+        };
+      }
+    }
+    return { ok: true, inFlight: true, taskId: task.id, status: 'running', attempts: task.attempts, updatedAt: task.updated_at };
+  }
+  return { ok: false, status: 409, error: `Task is '${task.status}' — only queued tasks can run.` };
+}
+
+/**
+ * Set status='skipped' only while the task is still 'queued' (a
+ * concurrent claim must win over a skip — a running task is never
+ * flipped to skipped). Returns true when this call made the skip.
+ */
+async function markSkippedIfQueued(env, taskId) {
+  const r = await d1Run(env,
+    "UPDATE agent_tasks SET status = 'skipped', updated_at = ? WHERE id = ? AND status = 'queued'",
+    [nowIso(), taskId]);
+  return !!(r && r.meta && Number(r.meta.changes) === 1);
+}
+
+/**
  * Run one queued task now. Claims it (queued -> running, attempts+1),
  * checks Emergency Stop (423-style skip) and the mapped registry agent's
  * paused state, dispatches via runAutonomyTask, writes agent_runs +
@@ -438,22 +626,7 @@ export async function runTask(env, taskId, options = {}) {
   if (!row) return { ok: false, status: 404, error: 'Task not found.' };
   const task = normaliseTaskRow(row);
   if (task.status !== 'queued') {
-    if (task.status === 'running') {
-      // Phase 4: a stale lock heals itself — recover it and tell the
-      // caller to retry; a genuinely in-flight run answers in-flight
-      // (the HTTP layer maps it to 202), never a 409.
-      if (isTaskStale(task, leaseMs)) {
-        const recovered = await recoverStaleTask(env, id, { leaseMs });
-        if (recovered.recovered) {
-          return {
-            ok: false, status: 409, recoveredStale: true, taskId: id,
-            error: `Task was stuck 'running' with no update for over ${Math.round(leaseMs / 60000)} minute(s) — recovered as failed. Retry it to run it again.`,
-          };
-        }
-      }
-      return { ok: true, inFlight: true, taskId: id, status: 'running', attempts: task.attempts, updatedAt: task.updated_at };
-    }
-    return { ok: false, status: 409, error: `Task is '${task.status}' — only queued tasks can run.` };
+    return handleNonQueuedRun(env, task, leaseMs);
   }
 
   // Manual task runs must not bypass protection: a modifying task
@@ -465,13 +638,20 @@ export async function runTask(env, taskId, options = {}) {
   }
 
   if (await getEmergencyStop(env)) {
-    await d1Run(env, "UPDATE agent_tasks SET status = 'skipped', updated_at = ? WHERE id = ?", [nowIso(), id]);
-    await writeRun(env, {
-      taskId: id, agent: task.agent, outcome: 'skipped',
-      detail: { reason: 'Emergency Stop is on.' },
-      logs: [{ level: 'warn', message: 'Task skipped: Emergency Stop is on.' }],
-    });
-    return { ok: false, status: 423, error: 'Autonomous operations are stopped by Emergency Stop', skipped: true };
+    if (await markSkippedIfQueued(env, id)) {
+      await writeRun(env, {
+        taskId: id, agent: task.agent, outcome: 'skipped',
+        detail: { reason: 'Emergency Stop is on.' },
+        logs: [{ level: 'warn', message: 'Task skipped: Emergency Stop is on.' }],
+      });
+      await setTerminalState(env, id, 'BLOCKED_WITH_REASON', 'Emergency Stop is on — owner action required to resume autonomous operations.', 'Emergency Stop is on.');
+      return { ok: false, status: 423, error: 'Autonomous operations are stopped by Emergency Stop', skipped: true };
+    }
+    // A concurrent claim won the race while we checked: report the
+    // live state instead of skipping a running task.
+    const fresh = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [id]);
+    return fresh ? handleNonQueuedRun(env, normaliseTaskRow(fresh), leaseMs)
+      : { ok: false, status: 423, error: 'Autonomous operations are stopped by Emergency Stop', skipped: true };
   }
 
   // Pause check: the registry agent that governs this task. For research
@@ -494,18 +674,34 @@ export async function runTask(env, taskId, options = {}) {
     if (allPaused) pausedId = 'research (all division research agents)';
   }
   if (pausedId) {
-    await d1Run(env, "UPDATE agent_tasks SET status = 'skipped', updated_at = ? WHERE id = ?", [nowIso(), id]);
-    await writeRun(env, {
-      taskId: id, agent: task.agent, outcome: 'skipped',
-      detail: { reason: `Agent ${pausedId} is paused.` },
-      logs: [{ level: 'warn', message: `Task skipped: agent ${pausedId} is paused.` }],
-    });
-    return { ok: false, status: 409, error: `Agent ${pausedId} is paused — resume it before running.`, skipped: true };
+    if (await markSkippedIfQueued(env, id)) {
+      await writeRun(env, {
+        taskId: id, agent: task.agent, outcome: 'skipped',
+        detail: { reason: `Agent ${pausedId} is paused.` },
+        logs: [{ level: 'warn', message: `Task skipped: agent ${pausedId} is paused.` }],
+      });
+      await setTerminalState(env, id, 'WAITING_FOR_AUTHORIZATION', `Agent ${pausedId} is paused — resume it before running.`, `Agent ${pausedId} is paused.`);
+      return { ok: false, status: 409, error: `Agent ${pausedId} is paused — resume it before running.`, skipped: true };
+    }
+    const fresh = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [id]);
+    return fresh ? handleNonQueuedRun(env, normaliseTaskRow(fresh), leaseMs)
+      : { ok: false, status: 409, error: `Agent ${pausedId} is paused — resume it before running.`, skipped: true };
   }
 
+  // Conditional claim (W1 fix for the read-then-UPDATE race): the row
+  // flips to 'running' ONLY while it is still 'queued', in a single
+  // UPDATE. When two runTask calls race, exactly one sees changes===1
+  // and runs; the loser re-reads and answers in-flight / 409 instead
+  // of running the task twice.
   const attempts = (task.attempts || 0) + 1;
-  await d1Run(env, "UPDATE agent_tasks SET status = 'running', attempts = ?, updated_at = ? WHERE id = ?",
+  const claim = await d1Run(env,
+    "UPDATE agent_tasks SET status = 'running', attempts = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
     [attempts, nowIso(), id]);
+  if (claim && claim.meta && Number(claim.meta.changes) === 0) {
+    const fresh = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [id]);
+    if (!fresh) return { ok: false, status: 404, error: 'Task not found.' };
+    return handleNonQueuedRun(env, normaliseTaskRow(fresh), leaseMs);
+  }
 
   const startedAt = nowIso();
   let result = null;
@@ -515,6 +711,7 @@ export async function runTask(env, taskId, options = {}) {
   let requeued = false;
   let backoffUntil = null;
   let cancelledDuringRun = false;
+  let terminalState = null;
   try {
     result = await runWithLease(runAutonomyTask(task, env), leaseMs);
     outcome = result && (result.outcome === 'done' || result.outcome === 'no-op') ? result.outcome : 'failed';
@@ -528,6 +725,20 @@ export async function runTask(env, taskId, options = {}) {
     // still-'running': a concurrent owner cancel wins over a late
     // completion, so a cancelled task is never resurrected.
     finishedAt = nowIso();
+    // Terminal-state inputs, computed BEFORE the run row is written so
+    // a final failure carries its recovery report in the run detail.
+    // A permanent error (no handler / malformed payload) never
+    // re-queues: it is BLOCKED_WITH_REASON on the first attempt.
+    const permanentError = outcome === 'failed' && isPermanentTaskError(result && result.error);
+    const finalFailure = outcome === 'failed' && (permanentError || attempts >= (task.max_attempts || 3));
+    terminalState = null;
+    if (outcome !== 'failed') terminalState = 'COMPLETED';
+    else if (permanentError) terminalState = 'BLOCKED_WITH_REASON';
+    else if (finalFailure) terminalState = 'FAILED_FINAL_WITH_RECOVERY_REPORT';
+    else terminalState = 'RETRYING';
+    if (finalFailure && result && typeof result === 'object') {
+      result = { ...result, recoveryReport: buildRecoveryReport(task, result, attempts) };
+    }
     try {
       const inserted = await d1Run(env,
         'INSERT INTO agent_runs (task_id, agent, started_at, finished_at, outcome, detail) VALUES (?, ?, ?, ?, ?, ?)',
@@ -542,20 +753,32 @@ export async function runTask(env, taskId, options = {}) {
       runId = null;
     }
     const resolveStatus = async () => {
-      if (outcome === 'failed' && attempts < (task.max_attempts || 3)) {
-        backoffUntil = plusMinutes(finishedAt, attempts * 15);
+      const errorText = outcome === 'failed' ? String((result && result.error) || 'unknown error').slice(0, 300) : null;
+      if (outcome === 'failed' && !permanentError && attempts < (task.max_attempts || 3)) {
+        backoffUntil = plusMinutes(finishedAt, backoffMinutesForAttempt(attempts));
         const r = await d1Run(env,
           "UPDATE agent_tasks SET status = 'queued', scheduled_for = ?, updated_at = ? WHERE id = ? AND status = 'running'",
           [backoffUntil, nowIso(), id]);
         if (r && r.meta && r.meta.changes === 0) { cancelledDuringRun = true; return; }
         requeued = true;
+        await setTerminalState(env, id, 'RETRYING',
+          `Attempt ${attempts} failed: ${errorText}; retry scheduled in ${backoffMinutesForAttempt(attempts)} minutes.`, errorText);
         return;
       }
       const finalStatus = outcome === 'failed' ? 'failed' : 'done';
       const r = await d1Run(env,
         "UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ? AND status = 'running'",
         [finalStatus, nowIso(), id]);
-      if (r && r.meta && r.meta.changes === 0) { cancelledDuringRun = true; }
+      if (r && r.meta && r.meta.changes === 0) { cancelledDuringRun = true; return; }
+      // Terminal state: done -> COMPLETED; permanent failure ->
+      // BLOCKED_WITH_REASON (no retry); exhausted retries ->
+      // FAILED_FINAL_WITH_RECOVERY_REPORT (report is in the run detail).
+      const reason = outcome === 'failed'
+        ? (permanentError
+          ? `Permanent failure: ${errorText} — fix the task, then retry from the dashboard.`
+          : `Retries exhausted (${attempts}/${task.max_attempts || 3}): ${errorText}`)
+        : `Task finished: ${outcome}.`;
+      await setTerminalState(env, id, terminalState, reason, errorText);
     };
     try {
       await resolveStatus();
@@ -566,7 +789,7 @@ export async function runTask(env, taskId, options = {}) {
     }
   }
   return {
-    ok: true, taskId: id, runId, outcome, attempts, requeued,
+    ok: true, taskId: id, runId, outcome, attempts, requeued, terminalState,
     ...(requeued && backoffUntil ? { scheduled_for: backoffUntil } : {}),
     ...(cancelledDuringRun ? { cancelledDuringRun: true } : {}),
     result,
@@ -596,6 +819,9 @@ export async function retryTask(env, taskId) {
   }
   await d1Run(env, "UPDATE agent_tasks SET status = 'queued', attempts = 0, scheduled_for = NULL, updated_at = ? WHERE id = ?",
     [nowIso(), id]);
+  // Explicit owner retry is the ONLY reset: the terminal state is
+  // cleared so the task can reach a fresh terminal state.
+  await clearTerminalState(env, id);
   await writeRun(env, {
     taskId: id, agent: task.agent, outcome: 'no-op',
     detail: { step: 'retry', reason: 'Owner retried a failed task.' },
@@ -624,6 +850,196 @@ async function autoFlags(env) {
 async function maxArticlesPerDay(env) {
   const n = Number.parseInt(await autonomySetting(env, 'max_articles_per_day', '1'), 10);
   return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+/**
+ * Persist a drained content task's LLM draft as a CMS draft (WS-B,
+ * 2026-11-21). runContentCreation returns its draft ONLY in the run
+ * detail — no article row exists until convertScaffoldToDraft stores
+ * it, and the only other caller is the manual dashboard convert
+ * endpoint. Without this step the drain reported 'done' for a content
+ * task while no article ever appeared: the task's output sat
+ * un-persisted in agent_runs.detail. Only a completed LLM draft is
+ * converted (outcome 'done' + scaffold.llmGenerated + a non-empty
+ * body); 'no-op' scaffolds (insufficient evidence, LLM unavailable,
+ * cap reached) are NEVER converted — converting them would mint empty
+ * placeholder articles. A draft is always stored as status 'draft'
+ * with fact_checked = 0, never published. A slug that already exists
+ * (e.g. the owner converted the run manually first) is treated as
+ * already-converted, never a duplicate. A conversion failure is
+ * recorded here in an agent_runs row and in the drain result — it
+ * never flips the already-COMPLETED task, and it never stops the
+ * drain. Returns { converted, articleId?, alreadyConverted?, error? }.
+ */
+export async function convertContentDraft(env, task, scaffold) {
+  const title = typeof scaffold.title === 'string' ? scaffold.title.trim() : '';
+  const slug = slugify(title);
+  if (!slug) {
+    return { converted: false, error: 'Draft has no usable title — cannot derive a slug.' };
+  }
+  try {
+    const existing = await d1First(env, 'SELECT id FROM articles WHERE slug = ? LIMIT 1', [slug]);
+    if (existing) {
+      return { converted: false, alreadyConverted: true, articleId: existing.id };
+    }
+  } catch {
+    // A failed pre-check must not block the convert attempt itself.
+  }
+  const res = await convertScaffoldToDraft(env, scaffold);
+  if (res && res.ok && res.article) {
+    return { converted: true, articleId: res.article.id };
+  }
+  const error = String((res && res.error) || 'Draft could not be stored.').slice(0, 300);
+  await writeRun(env, {
+    taskId: task.id, agent: task.agent, outcome: 'failed',
+    detail: { step: 'scaffold-convert', taskId: task.id, error },
+    logs: [{ level: 'error', message: `Task ${task.id} (${task.agent}) finished, but its draft could not be stored as an article: ${error}` }],
+  });
+  return { converted: false, error };
+}
+
+// ---------------------------------------------------------------------
+// Queue drain (W1, 2026-11-21).
+// The daily workflow used to enqueue tasks and then do the same work
+// inline without ever calling runTask, so the queue never drained
+// (12 tasks queued, 0 running, 2026-11-21). drainTaskQueue is the
+// missing step: it runs the health check first, then executes eligible
+// queued tasks oldest-first through runTask — never runAutonomyTask
+// directly, so the E-Stop check, paused-agent skip, protected-article
+// guard, lease and terminal-state handling are all inherited.
+// Rules:
+//   - only status='queued' AND (scheduled_for IS NULL OR
+//     scheduled_for <= now) — scheduled_for was write-only before.
+//   - at most MAX_DRAIN_TASKS_PER_RUN (10) tasks per run.
+//   - stop after MAX_DRAIN_CONSECUTIVE_FAILURES (3) consecutive
+//     failures; a success resets the counter.
+//   - kinds with no handler (agent not in QUEUE_AGENTS) are skipped
+//     and left queued, recorded with reason 'no-handler'.
+//   - daily-content tasks obey the daily cap: articles created today
+//     are counted before each content task, and further content tasks
+//     are skipped once maxArticlesPerDay is reached (the cap was
+//     previously enforced only at enqueue time).
+//   - a blocked health check (E-Stop ON, DB unreachable) refuses the
+//     whole drain; 'degraded' proceeds and is recorded.
+//   - an E-Stop that flips on mid-drain stops the drain at the next
+//     task (runTask returns 423 for it).
+// Returns { ok, blocked, health, results, processed, done, failed,
+//   skipped, stoppedReason } where each result is { taskId, kind,
+//   agent, outcome, attempts, requeued, reason? }.
+// ---------------------------------------------------------------------
+export async function drainTaskQueue(env, options = {}) {
+  const maxTasks = Number.isFinite(Number(options.maxTasks)) && Number(options.maxTasks) > 0
+    ? Math.floor(Number(options.maxTasks)) : MAX_DRAIN_TASKS_PER_RUN;
+  const maxConsecutiveFailures = Number.isFinite(Number(options.maxConsecutiveFailures)) && Number(options.maxConsecutiveFailures) > 0
+    ? Math.floor(Number(options.maxConsecutiveFailures)) : MAX_DRAIN_CONSECUTIVE_FAILURES;
+  const leaseMs = options && Number.isFinite(Number(options.leaseMs)) && Number(options.leaseMs) > 0
+    ? Number(options.leaseMs) : TASK_RUN_LEASE_MS;
+  if (!env || !env.DB) return { ok: false, blocked: true, health: null, results: [], processed: 0, done: 0, failed: 0, skipped: 0, draftsConverted: 0, stoppedReason: 'no-database' };
+
+  const health = await runHealthCheck(env);
+  if (health.overall === 'blocked') {
+    return { ok: false, blocked: true, health, results: [], processed: 0, done: 0, failed: 0, skipped: 0, draftsConverted: 0, stoppedReason: 'health-check-blocked' };
+  }
+
+  const dailyLimit = await maxArticlesPerDay(env);
+  let rows = [];
+  try {
+    rows = await d1All(env,
+      "SELECT * FROM agent_tasks WHERE status = 'queued' AND (scheduled_for IS NULL OR scheduled_for <= ?) ORDER BY created_at ASC, id ASC LIMIT ?",
+      [nowIso(), maxTasks]) || [];
+  } catch (err) {
+    return { ok: false, blocked: false, health, results: [], processed: 0, done: 0, failed: 0, skipped: 0, draftsConverted: 0, stoppedReason: `queue-read-failed: ${String((err && err.message) || err).slice(0, 200)}` };
+  }
+
+  const results = [];
+  let consecutiveFailures = 0;
+  let stoppedReason = null;
+  let done = 0;
+  let failed = 0;
+  let skipped = 0;
+  let draftsConverted = 0;
+
+  for (const raw of rows) {
+    if (consecutiveFailures >= maxConsecutiveFailures) {
+      stoppedReason = 'consecutive-failure-limit';
+      break;
+    }
+    const task = normaliseTaskRow(raw);
+    const base = { taskId: task.id, kind: task.kind, agent: task.agent, attempts: task.attempts || 0 };
+    if (!QUEUE_AGENTS.includes(task.agent)) {
+      skipped += 1;
+      results.push({ ...base, outcome: 'skipped', reason: `No handler for agent '${task.agent}' — task left queued.` });
+      continue;
+    }
+    if (task.agent === 'content-creation' && task.kind === 'daily-content') {
+      const createdToday = await countArticlesCreatedToday(env);
+      if (createdToday >= dailyLimit) {
+        skipped += 1;
+        results.push({ ...base, outcome: 'skipped', reason: `Daily content cap reached (${createdToday}/${dailyLimit} articles created today) — task left queued.` });
+        continue;
+      }
+    }
+    let res;
+    try {
+      res = await runTask(env, task.id, { leaseMs });
+    } catch (err) {
+      res = { ok: false, outcome: 'failed', error: String((err && err.message) || err).slice(0, 300) };
+    }
+    if (res && res.status === 423) {
+      // Emergency Stop flipped on mid-drain: stop now, record it.
+      skipped += 1;
+      results.push({ ...base, outcome: 'skipped', reason: 'Emergency Stop is on — drain stopped.' });
+      stoppedReason = 'emergency-stop';
+      break;
+    }
+    if (res && res.inFlight) {
+      skipped += 1;
+      results.push({ ...base, outcome: 'skipped', reason: 'Task already running in another execution.' });
+      continue;
+    }
+    if (res && res.recoveredStale) {
+      skipped += 1;
+      results.push({ ...base, outcome: 'skipped', reason: 'Task was recovered from a stale lock and re-queued with backoff — it runs automatically once the backoff elapses.' });
+      continue;
+    }
+    if (!res || res.ok !== true) {
+      // runTask refused without running (409 protection / pause /
+      // already-resolved): a skip, not a drain failure.
+      skipped += 1;
+      results.push({ ...base, outcome: 'skipped', reason: String((res && res.error) || 'Task could not run.').slice(0, 300) });
+      continue;
+    }
+    const outcome = res.outcome || 'failed';
+    if (outcome === 'done' || outcome === 'no-op') {
+      done += 1;
+      consecutiveFailures = 0;
+      // A drained content task that produced a real LLM draft must
+      // persist it as a CMS draft now (see convertContentDraft) —
+      // otherwise the drain reports 'done' and no article appears.
+      // 'no-op' scaffolds are never converted.
+      let conversion = null;
+      if (outcome === 'done' && task.agent === 'content-creation' && res.result
+        && res.result.scaffold && res.result.scaffold.llmGenerated
+        && typeof res.result.scaffold.body === 'string' && res.result.scaffold.body.trim()) {
+        try {
+          conversion = await convertContentDraft(env, task, res.result.scaffold);
+        } catch (err) {
+          conversion = { converted: false, error: String((err && err.message) || err).slice(0, 300) };
+        }
+        if (conversion && conversion.converted) draftsConverted += 1;
+      }
+      results.push({ ...base, outcome, attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, ...(conversion ? { conversion } : {}) });
+    } else {
+      failed += 1;
+      consecutiveFailures += 1;
+      results.push({ ...base, outcome: 'failed', attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, reason: String((res.result && res.result.error) || 'Task failed.').slice(0, 300) });
+    }
+  }
+
+  return {
+    ok: true, blocked: false, health, results,
+    processed: results.length, done, failed, skipped, draftsConverted, stoppedReason,
+  };
 }
 
 /**
@@ -696,7 +1112,9 @@ async function step(env, agent, label, fn) {
 }
 
 /**
- * Daily workflow. Steps: (1) security health check; (2) enqueue research
+ * Daily workflow. Steps: (0) drain the queue (W1: runHealthCheck,
+ * then runTask per eligible queued task, oldest-first, max 10);
+ * (1) security health check; (2) enqueue research
  * for the two thinnest divisions; (3) fetch RSS inline when
  * auto_research is on; (4) enqueue content tasks from today's fresh
  * research items when auto_generation is on (daily limit respected);
@@ -733,6 +1151,33 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
   const flags = await autoFlags(env);
   const dailyLimit = await maxArticlesPerDay(env);
   const steps = {};
+
+  // W1 (2026-11-21): drain the queue. Before this step the daily
+  // workflow enqueued tasks and did the same work inline without ever
+  // calling runTask, so queued tasks were never executed (12 queued,
+  // 0 running on 2026-11-21). The drain runs FIRST — before the
+  // enqueue steps below — so this run executes the backlog; tasks
+  // enqueued by this run drain on the next run. The weekly workflow
+  // needs no separate drain: it fires inside the same 00:00 UTC
+  // invocation as the daily workflow.
+  steps.queueDrain = await step(env, 'scheduler', 'queue-drain', async () => {
+    const drain = await drainTaskQueue(env);
+    if (drain.blocked) {
+      return {
+        outcome: 'failed', blocked: true, stoppedReason: drain.stoppedReason,
+        healthOverall: drain.health ? drain.health.overall : null,
+        health: drain.health,
+        reason: 'Self-health check blocked the queue drain — no queued task was started.',
+      };
+    }
+    return {
+      outcome: 'done',
+      processed: drain.processed, done: drain.done, failed: drain.failed, skipped: drain.skipped,
+      stoppedReason: drain.stoppedReason,
+      healthOverall: drain.health ? drain.health.overall : null,
+      results: drain.results,
+    };
+  });
 
   steps.healthCheck = await step(env, 'security-monitoring', 'health-check', async () => {
     const r = await runAutonomyTask({ agent: 'security-monitoring', kind: 'health-check', payload: {} }, env);
@@ -887,6 +1332,17 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
     return { outcome: 'done', published: r.published || 0, slugs: r.slugs || [] };
   });
 
+  // Autonomous publish (W3, coordinator-wired): tries NEW candidate
+  // drafts only (created after the owner-set cutoff, never legacy
+  // #28/#29/#30/#31, never protected). runAutoPublish() itself
+  // pre-flights the two master flags + E-Stop + cutoff and no-ops
+  // with zero log rows when disabled, so with the live defaults
+  // (approved_only / off / unset) this step does nothing.
+  steps.autoPublish = await step(env, 'publishing', 'auto-publish', async () => {
+    const r = await runAutoPublish(env);
+    return r;
+  });
+
   steps.socialPrep = await step(env, 'social-media', 'social-pack-prep', async () => {
     const rows = await d1All(env,
       "SELECT id FROM articles WHERE status = 'published' AND published_at >= datetime('now', '-1 day') ORDER BY published_at DESC LIMIT 5") || [];
@@ -923,6 +1379,12 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
     kind: 'daily',
     steps: Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, { outcome: v.outcome, ...(v.error ? { error: v.error } : {}) }])),
     counts: {
+      queueDrained: steps.queueDrain.result?.processed ?? 0,
+      queueDone: steps.queueDrain.result?.done ?? 0,
+      queueFailed: steps.queueDrain.result?.failed ?? 0,
+      queueSkipped: steps.queueDrain.result?.skipped ?? 0,
+      queueDraftsConverted: steps.queueDrain.result?.draftsConverted ?? 0,
+      queueHealthOverall: steps.queueDrain.result?.healthOverall ?? null,
       researchEnqueued: steps.topicSelection.result?.enqueued ?? 0,
       researchFetched: steps.researchFetch.result?.fetched ?? 0,
       researchItemsStored: steps.researchFetch.result?.added ?? 0,

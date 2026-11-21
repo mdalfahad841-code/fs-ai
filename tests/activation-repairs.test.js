@@ -126,10 +126,10 @@ function loadArticle(db, id) {
   ).get(id);
 }
 
-function insertArticle(db, body, { divisionId = 1, status = 'draft', seoTitle = null, seoDescription = null } = {}) {
+function insertArticle(db, body, { divisionId = 1, status = 'draft', seoTitle = null, seoDescription = null, title = null } = {}) {
   const r = db.prepare(
     'INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, seo_title, seo_description) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
-  ).run(divisionId, `Test Article ${Date.now()}${Math.random()}`, `test-article-${Date.now()}-${Math.random().toString(36).slice(2)}`, 'Test excerpt.', body, 'FS AI', status, seoTitle, seoDescription);
+  ).run(divisionId, title || `Test Article ${Date.now()}${Math.random()}`, `test-article-${Date.now()}-${Math.random().toString(36).slice(2)}`, 'Test excerpt.', body, 'FS AI', status, seoTitle, seoDescription);
   return Number(r.lastInsertRowid);
 }
 
@@ -312,13 +312,15 @@ describe('repair E — SEO repair', () => {
     const { db, env } = freshEnv();
     env.__fetchImpl = async () => new Response('', { status: 200 });
     // A published sibling in the same division for the internal link.
-    db.prepare("INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, published_at) VALUES (1, 'Published Sibling Article', 'published-sibling', 'x', 'Sibling body text here.', 'FS AI', 'published', 0, '2026-11-19T00:00:00.000Z')").run();
+    // Titles share genuinely topical keywords (ev/charging) — the
+    // relevance rule no longer counts the word 'article' alone (2026-11-21).
+    db.prepare("INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, published_at) VALUES (1, 'Published EV Charging Article', 'published-sibling', 'x', 'Sibling body text here.', 'FS AI', 'published', 0, '2026-11-19T00:00:00.000Z')").run();
     const body = [
       '### First section', '', LONG_PARA, '',
       '### Second section', '', LONG_PARA, '',
       '### Third section', '', LONG_PARA,
     ].join('\n');
-    const id = insertArticle(db, body, { seoTitle: 'EV Charging at Home: A Complete Beginner\'s Guide', seoDescription: 'Too short.' });
+    const id = insertArticle(db, body, { title: 'EV Charging at Home', seoTitle: 'EV Charging at Home: A Complete Beginner\'s Guide', seoDescription: 'Too short.' });
     const r = await runSeo({ kind: 'seo', payload: { article_id: id } }, env);
     assert.equal(r.outcome, 'done');
     assert.ok(r.repairs.length >= 3, `expected 3 repairs, got: ${r.repairs.join(' | ')}`);
@@ -330,10 +332,10 @@ describe('repair E — SEO repair', () => {
     const h3Count = (row.body.match(/^###\s.+$/gm) || []).length;
     assert.ok(h2Count >= 2, `expected >=2 H2s after promotion, got ${h2Count}`);
     assert.equal(h3Count, 1, 'one H3 remains (only 2 were promoted)');
-    assert.match(row.body, /Related reading: \[Published Sibling Article\]\(https:\/\/fs-ai-5w5\.pages\.dev\/pages\/article\?id=\d+\)/,
+    assert.match(row.body, /Related reading: \[Published EV Charging Article\]\(https:\/\/fs-ai-5w5\.pages\.dev\/pages\/article\?id=\d+\)/,
       'a genuine link to the published sibling was appended (clean form — no .html, per the 2026-11-20 indexing fix)');
     const revisions = db.prepare('SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?').get(id).n;
-    assert.equal(revisions, 1, 'pre-edit body stored as a revision first');
+    assert.equal(revisions, 1, 'post-repair body stored as a revision (W2 fix 2026-11-21: the revision is snapshotted AFTER all repair mutations, so it matches the live body)');
     const checks = db.prepare('SELECT checks_json FROM seo_checks WHERE article_id = ?').get(id);
     const parsed = JSON.parse(checks.checks_json);
     assert.equal(parsed.length, 11, 'all 11 SEO checks stored individually');

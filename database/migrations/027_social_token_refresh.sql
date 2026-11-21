@@ -1,0 +1,25 @@
+-- FS AI migration 027 - social token refresh bookkeeping (Workstream C, 2026-11-21).
+--
+-- Additive only; touches no existing data and no existing table other
+-- than social_accounts (migration 022). Two columns:
+--
+--   refresh_token_expires_at TEXT
+--     When the stored refresh token itself expires. Pinterest refresh
+--     tokens live 60 days; the dispatcher can only auto-refresh while
+--     one is valid, so expiry monitoring (backend/social/refresh.js
+--     listExpiringAccounts) needs this date to warn the owner BEFORE
+--     re-OAuth becomes the only path. NULL for platforms with no
+--     refresh token (LinkedIn) or no refresh expiry (Facebook Page
+--     token, Instagram long-lived refresh).
+--   token_refreshed_at TEXT
+--     Last successful refresh (UTC ISO). Lets the owner/health check
+--     see that refresh is actually happening instead of assuming it.
+--
+-- Apply after 022. Order vs 024/025/026 (other workstreams) does not
+-- matter — every statement is ALTER TABLE ... ADD COLUMN on
+-- social_accounts only, and the code (store.js updateAccountTokens)
+-- falls back to the 022 columns when 027 has not been applied yet.
+-- The coordinator must add this file to the package.json db:migrate
+-- list (Workstream C does not edit package.json).
+ALTER TABLE social_accounts ADD COLUMN refresh_token_expires_at TEXT;
+ALTER TABLE social_accounts ADD COLUMN token_refreshed_at TEXT;

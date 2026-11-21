@@ -306,7 +306,12 @@ describe('POST /api/autonomy/tasks/:id/retry', () => {
 });
 
 describe('POST /api/autonomy/settings — auto toggles', () => {
-  it('accepts the auto_* toggles and persists them; publishing_mode stays approved_only', async () => {
+  it('accepts the auto_* toggles and persists them; publishing_mode accepts auto (three-part enablement)', async () => {
+    // Coordinator change 2026-11-21 (owner full-automation brief):
+    // publishing_mode 'auto' is now accepted via the API. It alone
+    // publishes nothing — auto-publish also needs auto_publishing
+    // 'on' AND auto_publish_eligible_since set, and never touches
+    // existing drafts.
     const { db, env } = freshEnv();
     const on = await call(env, 'POST', '/api/autonomy/settings', { key: 'auto_research', value: 'on' });
     assert.equal(on.status, 200);
@@ -314,7 +319,8 @@ describe('POST /api/autonomy/settings — auto toggles', () => {
     const bad = await call(env, 'POST', '/api/autonomy/settings', { key: 'auto_research', value: 'maybe' });
     assert.equal(bad.status, 400);
     const mode = await call(env, 'POST', '/api/autonomy/settings', { key: 'publishing_mode', value: 'auto' });
-    assert.equal(mode.status, 400, 'publishing_mode must stay approved_only via the API');
+    assert.equal(mode.status, 200, 'publishing_mode auto is accepted (three-part enablement)');
+    assert.equal(db.prepare("SELECT value FROM autonomy_settings WHERE key = 'publishing_mode'").get().value, 'auto');
     const settings = await call(env, 'GET', '/api/autonomy/settings');
     assert.equal(settings.status, 200);
     assert.equal(settings.json.settings.auto_research, 'on');

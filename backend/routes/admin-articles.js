@@ -22,6 +22,7 @@ import {
 } from '../middleware/validation.js';
 import { getEmergencyStop } from './admin.js';
 import { stripDraftBanner, hasDraftBanner } from '../utils/draftBanner.js';
+import { assertNotProtected } from '../publishing/protection.js';
 
 const ARTICLE_COLUMNS = 'a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt';
 
@@ -182,6 +183,17 @@ async function listArticles(request, env) {
 
 async function updateArticle(request, env, auth, id) {
   if (!env.DB) return jsonError('CMS writes require the D1 database', 503);
+  // WS-E finding H1 (Workstream A fix, 2026-11-21): protected articles
+  // (#26/#27, or any article with is_protected=1) must never be
+  // modified through a manual endpoint — the 2026-11-20 SEO repair
+  // overwrote #26/#27 through automation, and the manual path was the
+  // remaining hole. The guard runs BEFORE the 404 check: protection is
+  // an ID-level rule (protection.js covers #26/#27 by constant even
+  // when no row exists), so a protected id refuses 403 regardless of
+  // whether the row is present. (WS-E's patch placed it after the 404
+  // check; the pinned test requires before — see the test comment.)
+  const guard = await assertNotProtected(env, id);
+  if (!guard.ok) return jsonError(guard.reason, 403);
   const current = await fetchArticle(env, id);
   if (!current) return jsonError('Article not found', 404);
   let body;
@@ -254,13 +266,49 @@ async function updateArticle(request, env, auth, id) {
   return jsonOk({ article: await withTags(env, article) });
 }
 
-async function deleteArticle(env, id) {
+async function deleteArticle(env, id, auth) {
   if (!env.DB) return jsonError('CMS writes require the D1 database', 503);
+  // WS-E finding H1 (Workstream A fix, 2026-11-21): the dashboard
+  // Delete button was one confirm() click from deleting protected
+  // articles #26/#27 — deleteArticle never called assertNotProtected.
+  // Guard BEFORE the 404 check: protection is ID-level (see
+  // updateArticle above), so #26/#27 refuse 403 even with no row.
+  const guard = await assertNotProtected(env, id);
+  if (!guard.ok) return jsonError(guard.reason, 403);
   const current = await fetchArticle(env, id);
   if (!current) return jsonError('Article not found', 404);
+  // Deletion audit (migration 025, Workstream A): record what is about
+  // to be deleted BEFORE deleting it — the audit row keeps the title,
+  // slug, status and body length after the article row is gone.
+  // Best-effort pre-025 (a missing table skips the write); the table
+  // is applied at deploy, after which every deletion is audited.
+  try {
+    const revs = await d1First(env, 'SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?', [id]);
+    await d1Run(env,
+      'INSERT INTO article_deletion_audit (article_id, title, slug, status_at_delete, deleted_by, body_length, revisions_kept) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [Number(id), current.title || '', current.slug || '', current.status || '', (auth && auth.owner) || null, String(current.body || '').length, Number(revs ? revs.n : 0)]);
+  } catch {
+    // Pre-025 database: no audit table yet — the deletion still
+    // proceeds (same degrade pattern as the SEO body-hash fallback).
+  }
   await d1Run(env, 'DELETE FROM articles WHERE id = ?', [id]);
-  // Revisions are kept: article_revisions rows remain as the edit history
-  // of a deleted article (D1 does not enforce the ON DELETE CASCADE).
+  // WS-E finding L4 (Workstream A fix, 2026-11-21): the old code
+  // deleted only the articles row, leaving orphan article_tags and
+  // article_sources rows behind. Clean up the article's own rows.
+  // (Both tables declare ON DELETE CASCADE, so in an FK-enforcing
+  // DB the cascade already removed them — these DELETEs delete 0
+  // rows there and are harmless. On live D1 the Worker's connection
+  // does not run schema.sql's PRAGMA foreign_keys = ON, so the
+  // cascade may NOT fire and the explicit DELETEs are what actually
+  // removes the orphans. Either way no orphan survives.)
+  // Revisions / fact_checks / seo_checks are kept by design as
+  // history where the cascade does not remove them; the audit row
+  // (migration 025, no FK to articles) is the durable record of the
+  // deletion either way — it records how many revisions existed at
+  // delete time (revisions_kept), since the revision rows themselves
+  // cascade away in an FK-enforcing DB.
+  await d1Run(env, 'DELETE FROM article_tags WHERE article_id = ?', [id]);
+  await d1Run(env, 'DELETE FROM article_sources WHERE article_id = ?', [id]);
   return jsonOk({ ok: true, deleted: Number(id) });
 }
 
@@ -287,6 +335,12 @@ function preparePublishBody(body) {
 
 async function setPublishState(env, id, publish) {
   if (!env.DB) return jsonError('CMS writes require the D1 database', 503);
+  // WS-E finding H1 (Workstream A fix, 2026-11-21): a protected
+  // article must never be published/unpublished through a manual
+  // endpoint either — same ID-level guard as edit/delete (before the
+  // 404 check, so #26/#27 refuse 403 even with no row).
+  const guard = await assertNotProtected(env, id);
+  if (!guard.ok) return jsonError(guard.reason, 403);
   const current = await fetchArticle(env, id);
   if (!current) return jsonError('Article not found', 404);
   if (publish) {
@@ -333,7 +387,7 @@ export async function handleAdminArticles(request, env, ctx, auth) {
     return jsonOk({ article: await withTags(env, article), source: 'd1' });
   }
   if (method === 'PUT' && parts.length === 4) return updateArticle(request, env, auth, parts[3]);
-  if (method === 'DELETE' && parts.length === 4) return deleteArticle(env, parts[3]);
+  if (method === 'DELETE' && parts.length === 4) return deleteArticle(env, parts[3], auth);
   if (method === 'POST' && parts.length === 5 && parts[4] === 'publish') return setPublishState(env, parts[3], true);
   if (method === 'POST' && parts.length === 5 && parts[4] === 'unpublish') return setPublishState(env, parts[3], false);
   if (method === 'GET' && parts.length === 5 && parts[4] === 'revisions') return listRevisions(env, parts[3]);

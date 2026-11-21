@@ -1,17 +1,15 @@
 /**
  * FS AI — LLM provider registry (fallback order + live status).
  *
- * Fallback order (configurable via the autonomy_settings key
- * llm_provider_order, default 'workers-ai,groq,gemini'):
- *   1. workers-ai — Cloudflare Workers AI, primary. Free tier,
- *      10,000 Neurons/day, no key, no card. Unblocked by the [ai]
- *      binding in config/wrangler.toml + a Worker redeploy.
- *   2. groq — free plan, no card. Blocked on the owner creating a
- *      free GroqCloud account + API key (GROQ_API_KEY secret).
- *   3. gemini — free tier, no billing account. Blocked on the owner
- *      creating a free API key in Google AI Studio (GEMINI_API_KEY).
- * Hugging Face, OpenAI and Anthropic have no sustained free API tier
- * and are NOT listed (verified 2026-11-14).
+ * Workers AI ONLY (owner policy, tightened 2026-11-19; M1 fix
+ * 2026-11-21): the default order is ['workers-ai'] and any stored
+ * llm_provider_order setting is filtered to Workers AI, so Groq and
+ * Gemini can never be called. Their provider definitions stay listed
+ * below for status display only (not-configured, never tried);
+ * re-enabling a fallback needs an explicit owner decision + code
+ * change, never a settings edit. Hugging Face, OpenAI and Anthropic
+ * have no sustained free API tier and are NOT listed (verified
+ * 2026-11-14).
  */
 import { d1First } from '../middleware/validation.js';
 import { getDailyUsage, isCapHit, getNeuronCap } from './usage.js';
@@ -19,7 +17,12 @@ import { WORKERS_AI_MODELS } from './providers/cloudflare-workers-ai.js';
 import { GROQ_MODELS, GROQ_ENDPOINT } from './providers/groq.js';
 import { GEMINI_MODELS } from './providers/gemini.js';
 
-export const DEFAULT_PROVIDER_ORDER = ['workers-ai', 'groq', 'gemini'];
+export const DEFAULT_PROVIDER_ORDER = ['workers-ai'];
+
+// Deliberate policy (M1, 2026-11-21): Workers AI is the ONLY active
+// LLM provider. A stored llm_provider_order setting is filtered to
+// this allowlist, so a stale 'workers-ai,groq,gemini' value can never
+// reintroduce a fallback.
 
 export const PROVIDERS = [
   {
@@ -62,12 +65,14 @@ export function providerById(id) {
   return PROVIDERS.find((p) => p.id === id) || null;
 }
 
+const ALLOWED_PROVIDER_IDS = new Set(['workers-ai']);
+
 async function readOrder(env) {
   if (!env || !env.DB) return [...DEFAULT_PROVIDER_ORDER];
   try {
     const row = await d1First(env, 'SELECT value FROM autonomy_settings WHERE key = ? LIMIT 1', ['llm_provider_order']);
     if (!row || typeof row.value !== 'string' || !row.value.trim()) return [...DEFAULT_PROVIDER_ORDER];
-    const order = row.value.split(',').map((s) => s.trim()).filter((s) => providerById(s));
+    const order = row.value.split(',').map((s) => s.trim()).filter((s) => ALLOWED_PROVIDER_IDS.has(s));
     return order.length ? order : [...DEFAULT_PROVIDER_ORDER];
   } catch {
     return [...DEFAULT_PROVIDER_ORDER];

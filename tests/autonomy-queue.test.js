@@ -285,26 +285,42 @@ describe('autonomy settings — allowlist', () => {
       'rejected value must not overwrite the stored level');
   });
 
-  it("publishing_mode only accepts 'approved_only'", async () => {
+  // Coordinator change 2026-11-21 (owner full-automation brief):
+  // publishing_mode now accepts 'approved_only' | 'auto'. 'auto'
+  // alone publishes NOTHING — auto-publish also needs
+  // auto_publishing='on' AND auto_publish_eligible_since set.
+  it("publishing_mode only accepts 'approved_only' or 'auto'", async () => {
     const { db, env } = freshEnv();
-    for (const bad of ['auto', 'approved', 'all', '']) {
+    for (const bad of ['approved', 'all', '']) {
       const res = await callAutonomy(env, 'POST', '/api/autonomy/settings', { key: 'publishing_mode', value: bad });
       assert.equal(res.status, 400, `publishing_mode ${JSON.stringify(bad)} must be rejected`);
     }
     const ok = await callAutonomy(env, 'POST', '/api/autonomy/settings', { key: 'publishing_mode', value: 'approved_only' });
     assert.equal(ok.status, 200);
     assert.equal(db.prepare("SELECT value FROM autonomy_settings WHERE key = 'publishing_mode'").get().value, 'approved_only');
+    const auto = await callAutonomy(env, 'POST', '/api/autonomy/settings', { key: 'publishing_mode', value: 'auto' });
+    assert.equal(auto.status, 200, 'publishing_mode auto must be accepted (three-part enablement)');
+    assert.equal(db.prepare("SELECT value FROM autonomy_settings WHERE key = 'publishing_mode'").get().value, 'auto');
   });
 
-  it("social_auto_post only accepts 'off'", async () => {
+  // Coordinator change 2026-11-21 (owner full-automation brief):
+  // social_auto_post now accepts 'off' | 'draft_only' | 'on'.
+  // Creation is always draft-only; 'on' still never posts without a
+  // connected account and an explicit owner publish action.
+  it("social_auto_post only accepts 'off', 'draft_only' or 'on'", async () => {
     const { db, env } = freshEnv();
-    for (const bad of ['on', 'auto', 'approved']) {
+    for (const bad of ['auto', 'approved']) {
       const res = await callAutonomy(env, 'POST', '/api/autonomy/settings', { key: 'social_auto_post', value: bad });
       assert.equal(res.status, 400, `social_auto_post ${JSON.stringify(bad)} must be rejected`);
     }
     const ok = await callAutonomy(env, 'POST', '/api/autonomy/settings', { key: 'social_auto_post', value: 'off' });
     assert.equal(ok.status, 200);
     assert.equal(db.prepare("SELECT value FROM autonomy_settings WHERE key = 'social_auto_post'").get().value, 'off');
+    for (const good of ['draft_only', 'on']) {
+      const res = await callAutonomy(env, 'POST', '/api/autonomy/settings', { key: 'social_auto_post', value: good });
+      assert.equal(res.status, 200, `social_auto_post ${JSON.stringify(good)} must be accepted`);
+      assert.equal(db.prepare("SELECT value FROM autonomy_settings WHERE key = 'social_auto_post'").get().value, good);
+    }
   });
 
   it('max_articles_per_day accepts 0–3 only; unknown keys are rejected', async () => {
@@ -339,12 +355,14 @@ describe('autonomy status — real counts + LLM block', () => {
     assert.ok(Array.isArray(res.body.agents) && res.body.agents.length === 10, '10 queue-agent roles reported');
   });
 
-  it('GET /api/autonomy/llm reports all three providers not-configured with no keys or binding', async () => {
+  it('GET /api/autonomy/llm reports workers-ai only as the provider order (no fallback) with no keys or binding', async () => {
     const { env } = freshEnv();
     const res = await callAutonomy(env, 'GET', '/api/autonomy/llm');
     assert.equal(res.status, 200);
     assert.equal(res.body.generationPaused, true);
-    assert.deepEqual(res.body.order, ['workers-ai', 'groq', 'gemini']);
+    // M1 policy change (2026-11-21): Workers AI is the ONLY provider —
+    // no Groq/Gemini fallback exists, so the order is workers-ai alone.
+    assert.deepEqual(res.body.order, ['workers-ai']);
     assert.ok(res.body.providers.every((p) => p.status === 'not-configured'),
       'no provider is available without a binding or a key');
     assert.match(res.body.reason, /not bound|not set/);

@@ -22,7 +22,7 @@
  *   security-monitoring = security (1:1)
  */
 import { runResearch } from './autonomy/research.js';
-import { runContentCreation } from './autonomy/content.js';
+import { runContentCreation, runScaffoldRegeneration } from './autonomy/content.js';
 import { runFactChecking } from './autonomy/factcheck.js';
 import { runSeo } from './autonomy/seo.js';
 import { runPublishing } from './autonomy/publishing.js';
@@ -121,6 +121,21 @@ function normaliseTask(task) {
 
 export async function runAutonomyTask(task, env) {
   const normalised = normaliseTask(task);
+  // Kind-level dispatch inside the content-creation agent: scaffold
+  // regeneration (W2) reuses the article row in place and never creates
+  // a duplicate; it is invoked only via an explicit owner/manual task,
+  // never by the scheduled daily run.
+  if (normalised.agent === 'content-creation' && normalised.kind === 'scaffold-regeneration') {
+    try {
+      const result = await runScaffoldRegeneration(normalised, env);
+      if (!result || typeof result !== 'object') return { outcome: 'failed', error: 'Handler returned no result.' };
+      const outcome = result.outcome === 'done' || result.outcome === 'no-op' || result.outcome === 'failed'
+        ? result.outcome : 'failed';
+      return { ...result, outcome, agent: normalised.agent };
+    } catch (err) {
+      return { outcome: 'failed', agent: normalised.agent, error: String(err && err.message ? err.message : err).slice(0, 300) };
+    }
+  }
   const handler = HANDLERS[normalised.agent];
   if (!handler) {
     return { outcome: 'failed', agent: normalised.agent || null, error: `Unknown autonomy agent: ${String(normalised.agent || '')}.` };

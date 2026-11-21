@@ -4,8 +4,20 @@
  * Builds a distribution PACK (Pinterest caption + hashtags, YouTube
  * Community short text) from the article's real title/excerpt, with the
  * real article URL. It never posts anything — no social API auth exists.
+ *
+ * W4 (2026-11-21): when migration 022 is applied, the pack ALSO writes
+ * one DRAFT social_posts row per postable platform (draft only — the
+ * dispatcher only publishes on an explicit owner action). The write is
+ * best-effort: if the social tables do not exist yet (migration not
+ * applied) the pack is still returned and the miss is reported in
+ * `draftPosts` — the agent never fails a pack over a missing table,
+ * and it never publishes.
  */
 import { d1First } from '../../middleware/validation.js';
+import { buildPostContent } from '../../social/content.js';
+import { cardPublicUrl, cardFileName } from '../../social/card.js';
+import { createPost } from '../../social/store.js';
+import { SUPPORTED_PLATFORMS, platformDef } from '../../social/platforms.js';
 
 function parsePayload(task) {
   if (!task) return {};
@@ -63,5 +75,56 @@ export async function runSocialMedia(task, env) {
       note: 'Draft text only — nothing was posted. YouTube API is not connected.',
     },
   };
-  return { outcome: 'done', ...pack, note: 'Distribution pack prepared only — no post was made (no social API auth exists).' };
+  // W4: draft rows for the social framework (never a publish). Each
+  // platform is independent — one failure never stops the rest, and a
+  // missing social_posts table (migration 022 not applied) is reported,
+  // not fatal.
+  const draftPosts = [];
+  for (const platform of SUPPORTED_PLATFORMS) {
+    try {
+      // Media-required platforms get the deterministic card image URL
+      // (backend/social/card.js + scripts/render-social-card.py). The
+      // PNG must actually exist at that URL before the post can
+      // publish — the draft records that as a warning, and the
+      // dispatcher/adapter still refuse without media. Nothing here
+      // claims the file exists; the render step produces it.
+      const def = platformDef(platform);
+      const media = def?.mediaRequired
+        ? { url: cardPublicUrl(article.id, platform) }
+        : null;
+      const content = buildPostContent(article, platform, media);
+      const warnings = [...content.warnings];
+      if (media) {
+        warnings.push(`Card image must be rendered (scripts/render-social-card.py --article-id ${article.id} --platform ${platform}) and deployed to ${media.url} before this post can publish.`);
+      }
+      const row = await createPost(env, {
+        articleId: article.id,
+        platform,
+        caption: content.caption,
+        mediaUrl: content.mediaUrl || null,
+        scheduledFor: null,
+      });
+      draftPosts.push({ platform, ok: true, postId: row?.id ?? null, warnings, cardFile: media ? cardFileName(article.id, platform) : null });
+    } catch (err) {
+      draftPosts.push({ platform, ok: false, error: String(err?.message || err).slice(0, 300) });
+    }
+  }
+  // S1 fix (2026-11-21): a pack whose draft rows ALL failed to store
+  // must not report 'done'. Partial success stays 'done' with the
+  // failed platforms named in warnings. Draft-only either way — no
+  // post was made here.
+  const failedStores = draftPosts.filter((p) => !p.ok);
+  if (draftPosts.length > 0 && failedStores.length === draftPosts.length) {
+    return {
+      outcome: 'failed',
+      error: `No social draft could be stored: ${failedStores.map((p) => `${p.platform} (${p.error || 'unknown error'})`).join('; ')}`,
+      ...pack,
+      draftPosts,
+      note: 'Distribution pack prepared only — no post was made (no social API auth exists).',
+    };
+  }
+  if (failedStores.length > 0) {
+    pack.warnings = failedStores.map((p) => `Draft store failed for ${p.platform}: ${p.error || 'unknown error'}`);
+  }
+  return { outcome: 'done', ...pack, draftPosts, note: 'Distribution pack prepared only — no post was made (no social API auth exists).' };
 }

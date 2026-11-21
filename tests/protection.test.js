@@ -366,7 +366,11 @@ describe('daily workflow with DB-backed protection', () => {
     }
 
     const after28 = db.prepare('SELECT body, seo_title, seo_description FROM articles WHERE id = ?').get(28);
-    assert.ok(after28.body.includes('Related reading:'), '#28 got the Related reading link');
+    // Relevance fix (2026-11-21): #28 has no topically relevant published
+    // sibling, so the repair must NOT append a Related reading link — a
+    // link must never be faked to satisfy the SEO check. The meta
+    // description repair below is the real repair for #28.
+    assert.ok(!after28.body.includes('Related reading:'), '#28 gets NO Related reading link — no published sibling is genuinely relevant');
     assert.ok(after28.seo_description && after28.seo_description.length >= 120 && after28.seo_description.length <= 160,
       '#28 meta description was repaired into 120-160 characters');
     assert.equal(

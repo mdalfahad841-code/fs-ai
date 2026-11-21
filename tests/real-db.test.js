@@ -105,6 +105,15 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
 
   before(async () => {
     db = buildDb(['database/schema.sql', 'database/seed.sql']);
+    // Protected drafts #26/#27 exist in production (live: #26 division 2,
+    // #27 division 1, both draft) and protection is ID-level — a fresh
+    // article created here must not reuse id 26/27, or the H1 guard
+    // would rightly refuse its publish. Seed them as drafts so the CMS
+    // test's new article lands on id 28. Drafts never appear in the
+    // published-only public/division counts below.
+    db.prepare(
+      "INSERT INTO articles (id, division_id, title, slug, excerpt, body, author, status, fact_checked) VALUES (26, 2, 'How Artificial Intelligence Is Changing Everyday Life', 'how-artificial-intelligence-is-changing-everyday-life', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0), (27, 1, 'Tesla Cybercab Factory at Giga Berlin', 'tesla-cybercab-factory-at-giga-berlin', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0)",
+    ).run();
     env = { DB: makeRealD1(db), SESSION_SECRET: 'test-session-secret-real-db' };
     env.OWNER_PASSWORD_HASH = await hashPassword(CORRECT_PASSWORD);
     const loginRes = await handleRequest(req('POST', '/api/auth/login', null, { email: OWNER_EMAIL, password: CORRECT_PASSWORD }), env);

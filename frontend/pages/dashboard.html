@@ -50,6 +50,92 @@
         <p id="dashboardNote" class="muted"></p>
         <p id="dashboardApiStatus" class="muted" aria-live="polite">Waiting for a verified server session…</p>
 
+        <!-- 0. Control Center (System status) — W5. Single live view of the
+             whole system. Every value comes from the Worker API; anything
+             the backend cannot supply renders "Data unavailable", never an
+             invented number. All times are Asia/Dhaka. -->
+        <section class="card dashboard-section" data-section="control-center" id="section-control-center" aria-label="Control Center">
+          <h2>Control Center — System status</h2>
+          <p class="muted">One live view of automation, publishing, social connections, schedules, queue, AI usage, health and reports. Nothing here is hard-coded: every value is fetched from the Worker API, and anything the API cannot supply says “Data unavailable”. All times are Asia/Dhaka (UTC+6).</p>
+          <p id="ccStatus" aria-live="polite">Loading system status…</p>
+          <p id="ccFreshness" class="muted"></p>
+          <h3>Alerts — action needed</h3>
+          <ul class="clean" id="ccAlerts"><li class="muted">Checking…</li></ul>
+
+          <h3>Automation status</h3>
+          <p class="muted">Live automation switches and publishing mode, from <code>GET /api/autonomy/status</code>.</p>
+          <div class="kpi-grid" id="ccAutomationGrid"></div>
+          <p id="ccAutomationStatus" class="muted" aria-live="polite"></p>
+
+          <h3>Publishing status</h3>
+          <p class="muted">Published / draft counts and the publish-gate state of the newest drafts, from <code>GET /api/autonomy/analytics</code>. “Ready” means the content checks pass — the article still waits for owner approval while publishing mode is “approved only”.</p>
+          <div class="kpi-grid" id="ccPublishingGrid"></div>
+          <ul class="clean" id="ccPublishingList"></ul>
+          <p id="ccPublishingStatus" class="muted" aria-live="polite"></p>
+
+          <h3>Social connection status</h3>
+          <p class="muted">From <code>GET /api/social/status</code> when that route exists (W4); until then every platform shows “Not connected”. A profile that exists is not an API connection — nothing here claims “connected” without a verified check.</p>
+          <ul class="clean" id="ccSocialList"></ul>
+          <p id="ccSocialStatus" class="muted" aria-live="polite"></p>
+
+          <h3>YouTube session (browser-based uploads)</h3>
+          <p class="muted">YouTube uploads happen in the live browser — there is NO YouTube OAuth token stored on the server, so this panel can never show a live “connected” state. It shows the last manually verified state (a stored note, not a live check) and the steps to check the session yourself. This panel never asks for a password and never stores one.</p>
+          <div id="ccYoutubePanel">
+            <p><strong>Status:</strong> Browser session — verified manually before each upload. <strong>Not API-connected.</strong></p>
+            <ul class="clean">
+              <li><strong>Channel:</strong> <a href="https://www.youtube.com/@FSAI-e5f" target="_blank" rel="noopener">@FSAI-e5f</a></li>
+              <li><strong>Account:</strong> mdalfahad406@gmail.com</li>
+              <li><strong>Last verified:</strong> 2026-11-21 11:43 Dhaka — session was already signed in as mdalfahad406 in the browser.</li>
+              <li><strong>Last upload:</strong> Short #05 “How to Read Your Car's Warning Lights” — <a href="https://youtube.com/shorts/G7jkYB9YWkM" target="_blank" rel="noopener">youtube.com/shorts/G7jkYB9YWkM</a></li>
+              <li><strong>Saved password note:</strong> the saved password for mdalfahad406@gmail.com was rejected by Google on 2026-11-21 morning and is still unverified — if Studio asks you to sign in again, sign in yourself in the browser (steps below); never type a password into this dashboard.</li>
+            </ul>
+            <p><button class="btn btn-outline" type="button" id="ccYoutubeCheckBtn">Check session — show the steps</button> <span id="ccYoutubeStatus" class="muted" aria-live="polite"></span></p>
+            <ol id="ccYoutubeSteps" hidden>
+              <li>Open YouTube Studio in the browser: <a href="https://studio.youtube.com" target="_blank" rel="noopener">studio.youtube.com</a>.</li>
+              <li>Check the account menu (top right) — it must show mdalfahad406@gmail.com and the channel @FSAI-e5f.</li>
+              <li>If it shows a different account, switch accounts in the browser menu. Do not type any password into this dashboard.</li>
+              <li>If Studio shows signed out: sign in in the browser yourself as mdalfahad406@gmail.com. If Google rejects the saved password, update it through the Secure Vault card or Google account recovery (accounts.google.com/signin/recovery) — never paste a password into the dashboard and never store one in the database.</li>
+              <li>Confirm by opening <a href="https://www.youtube.com/@FSAI-e5f" target="_blank" rel="noopener">youtube.com/@FSAI-e5f</a> — the channel page must load as @FSAI-e5f — then tell the assistant “YouTube session verified” so the next upload can run.</li>
+            </ol>
+          </div>
+
+          <h3>Scheduled jobs</h3>
+          <p class="muted">The schedule lives in the Cloudflare Worker (hourly trigger): the daily workflow runs at 00:00 UTC and the weekly workflow on Sundays at 00:00 UTC. Shown below in Asia/Dhaka time with the countdown to the next run.</p>
+          <ul class="clean" id="ccScheduleList"></ul>
+          <p id="ccScheduleStatus" class="muted" aria-live="polite"></p>
+
+          <h3>Queue health</h3>
+          <p class="muted">Queued / running / failed counts and the age of the oldest queued task, from <code>GET /api/analytics/detail?section=queue</code>. See the full list in the Task queue under Autonomous Operations.</p>
+          <div class="kpi-grid" id="ccQueueGrid"></div>
+          <p id="ccQueueStatus" class="muted" aria-live="polite"></p>
+
+          <h3>Failed tasks</h3>
+          <p class="muted">Every failed task with its task id, component, root cause, retry history and whether the owner must act. Temporary errors are still retryable; permanent errors have exhausted their attempts.</p>
+          <div class="table-scroll"><table><thead><tr><th>Task</th><th>Component</th><th>Root cause</th><th>Retries</th><th>Error</th><th>Owner action</th></tr></thead><tbody id="ccFailedTasks"></tbody></table></div>
+          <p id="ccFailedStatus" class="muted" aria-live="polite"></p>
+
+          <h3>AI usage &amp; free-tier consumption</h3>
+          <p class="muted">Workers AI only — the only active LLM provider. Cap: 9,000 Neurons/day. From <code>GET /api/analytics/detail?section=ai-usage</code>.</p>
+          <div class="kpi-grid" id="ccAiUsageGrid"></div>
+          <div id="ccAiUsageBarWrap"><div id="ccAiUsageBar" style="height:12px;background:#2563eb;width:0%"></div></div>
+          <p id="ccAiUsageStatus" class="muted" aria-live="polite"></p>
+
+          <h3>System health</h3>
+          <p class="muted">Latest stored health checks (W1 health service), from <code>GET /api/health/latest</code>. A check older than 25 hours is labelled stale.</p>
+          <ul class="clean" id="ccHealthList"></ul>
+          <p id="ccHealthStatus" class="muted" aria-live="polite"></p>
+
+          <h3>Daily / weekly reports</h3>
+          <p class="muted">Latest daily and weekly reports, from <code>GET /api/analytics/detail?section=reports</code>. Full report history is under Review reports in Autonomous Operations.</p>
+          <ul class="clean" id="ccReportsList"></ul>
+          <p id="ccReportsStatus" class="muted" aria-live="polite"></p>
+
+          <h3>Recent activity</h3>
+          <p class="muted">Latest agent runs, from <code>GET /api/analytics/detail?section=activity</code>.</p>
+          <ul class="clean" id="ccActivityList"></ul>
+          <p id="ccActivityStatus" class="muted" aria-live="polite"></p>
+        </section>
+
         <!-- 1. Overview -->
         <section class="card dashboard-section" data-section="overview" id="section-overview" aria-label="Overview">
           <h2>Overview</h2>

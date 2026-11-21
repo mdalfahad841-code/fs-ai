@@ -111,7 +111,17 @@ describe('backup -> restore round-trip (local SQLite)', () => {
     assert.equal(loginRes.status, 200, 'owner login must work against the orig DB');
     token = (await loginRes.json()).token;
 
-    // Live activity 1: a new published article (id 26).
+    // Protected drafts #26/#27 exist in production (live: #26 division 2,
+    // #27 division 1, both draft) and protection is ID-level — a fresh
+    // article created here must not reuse id 26/27, or the H1 guard
+    // would rightly refuse its later edit/delete. Seed them as drafts
+    // (they carry no tags/revisions, so the counts below only gain the
+    // 2 article rows) so the live articles below land on ids 28+.
+    origDb.prepare(
+      "INSERT INTO articles (id, division_id, title, slug, excerpt, body, author, status, fact_checked) VALUES (26, 2, 'How Artificial Intelligence Is Changing Everyday Life', 'how-artificial-intelligence-is-changing-everyday-life', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0), (27, 1, 'Tesla Cybercab Factory at Giga Berlin', 'tesla-cybercab-factory-at-giga-berlin', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0)",
+    ).run();
+
+    // Live activity 1: a new published article (id 28).
     const created = await handleRequest(req('POST', '/api/admin/articles', token, {
       title: 'Backup Restore Test Article',
       body: 'Body with a semicolon; and an apostrophe\'s quote, plus "double quotes".',
@@ -165,7 +175,7 @@ describe('backup -> restore round-trip (local SQLite)', () => {
     for (const t of BACKUP_TABLES) {
       assert.equal(backup.counts[t], origRows[t].length, `backup count for ${t}`);
     }
-    assert.equal(backup.counts.articles, 26, '25 seed + 1 live article; the deleted one stays deleted');
+    assert.equal(backup.counts.articles, 28, '25 seed + 2 protected drafts + 1 live article; the deleted one stays deleted');
     assert.equal(backup.counts.article_revisions, 2, 'edit revision + orphan revision of the deleted article');
     assert.equal(backup.counts.article_tags, 52, 'seed tags minus replaced ones, plus the new article tags');
     assert.equal(backup.counts.website_settings, 9, '8 seed settings + emergency_stop');
@@ -258,13 +268,13 @@ describe('backup -> restore round-trip (local SQLite)', () => {
     const health = await handleRequest(req('GET', '/api/health'), env);
     assert.equal((await health.json()).db, 'connected');
 
-    // AUTOINCREMENT continues past the backup's max article id (26);
-    // the deleted id 27 was never in the backup, so it is correctly reused.
+    // AUTOINCREMENT continues past the backup's max article id (28);
+    // the deleted id 29 was never in the backup, so it is correctly reused.
     const created = await handleRequest(req('POST', '/api/admin/articles', restoredToken, {
       title: 'Post Restore Article', body: 'After restore.', division: 'automotive', status: 'published',
     }), env);
     assert.equal(created.status, 201);
-    assert.equal((await created.json()).article.id, 27);
+    assert.equal((await created.json()).article.id, 29);
 
     // Public list defaults to limit=25 and total is the page size.
     const list = await handleRequest(req('GET', '/api/articles?limit=100'), env);

@@ -134,19 +134,19 @@ describe('generateText — no provider configured', () => {
     const result = await generateText({ prompt: 'Write a short test paragraph.', purpose: 'test' }, env);
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'all-providers-unavailable');
-    assert.equal(result.providerStatuses.length, 3, 'all three providers attempted in order');
+    assert.equal(result.providerStatuses.length, 1, 'only Workers AI is attempted — no fallback exists');
     assert.deepEqual(
       result.providerStatuses.map((p) => p.id),
-      ['workers-ai', 'groq', 'gemini'],
-      'fallback order is workers-ai -> groq -> gemini',
+      ['workers-ai'],
+      'provider order is workers-ai only (owner policy 2026-11-19, M1 fix 2026-11-21)',
     );
     assert.ok(result.providerStatuses.every((p) => p.status === 'not-configured'),
       'every provider reports not-configured with no binding and no keys');
     assert.match(result.detail, /No LLM provider is configured/);
 
-    // The attempts ARE logged (as not-configured), but no success row exists.
+    // The attempt IS logged (as not-configured), but no success row exists.
     const rows = usageRows(db);
-    assert.equal(rows.length, 3, 'one llm_usage row per attempted provider');
+    assert.equal(rows.length, 1, 'one llm_usage row for the single attempted provider');
     assert.ok(rows.every((r) => r.outcome === 'not-configured'));
     assert.equal(usageRows(db, "WHERE outcome = 'ok'").length, 0, 'no success row was recorded');
 
@@ -197,7 +197,7 @@ describe('generateText — fake Workers AI', () => {
     assert.equal(rows[0].purpose, 'test');
   });
 
-  it('fake env.AI throwing a 3036-style quota error: quota-exhausted and the next provider is tried', async () => {
+  it('fake env.AI throwing a 3036-style quota error: quota-exhausted and no fallback provider is tried (Workers AI only)', async () => {
     const { db, env } = freshEnv();
     env.AI = {
       run: async () => {
@@ -211,15 +211,12 @@ describe('generateText — fake Workers AI', () => {
     assert.equal(result.providerStatuses[0].status, 'quota-exhausted');
     assert.match(result.providerStatuses[0].detail, /3036/);
 
-    // The fallback was really attempted: Groq and Gemini were tried and
-    // logged as not-configured (no keys), instead of stopping at Workers AI.
-    assert.equal(result.providerStatuses[1].id, 'groq');
-    assert.equal(result.providerStatuses[1].status, 'not-configured');
-    assert.equal(result.providerStatuses[2].id, 'gemini');
-    assert.equal(result.providerStatuses[2].status, 'not-configured');
-    const groqRows = usageRows(db, "WHERE provider = 'groq'");
-    assert.equal(groqRows.length, 1, 'Groq was tried and its attempt logged');
-    assert.equal(groqRows[0].outcome, 'not-configured');
+    // M1 policy change (2026-11-21): there is NO fallback provider to
+    // try after a Workers AI quota error — generation pauses instead of
+    // reaching for Groq/Gemini. Only Workers AI was attempted and logged.
+    assert.equal(result.providerStatuses.length, 1, 'no fallback provider exists');
+    assert.equal(usageRows(db, "WHERE provider = 'groq'").length, 0, 'Groq was never tried');
+    assert.equal(usageRows(db, "WHERE provider = 'gemini'").length, 0, 'Gemini was never tried');
     const workersRows = usageRows(db, "WHERE provider = 'workers-ai'");
     assert.equal(workersRows.length, 1);
     assert.equal(workersRows[0].outcome, 'quota-exhausted');
@@ -266,7 +263,11 @@ describe('content agent + LLM', () => {
     seedTestEvidence(db);
     env.AI = {
       run: async () => ({
-        response: 'Canned article body about testing. It is general guidance only.',
+        // Realistic canned generation: it carries the payload outline's
+        // headings and ends on a content word, so the truncation guard
+        // (WS-A, 2026-11-21) correctly lets it through — a body without
+        // its required sections is incomplete and must no-op instead.
+        response: '## Introduction\n\nCanned article body about testing. It is general guidance only.\n\n## Key takeaways\n\nTesting guidance helps readers verify each step before they rely on the instructions.',
         usage: { prompt_tokens: 40, completion_tokens: 60 },
       }),
     };

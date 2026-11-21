@@ -818,7 +818,12 @@ function sentenceIssues(sentence) {
   if (s.length > 500) {
     issues.push({ type: 'run-on', reason: `run-on sentence over 500 characters: "${excerpt}"` });
   }
-  if (/https?:\/\//.test(s)) {
+  // Raw-URL check runs on the sentence WITHOUT its trailing citation
+  // (W2 fix, 2026-11-21): a sentence ending "...guide)
+  // [The Guardian](url)" carries its citation as a link, not as a raw
+  // URL in the prose. A URL in the MIDDLE of the sentence is still
+  // flagged — only the trailing citation tail is forgiven.
+  if (/https?:\/\//.test(stripTrailingCitation(s))) {
     issues.push({ type: 'raw-url', reason: `sentence contains a raw URL (citation not stripped): "${excerpt}"` });
   }
   return issues;
@@ -853,25 +858,83 @@ function duplicateIssues(sentences) {
   return issues;
 }
 
+/** Strip a trailing inline citation from a paragraph/sentence before
+ *  judging how it ends, so the sentence text — not its citation tail —
+ *  decides whether the paragraph is complete (W2 fix, 2026-11-21).
+ *
+ *  Live #30 root cause: every content paragraph ends with an inline
+ *  non-breaking-space + citation link (`\u00a0[The Guardian](url)`).
+ *  paragraphIssues required a paragraph to end with terminal
+ *  punctuation, so "...guide) [The Guardian](url)" failed even though
+ *  the sentence itself ends "...guide.)" — the citation tail was
+ *  judged instead of the sentence. A bare trailing URL, a
+ *  parenthesised URL and a " - <url>" tail are the same shape and are
+ *  stripped too. Only TRAILING citation material is removed: a URL in
+ *  the middle of a sentence still counts (sentenceIssues still flags
+ *  a mid-sentence raw URL). Repeatedly strips, so a paragraph ending
+ *  "...guide) [The Guardian](url)" and one ending in a bare URL both
+ *  reduce to their sentence text. */
+export function stripTrailingCitation(text) {
+  let s = String(text || '');
+  let prev;
+  do {
+    prev = s;
+    // Markdown link tail: "[label](url)" — includes the NBSP form
+    // "\u00a0[The Guardian](url)" since \s matches NBSP.
+    s = s.replace(/\s*\[[^\]\n]*\]\([^)]*\)\s*$/, '');
+    // Dash-URL tail: " - https://…" (extractClaims strips these from
+    // claims, so the body form must not fail validation either).
+    s = s.replace(/\s*[–—-]\s*https?:\/\/\S+\s*$/, '');
+    // Parenthesised URL tail: "(https://…)".
+    s = s.replace(/\s*\(https?:\/\/[^)]*\)\s*$/, '');
+    // Bare trailing URL.
+    s = s.replace(/\s+https?:\/\/\S+\s*$/, '');
+  } while (s !== prev);
+  return s.trim();
+}
+
 /** Paragraphs (citation lines and headings removed) that do not end
  *  with terminal punctuation — an incomplete paragraph left behind by
- *  a removal or a truncated rewrite. */
+ *  a removal or a truncated rewrite.
+ *
+ *  KEY (W2 fix, 2026-11-21): paragraph identity is the paragraph's
+ *  INDEX among the body's blank-line-separated segments, NOT the
+ *  first 120 characters of its text. The old key
+ *  (`para:` + first 120 chars) made any pre-existing defect "new"
+ *  whenever a correction rewrote a sentence inside the paragraph —
+ *  the rewrite changed the key, so the pre-existing trailing-citation
+ *  defect on live #30 was counted as introduced by the correction on
+ *  every run (runs 115/116, deterministic). Corrections replace or
+ *  remove sentences in place, so a paragraph's index is stable across
+ *  a rewrite while its first 120 chars are not. COLLISION BEHAVIOUR:
+ *  the index is positional, so a correction that EMPTIES a whole
+ *  paragraph (removing its only sentence) collapses the blank-line
+ *  run and shifts every later paragraph's index by one — a
+ *  pre-existing issue in a shifted paragraph is then counted as new
+ *  (fail-CLOSED: strict, never lenient) and a genuinely new issue
+ *  could be exempted only if it lands exactly on an index that held
+ *  a pre-existing issue. Both need a paragraph-emptying removal AND
+ *  an unterminated paragraph later in the body; in-place rewrites
+ *  (the #30 shape) cannot shift an index. */
 function paragraphIssues(body) {
   const issues = [];
   const cleaned = stripCitationLines(String(body || ''));
-  for (const para of cleaned.split(/\n\s*\n/)) {
+  const segments = cleaned.split(/\n\s*\n/);
+  segments.forEach((para, index) => {
     const lines = para.split('\n').map((l) => l.trim())
       .filter((l) => l && !/^#{1,6}\s/.test(l) && !/^AI-DRAFT\b/.test(l));
     const text = lines.join(' ').replace(/\s+/g, ' ').trim();
-    if (!text) continue;
-    if (/:\s*$/.test(text)) continue; // list intro, e.g. "Key points:"
-    if (/^!?\[.*?\]\(https?:\/\/[^)]*\)$/.test(text)) continue; // link-only paragraph
-    if (/[.!?]["”')\]]?\s*$/.test(text)) continue;
+    if (!text) return;
+    // Judge the sentence text, not its citation tail (W2 fix above).
+    const judged = stripTrailingCitation(text);
+    if (/:\s*$/.test(judged)) return; // list intro, e.g. "Key points:"
+    if (/^!?\[.*?\]\(https?:\/\/[^)]*\)$/.test(judged)) return; // link-only paragraph
+    if (/[.!?]["”')\]]?\s*$/.test(judged)) return;
     issues.push({
-      key: `para:${normaliseText(text).toLowerCase().slice(0, 120)}`,
+      key: `para-idx:${index}`,
       reason: `incomplete paragraph (no closing sentence punctuation): "${text.slice(0, 80)}"`,
     });
-  }
+  });
   return issues;
 }
 
@@ -965,7 +1028,10 @@ function evidenceIssues(newSentences, evidencePool, originalBody) {
  *    mid-sentence, detected by the SPLICE_MARKER_RE fragment marker).
  * Issues already present UNCHANGED in the original body are NOT counted
  * (the correction must not make the body worse; it is not punished for
- * pre-existing quirks). Returns { ok, reasons }.
+ * pre-existing quirks). Paragraph issues are keyed by paragraph INDEX
+ * (W2 fix, 2026-11-21 — see paragraphIssues): a rewrite inside a
+ * paragraph no longer resurrects that paragraph's pre-existing defect
+ * merely by changing its first 120 characters. Returns { ok, reasons }.
  */
 export function validateCorrectedBody(originalBody, correctedBody, evidencePool) {
   const reasons = [];
@@ -1052,7 +1118,280 @@ async function recordCorrection(env, articleId, p) {
   }
 }
 
-export async function runCorrection(env, article) {
+const TRUNCATION_FUNCTION_WORDS = new Set([
+  'a', 'an', 'the', 'can', 'could', 'will', 'would', 'shall', 'should', 'may',
+  'might', 'must', 'to', 'of', 'and', 'or', 'but', 'is', 'are', 'was', 'were',
+  'be', 'been', 'being', 'has', 'have', 'had', 'in', 'on', 'for', 'with',
+  'by', 'at', 'from', 'that', 'this', 'it', 'he', 'she', 'they', 'we', 'you',
+  'his', 'her', 'their', 'our', 'your', 'its', 'as', 'if', 'when', 'than',
+]);
+
+/** Content paragraphs of a body for the truncation guard: blank-line
+ *  segments, headings and citation sections removed, citation tails
+ *  stripped — the same view paragraphIssues judges. */
+function contentParagraphsForTruncation(body) {
+  const cleaned = stripCitationLines(String(body || ''));
+  const out = [];
+  for (const para of cleaned.split(/\n\s*\n/)) {
+    const lines = para.split('\n').map((l) => l.trim())
+      .filter((l) => l && !/^#{1,6}\s/.test(l) && !/^AI-DRAFT\b/.test(l));
+    const text = lines.join(' ').replace(/\s+/g, ' ').trim();
+    if (text) out.push(stripTrailingCitation(text));
+  }
+  return out;
+}
+
+/**
+ * Detect a TRUNCATED corrected body (W2 fix, 2026-11-21) — the live
+ * #30 correction output ended mid-sentence ("...a local's travel
+ * guide can") and mid-word ("Three days are broke", cut off "broken").
+ * A truncated body must never be saved as if it were a complete
+ * correction: it is a failed LLM output, not a done correction.
+ *
+ * A paragraph counts as truncated only when it ends WITHOUT terminal
+ * punctuation AND at least one truncation signal holds:
+ *  - the corrected body is significantly shorter than the original
+ *    (< 90% of its length — a whole-body rewrite that lost its tail),
+ *  - the paragraph's last word is a function word ("can", "the", "to"
+ *    … — a sentence cut off mid-phrase), or
+ *  - the paragraph's last word is a proper prefix of the word at the
+ *    same position in the original paragraph at the same index
+ *    ("broke" vs "broken" — cut off mid-word).
+ * A paragraph that was ALREADY unterminated in the original body at
+ * the same index is pre-existing, not a truncation — the guard exempts
+ * it (paragraphIssues still reports it as a pre-existing defect, and
+ * the index-keyed dedup exempts it from validation). Returns null
+ * when the body is not truncated, else { reasons: [...] }.
+ * NOTE on scope: correction here is already per-sentence (the
+ * smallest chunk — one LLM call per claim, with isTruncatedReply +
+ * one retry + a run-level circuit breaker), so per-paragraph chunking
+ * would add nothing: the remaining risk is a truncated ASSEMBLED
+ * body, which this guard catches before validation. The correction
+ * prompt is unchanged — it already asks for one sentence only.
+ */
+export function detectTruncatedBody(originalBody, correctedBody) {
+  const corrected = String(correctedBody || '');
+  const original = String(originalBody || '');
+  if (!corrected || corrected === original) return null;
+  const origParas = contentParagraphsForTruncation(original);
+  const corrParas = contentParagraphsForTruncation(corrected);
+  if (!corrParas.length) return null; // empty body is validation's job, not truncation's
+  const reasons = [];
+  const significantlyShorter = corrected.length < original.length * 0.9;
+  corrParas.forEach((para, index) => {
+    if (/[.!?]["”')\]]?\s*$/.test(para)) return; // properly terminated
+    const origPara = origParas[index];
+    // Pre-existing unterminated paragraph at the same index: not a
+    // truncation the correction introduced — unless the last word was
+    // cut mid-word (a shorter prefix of the original word).
+    const origUnterminated = origPara !== undefined && !/[.!?]["”')\]]?\s*$/.test(origPara);
+    const words = para.split(/\s+/).filter(Boolean);
+    const lastWord = (words[words.length - 1] || '').replace(/[^\p{L}\p{N}']/gu, '');
+    let midWord = false;
+    if (origPara !== undefined) {
+      const origWords = origPara.split(/\s+/).filter(Boolean)
+        .map((w) => w.replace(/[^\p{L}\p{N}']/gu, ''));
+      const origWord = origWords[words.length - 1] || '';
+      midWord = lastWord.length >= 3 && origWord.length > lastWord.length
+        && origWord.toLowerCase().startsWith(lastWord.toLowerCase());
+    }
+    if (midWord) {
+      reasons.push(`correction output truncated: paragraph ${index + 1} ends mid-word ("...${para.slice(-60)}")`);
+    } else if (origUnterminated) {
+      return; // pre-existing defect, not a truncation
+    } else if (significantlyShorter || TRUNCATION_FUNCTION_WORDS.has(lastWord.toLowerCase())) {
+      const why = significantlyShorter
+        ? `corrected body is ${corrected.length} chars vs ${original.length} original`
+        : `ends on the function word "${lastWord}"`;
+      reasons.push(`correction output truncated: final paragraph ends mid-sentence (${why}): "...${para.slice(-80)}"`);
+    }
+  });
+  return reasons.length ? { reasons: [...new Set(reasons)] } : null;
+}
+
+/**
+ * Detect a TRUNCATED draft body with NO original to compare against
+ * (Workstream A, 2026-11-21) — the absolute-signal half of the
+ * truncation guard. detectTruncatedBody() above only works when a
+ * corrected body can be diffed against the original; a freshly
+ * GENERATED body (runContentCreation / regenerateScaffoldDraft) has no
+ * original, and the SEO suite / publish gate only ever see the final
+ * body. This function judges the body on its own:
+ *  - the final content paragraph ends without terminal punctuation
+ *    (after trailing citations are stripped) — cut off mid-sentence;
+ *  - it ends on a function word ("can", "the", "to") — cut off
+ *    mid-phrase;
+ *  - unclosed HTML tags (an open <p>/<div>/<ul>/… with no matching
+ *    close) or an odd number of ``` fences — cut off mid-markup;
+ *  - unexpectedly short: under minWords words (default 150) — a
+ *    CORROBORATING signal only, never standalone: it is recorded
+ *    only together with an incompleteness signal above, so a short
+ *    body that ends cleanly is a short article, not a truncated one.
+ *  - required sections missing: when requiredHeadings are given (an
+ *    outline the body was generated against), every heading must
+ *    appear as a ## (or <h2>) heading — a generated body that drops
+ *    its Conclusion never reads as complete.
+ * Returns null when the body looks complete, else { reasons: [...] }.
+ * Pure and synchronous — safe to call from generation, correction,
+ * scaffold regeneration and the SEO wrapper. An empty body is NOT
+ * truncation (validation / scaffold detection own that case).
+ */
+const UNCLOSED_TAG_NAMES = ['p', 'div', 'section', 'article', 'ul', 'ol', 'li', 'strong', 'em', 'a', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'table'];
+
+export function isTruncatedDraftBody(body, { minWords = 150, requiredHeadings = [] } = {}) {
+  const text = String(body || '');
+  if (!text.trim()) return null;
+  const reasons = [];
+  const paras = contentParagraphsForTruncation(text);
+  const lastPara = paras.length ? paras[paras.length - 1] : '';
+  if (lastPara) {
+    if (!/[.!?]["”')\]]?\s*$/.test(lastPara)) {
+      reasons.push(`body ends mid-sentence: "...${lastPara.slice(-80)}"`);
+    } else {
+      const words = lastPara.split(/\s+/).filter(Boolean);
+      const lastWord = (words[words.length - 1] || '').replace(/[^\p{L}\p{N}']/gu, '');
+      if (TRUNCATION_FUNCTION_WORDS.has(lastWord.toLowerCase())) {
+        reasons.push(`body ends on the function word "${lastWord}": "...${lastPara.slice(-80)}"`);
+      }
+    }
+  }
+  // Unclosed HTML tags: an open tag with no matching close tag.
+  const lower = text.toLowerCase();
+  for (const tag of UNCLOSED_TAG_NAMES) {
+    const opens = (lower.match(new RegExp(`<${tag}(\\s[^>]*)?>`, 'g')) || []).length;
+    const closes = (lower.match(new RegExp(`</${tag}\\s*>`, 'g')) || []).length;
+    if (opens > closes) {
+      reasons.push(`unclosed HTML tag <${tag}> (${opens} opened, ${closes} closed)`);
+    }
+  }
+  // Unclosed markdown code fence.
+  const fences = (text.match(/```/g) || []).length;
+  if (fences % 2 === 1) reasons.push('unclosed markdown code fence (odd number of ``` markers)');
+  // Required sections missing (only when an outline was supplied).
+  const headings = Array.isArray(requiredHeadings) ? requiredHeadings : [];
+  if (headings.length) {
+    const bodyHeadings = new Set();
+    for (const m of text.matchAll(/^#{1,6}\s+(.+)$/gm)) bodyHeadings.add(m[1].trim().toLowerCase());
+    for (const m of lower.matchAll(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>/g)) bodyHeadings.add(m[1].trim());
+    const missing = headings
+      .map((h) => String(h).trim())
+      .filter((h) => h && !bodyHeadings.has(h.toLowerCase()));
+    if (missing.length) {
+      reasons.push(`missing required section(s): ${missing.map((h) => `"${h}"`).join(', ')}`);
+    }
+  }
+  // Unexpectedly short content — corroborating signal ONLY, never
+  // a standalone verdict: a short body that ends cleanly is a short
+  // article, not a truncated one (a complete 70-word body must not
+  // be called truncated). Shortness counts only together with an
+  // incompleteness signal above (cut-off ending, unclosed markup,
+  // missing required sections) — a body cut short almost always
+  // carries one of those too. A body cut exactly at a sentence
+  // boundary with no other signal is undetectable in absolute terms;
+  // that case is what the diff-based detectTruncatedBody() (against
+  // the original body, in correction) is for.
+  const plainWords = text.replace(/<[^>]+>/g, ' ').replace(/[#>*`\[\]()]/g, ' ').split(/\s+/).filter(Boolean);
+  if (minWords > 0 && plainWords.length > 0 && plainWords.length < minWords && reasons.length > 0) {
+    reasons.push(`body is unexpectedly short: ${plainWords.length} words (truncation floor is ${minWords})`);
+  }
+  return reasons.length ? { reasons: [...new Set(reasons)] } : null;
+}
+
+/**
+ * Zero-failure recovery report (W2 fix, 2026-11-21): every failed
+ * correction run carries the task id (when the run arrived on a task
+ * row), the component, the root cause, a timestamp, and whether the
+ * failure is TEMPORARY (retryable — e.g. a truncated LLM output: the
+ * run may be retried) or PERMANENT (validation rejection on the same
+ * input will repeat deterministically — BLOCKED_WITH_REASON, human
+ * review or a code fix first, never an infinite retry). The owner
+ * action is named, not implied.
+ */
+export function buildRecoveryReport({
+  taskId = null, articleId, title = null, component = 'fact-checking/correction',
+  rootCause, reasons = [], attempted = {}, retryable = false,
+  ownerAction = 'Human review: inspect the failed claims and correct by hand, or re-run after the underlying fix.',
+  nextStep = null,
+} = {}) {
+  return {
+    taskId: taskId ?? null,
+    articleId: articleId ?? null,
+    title: title ?? null,
+    component,
+    rootCause,
+    reasons: [...reasons],
+    attempted: { corrected: attempted.corrected ?? 0, removed: attempted.removed ?? 0, skipped: attempted.skipped ?? 0 },
+    timestamp: new Date().toISOString(),
+    retryable: Boolean(retryable),
+    status: retryable ? 'RETRYING' : 'BLOCKED_WITH_REASON',
+    ownerAction,
+    nextStep: nextStep || (retryable
+      ? 'Re-run the correction: a truncated LLM output is temporary and a fresh run may complete.'
+      : 'Do NOT re-run the correction on this unchanged input — it will fail the same way. Fix the underlying cause first (see root cause), then re-run.'),
+  };
+}
+
+/**
+ * Shared rejection path for runCorrection: a corrected body that
+ * must NOT be saved (validation rejection or truncated output).
+ * Records every attempted correction as a 'failed' row (in place
+ * when an open row already exists, never a duplicate), runs the
+ * re-check on the UNCHANGED body, and returns outcome 'failed' —
+ * never 'done'. (W2 fix, 2026-11-21: the old code returned outcome
+ * 'done' with corrected:0 and validationRejected:true, so runTask
+ * marked the task done and the status lied. Task #31's live row —
+ * attempts:0, status:failed, updated 2026-11-20T11:48:00Z with no
+ * runs/logs in that window — looks like a manual D1 marking, not a
+ * code path; this fix makes the worker produce the honest failed
+ * state on its own going forward.)
+ */
+async function failCorrectionRun(env, article, {
+  taskId = null, pending, results, skipped, failureKind, failureReason,
+  reasons, retryable, rootCause, ownerAction,
+}) {
+  const failedRowByKey = new Map();
+  for (const p of pending) {
+    if (p.action === 'skipped') continue; // 'skipped' is not a valid status value — no row
+    if (p.action === 'failed' && failedRowByKey.has(p.key)) p.openRow = failedRowByKey.get(p.key);
+    const rowId = await recordCorrection(env, article.id, {
+      ...p, action: 'failed',
+      correctedText: p.action === 'failed' ? null : `${failureKind} — ${reasons.join('; ')}`,
+      failureReason,
+    });
+    if (rowId) failedRowByKey.set(p.key, { id: rowId });
+  }
+  const recheck = await checkArticle(env, article, { checkKind: 'correction-recheck' });
+  const attempted = {
+    corrected: results.filter((r) => r.attemptedAction === 'corrected' || r.action === 'corrected').length,
+    removed: results.filter((r) => r.attemptedAction === 'removed' || r.action === 'removed').length,
+    skipped,
+  };
+  return {
+    outcome: 'failed',
+    articleId: article.id, title: article.title, division: article.division,
+    corrected: 0, removed: 0, skipped,
+    validationRejected: failureReason === 'validation-rejected',
+    truncatedCorrection: failureReason === 'truncated-correction',
+    validationReasons: reasons,
+    recoveryReport: buildRecoveryReport({
+      taskId, articleId: article.id, title: article.title,
+      rootCause, reasons, attempted, retryable, ownerAction,
+    }),
+    results: results.map((r) => (r.action === 'corrected' || r.action === 'removed'
+      ? {
+        ...r, action: 'failed', attemptedAction: r.action, correctedText: null,
+        evidenceUrl: null, recheckVerdict: null, failureReason,
+        reason: `${failureKind}: ${reasons.join('; ')}`,
+      }
+      : r)),
+    recheckVerdict: recheck.verdict, recheck,
+    note: `${failureKind} — nothing was saved; the article needs human review.`,
+  };
+}
+
+export async function runCorrection(env, article, options = {}) {
+  if (!article || !article.id) return { outcome: 'failed', error: 'Correction needs a valid article.' };
+  const taskId = options && Number.isInteger(Number(options.taskId)) ? Number(options.taskId) : null;
   const latest = await d1First(env,
     'SELECT * FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1', [article.id]);
   if (!latest) return { outcome: 'failed', error: 'No fact-check on record for this article — run a fact-check first.' };
@@ -1253,46 +1592,65 @@ export async function runCorrection(env, article) {
   // every attempted correction is recorded as a 'failed' row, and the
   // article is left for human review (the re-check below runs on the
   // unchanged body, verdict needs-review; fact_checked is never set).
-  // The failure reason is recorded in four places: this returned
-  // result (the run/task log), each correction row's corrected_text
-  // ("VALIDATION REJECTED — …"), the row's failure_reason column
-  // ('validation-rejected', migration 017 — Phase 3, Priority 2),
-  // and the results below. It is NOT in recheck_verdict: that column
-  // has a CHECK constraint allowing only verdict words, so free text
-  // would violate it.
+  // The failure reason is recorded in five places: this returned
+  // result (the run/task log), the recoveryReport, each correction
+  // row's corrected_text ("VALIDATION REJECTED — …"), the row's
+  // failure_reason column ('validation-rejected', migration 017 —
+  // Phase 3, Priority 2), and the results below. It is NOT in
+  // recheck_verdict: that column has a CHECK constraint allowing only
+  // verdict words, so free text would violate it.
+  // Outcome is 'failed' (W2 fix, 2026-11-21) — the old 'done' lied
+  // to runTask, which marked the task done with nothing saved.
   if (body !== originalBody) {
+    // Truncation guard FIRST (W2 fix): a corrected body whose tail
+    // was cut off mid-sentence/mid-word is a failed LLM output, not
+    // a body to validate or save. Temporary failure — retryable.
+    const truncation = detectTruncatedBody(originalBody, body);
+    if (truncation) {
+      return failCorrectionRun(env, article, {
+        taskId, pending, results, skipped,
+        failureKind: 'TRUNCATED CORRECTION',
+        failureReason: 'truncated-correction',
+        reasons: truncation.reasons,
+        retryable: true,
+        rootCause: 'Correction output truncated (LLM reply cut off mid-sentence/mid-word) — the assembled corrected body is incomplete.',
+        ownerAction: 'Re-run the correction: a truncated LLM output is temporary and a fresh run may complete. If it repeats, the model output is being cut off — check the token budget, do not hand-edit around it.',
+      });
+    }
+    // Absolute-signal truncation guard (Workstream A, 2026-11-21):
+    // the diff-based guard above cannot see unclosed HTML/markup or
+    // a body that lost whole sections — judge the assembled body on
+    // its own before anything is saved. minWords is 0 here: the
+    // correction diffs against the original, so a short but complete
+    // body must not be flagged — only the ending/markup signals apply.
+    // Same failure shape: nothing saved, retryable, recovery report
+    // names the cause.
+    const absoluteTruncation = isTruncatedDraftBody(body, { minWords: 0 });
+    if (absoluteTruncation) {
+      return failCorrectionRun(env, article, {
+        taskId, pending, results, skipped,
+        failureKind: 'TRUNCATED CORRECTION',
+        failureReason: 'truncated-correction',
+        reasons: absoluteTruncation.reasons,
+        retryable: true,
+        rootCause: 'Assembled corrected body is incomplete (unclosed markup, missing sections, or cut-off ending) — the correction output was truncated.',
+        ownerAction: 'Re-run the correction: a truncated LLM output is temporary and a fresh run may complete. If it repeats, the model output is being cut off — check the token budget, do not hand-edit around it.',
+      });
+    }
     const validation = validateCorrectedBody(originalBody, body, pool);
     if (!validation.ok) {
-      // Every attempted correction is recorded as a 'failed' row with
-      // failure_reason 'validation-rejected' (Phase 3, P2/P5) — via
-      // recordCorrection(), so a claim that already has an open row is
-      // updated in place instead of duplicated.
-      const failedRowByKey = new Map();
-      for (const p of pending) {
-        if (p.action === 'skipped') continue; // 'skipped' is not a valid status value — no row
-        if (p.action === 'failed' && failedRowByKey.has(p.key)) p.openRow = failedRowByKey.get(p.key);
-        const rowId = await recordCorrection(env, article.id, {
-          ...p, action: 'failed',
-          correctedText: p.action === 'failed' ? null : `VALIDATION REJECTED — ${validation.reasons.join('; ')}`,
-          failureReason: 'validation-rejected',
-        });
-        if (rowId) failedRowByKey.set(p.key, { id: rowId });
-      }
-      const recheck = await checkArticle(env, article, { checkKind: 'correction-recheck' });
-      return {
-        outcome: 'done', articleId: article.id, title: article.title, division: article.division,
-        corrected: 0, removed: 0, skipped,
-        validationRejected: true, validationReasons: validation.reasons,
-        results: results.map((r) => (r.action === 'corrected' || r.action === 'removed'
-          ? {
-            ...r, action: 'failed', attemptedAction: r.action, correctedText: null,
-            evidenceUrl: null, recheckVerdict: null, failureReason: 'validation-rejected',
-            reason: `Validation rejected the corrected body: ${validation.reasons.join('; ')}`,
-          }
-          : r)),
-        recheckVerdict: recheck.verdict, recheck,
-        note: 'Corrected body failed validation (garbled, repeated, incomplete or unsupported content) — nothing was saved; the article needs human review.',
-      };
+      return failCorrectionRun(env, article, {
+        taskId, pending, results, skipped,
+        failureKind: 'VALIDATION REJECTED',
+        failureReason: 'validation-rejected',
+        reasons: validation.reasons,
+        // PERMANENT on unchanged input: the same correction will be
+        // rejected the same way again, so this is BLOCKED_WITH_REASON
+        // — never an infinite retry.
+        retryable: false,
+        rootCause: 'Corrected body failed whole-body validation (garbled, repeated, incomplete or unsupported content).',
+        ownerAction: 'Human review: inspect the failed claims and correct by hand, or fix the underlying cause (see validation reasons) and re-run.',
+      });
     }
   }
 
@@ -1348,7 +1706,10 @@ export async function runFactChecking(task, env) {
   // re-check. Genuine corrections (kind 'correct', no recheck
   // payload) still route to runCorrection.
   if (task && task.kind === 'correct' && payload.check_kind !== 'recheck') {
-    return runCorrection(env, article);
+    // Thread the task id through so a failed correction's recovery
+    // report can name the task (W2 fix, 2026-11-21 — zero-failure
+    // records carry task id, component, root cause, timestamp).
+    return runCorrection(env, article, { taskId: task && task.id ? task.id : null });
   }
   const result = await checkArticle(env, article, { checkKind: payload.check_kind || 'initial' });
   return {

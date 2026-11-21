@@ -211,7 +211,16 @@ describe('Phase 4 — runTask lease (a run always resolves its status)', () => {
     assert.equal(result.recoveredStale, true);
     assert.match(result.error || '', /stale|stuck/i);
     const row = taskRow(db, id);
-    assert.equal(row.status, 'failed', 'the stale lock is recovered to failed');
+    // Coordinator change 2026-11-21 (owner zero-failure brief): a stale
+    // lock with attempts left RE-QUEUES automatically with backoff —
+    // the old assertion ('failed', waiting for a manual retry) is
+    // superseded by the self-healing recovery.
+    assert.equal(row.status, 'queued', 'the stale lock is recovered to queued with backoff');
+    // (terminal_state is not asserted here: this harness builds the
+    // pre-020 schema, where setTerminalState is a deliberate no-op.
+    // The RETRYING terminal state is pinned in
+    // tests/task-lifecycle.test.js, which applies migration 020.)
+    assert.ok(row.scheduled_for, 're-queued with a backoff time');
     const runs = runRowsFor(db, id);
     assert.equal(runs.length, 1);
     assert.equal(runs[0].outcome, 'failed');
@@ -246,8 +255,11 @@ describe('Phase 4 — stale-lock sweeper', () => {
     assert.equal(res.ok, true);
     const recoveredIds = (res.recovered || []).map((r) => r.taskId).sort((a, b) => a - b);
     assert.deepEqual(recoveredIds, [staleIso, staleSqlite].sort((a, b) => a - b));
-    assert.equal(taskRow(db, staleIso).status, 'failed');
-    assert.equal(taskRow(db, staleSqlite).status, 'failed');
+    // Coordinator change 2026-11-21 (owner zero-failure brief): stale
+    // locks with attempts left RE-QUEUE automatically with backoff —
+    // the old 'failed' expectation is superseded.
+    assert.equal(taskRow(db, staleIso).status, 'queued');
+    assert.equal(taskRow(db, staleSqlite).status, 'queued');
     assert.equal(taskRow(db, fresh).status, 'running', 'a fresh running task is untouched');
     assert.equal(taskRow(db, queued).status, 'queued', 'a queued task is untouched');
     for (const id of [staleIso, staleSqlite]) {
@@ -256,11 +268,16 @@ describe('Phase 4 — stale-lock sweeper', () => {
       assert.equal(runs[0].outcome, 'failed');
       assert.match(String(runs[0].detail || ''), /stale-lock/);
     }
-    // A recovered task is retryable through the existing retry endpoint.
-    const retried = await retryTask(env, staleIso);
-    assert.equal(retried.ok, true);
+    // Coordinator change 2026-11-21 (owner zero-failure brief): the
+    // recovered task is ALREADY queued with backoff — no manual retry
+    // is needed. retryTask stays for genuinely 'failed' tasks only
+    // (it 409s on a queued task), so the old retryTask call is
+    // replaced by assertions on the automatic re-queue.
     assert.equal(taskRow(db, staleIso).status, 'queued');
-    assert.equal(taskRow(db, staleIso).attempts, 0);
+    // (terminal_state RETRYING is pinned in tests/task-lifecycle.test.js
+    // — this harness builds the pre-020 schema, where setTerminalState
+    // is a deliberate no-op, so it is not asserted here.)
+    assert.ok(taskRow(db, staleIso).scheduled_for, 're-queued with a backoff time');
   });
 
   it('recoverStaleTasks via the dashboard endpoint recovers stale locks', async () => {
@@ -272,7 +289,10 @@ describe('Phase 4 — stale-lock sweeper', () => {
     assert.equal(res.body.ok, true);
     assert.equal(res.body.count, 1);
     assert.deepEqual((res.body.recovered || []).map((r) => r.taskId), [stale]);
-    assert.equal(taskRow(db, stale).status, 'failed');
+    // Coordinator change 2026-11-21 (owner zero-failure brief): stale
+    // locks RE-QUEUE automatically with backoff — 'failed' is only
+    // for retries-exhausted recoveries.
+    assert.equal(taskRow(db, stale).status, 'queued');
     assert.equal(taskRow(db, fresh).status, 'running');
   });
 
@@ -281,7 +301,9 @@ describe('Phase 4 — stale-lock sweeper', () => {
     const stale = seedTaskRow(db, { agent: 'research', kind: 'daily-research', status: 'running', updatedAt: isoMinutesAgo(20) });
     const result = await runDailyWorkflow(env);
     assert.equal(result.ok, true);
-    assert.equal(taskRow(db, stale).status, 'failed', 'the scheduler recovers the stale lock');
+    // Coordinator change 2026-11-21 (owner zero-failure brief): the
+    // stale lock RE-QUEUES with backoff instead of sitting 'failed'.
+    assert.equal(taskRow(db, stale).status, 'queued', 'the scheduler recovers the stale lock');
     assert.equal(runRowsFor(db, stale).length, 1);
   });
 });
