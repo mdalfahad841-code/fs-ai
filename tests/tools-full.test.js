@@ -30,11 +30,11 @@ const EXPECTED_IDS = [
 /* ------------------------------------------------------------------ */
 /* Loader: run the shipped tools.js in a vm sandbox.                   */
 /* ------------------------------------------------------------------ */
-function loadTools(documentStub) {
+function loadTools(documentStub, search) {
   const sandbox = {
     window: {
       FSAI: { esc: (s) => String(s == null ? '' : s), TOOLS: [] },
-      location: { search: '' },
+      location: { search: search || '' },
       history: { replaceState: () => {} },
     },
     document: documentStub,
@@ -647,5 +647,86 @@ describe('form rendering, submit, reset, mobile scroll (mini-DOM)', () => {
     assert.equal(smoothCalls, 2, 'two smooth scrollIntoView calls (result + title) must be present');
     assert.match(TOOLS_SRC, /Mobile fix: the result sits below the form/);
     assert.match(TOOLS_SRC, /Mobile: the form is now above the list/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Per-tool canonical / title / meta (autonomy fix item 4, 2026-11-22). */
+/* Same pattern as division.html: a tool reached via ?tool=<slug> gets a  */
+/* self-referencing canonical, a per-tool title and meta description; a   */
+/* bare load keeps the static bare canonical/title/meta.                  */
+/* ------------------------------------------------------------------ */
+const HEAD_TOOL_META = [
+  { id: 'percentage', name: 'Percentage Calculator', category: 'Everyday', description: 'Find a percentage of a number, or what percentage one number is of another.' },
+  { id: 'loan-payment', name: 'Loan Payment Estimator', category: 'Finance', description: 'Monthly loan payment from amount, annual rate and term.' },
+  { id: 'unit-converter', name: 'Unit Converter', category: 'Everyday', description: 'Convert length, weight and temperature between common units.' },
+];
+const BARE_CANONICAL = 'https://fs-ai-5w5.pages.dev/pages/tools';
+const BARE_DESCRIPTION = '20 free FS AI tools: fuel cost, mileage, budget, savings, loan, currency (manual rate), converters, calculators and trip planners. No sign-up, no cost.';
+
+function loadHeadTools(search) {
+  const byId = {};
+  for (const id of ['toolTitle', 'toolDescription', 'toolForm', 'toolResult', 'toolList', 'toolGridHome']) {
+    const el = new El(id === 'toolForm' ? 'form' : 'div');
+    el.id = id;
+    byId[id] = el;
+  }
+  const head = {
+    'meta[name="description"]': new El('meta'),
+    'meta[property="og:title"]': new El('meta'),
+    'meta[property="og:description"]': new El('meta'),
+    'meta[property="og:url"]': new El('meta'),
+    'link[rel="canonical"]': new El('link'),
+  };
+  head['meta[name="description"]'].setAttribute('content', BARE_DESCRIPTION);
+  head['meta[property="og:title"]'].setAttribute('content', 'Free Tools — FS AI');
+  head['meta[property="og:description"]'].setAttribute('content', BARE_DESCRIPTION);
+  head['meta[property="og:url"]'].setAttribute('content', BARE_CANONICAL);
+  head['link[rel="canonical"]'].setAttribute('href', BARE_CANONICAL);
+  let domReadyCb = null;
+  const docStub = {
+    title: 'Free Tools — FS AI',
+    addEventListener: (t, fn) => { if (t === 'DOMContentLoaded') domReadyCb = fn; },
+    getElementById: (id) => byId[id] || null,
+    createElement: (tag) => new El(tag),
+    querySelector: (sel) => head[sel] || null,
+  };
+  const FSAI = loadTools(docStub, search);
+  FSAI.TOOLS = HEAD_TOOL_META;
+  assert.ok(domReadyCb, 'tools.js must register a DOMContentLoaded handler');
+  domReadyCb();
+  return { FSAI, byId, head, doc: docStub };
+}
+
+function toolUrl(id) { return BARE_CANONICAL + '?tool=' + id; }
+
+describe('per-tool canonical / title / meta (autonomy fix item 4)', () => {
+  for (const meta of HEAD_TOOL_META) {
+    it('?tool=' + meta.id + ' sets a self-referencing canonical, per-tool title and meta description', () => {
+      const { head, doc } = loadHeadTools('?tool=' + meta.id);
+      assert.equal(doc.title, meta.name + ' — FS AI', 'document.title must be the tool name');
+      assert.equal(head['meta[name="description"]'].getAttribute('content'), meta.description, 'meta description must be the tool description');
+      assert.equal(head['meta[property="og:title"]'].getAttribute('content'), meta.name + ' — FS AI', 'og:title must be the tool name');
+      assert.equal(head['meta[property="og:description"]'].getAttribute('content'), meta.description, 'og:description must be the tool description');
+      assert.equal(head['meta[property="og:url"]'].getAttribute('content'), toolUrl(meta.id), 'og:url must be the tool URL');
+      assert.equal(head['link[rel="canonical"]'].getAttribute('href'), toolUrl(meta.id), 'canonical must be self-referencing');
+    });
+  }
+
+  it('every one of the 20 tools gets a self-referencing canonical and per-tool title when picked', () => {
+    const { FSAI, head, doc } = loadHeadTools('?tool=fuel-cost');
+    for (const def of FSAI.TOOL_DEFS) {
+      FSAI.showTool(def.id);
+      assert.equal(head['link[rel="canonical"]'].getAttribute('href'), toolUrl(def.id), def.id + ' canonical');
+      assert.equal(doc.title, def.name + ' — FS AI', def.id + ' title');
+    }
+  });
+
+  it('a bare load keeps the static bare canonical, title and meta (no ?tool=)', () => {
+    const { head, doc } = loadHeadTools('');
+    assert.equal(head['link[rel="canonical"]'].getAttribute('href'), BARE_CANONICAL, 'bare load must keep the bare canonical');
+    assert.equal(doc.title, 'Free Tools — FS AI', 'bare load must keep the generic title');
+    assert.equal(head['meta[name="description"]'].getAttribute('content'), BARE_DESCRIPTION, 'bare load must keep the generic meta description');
+    assert.equal(head['meta[property="og:url"]'].getAttribute('content'), BARE_CANONICAL, 'bare load must keep the bare og:url');
   });
 });

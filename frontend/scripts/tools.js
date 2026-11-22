@@ -467,6 +467,29 @@
       var meta = F.TOOLS.find(function (t) { return t.id === def.id; });
       desc.textContent = meta ? meta.description : '';
     }
+    // Per-tool canonical / title / meta (autonomy fix item 4, 2026-11-22):
+    // same pattern as division.html — a tool reached via ?tool=<slug> gets a
+    // self-referencing canonical, a per-tool title and meta description.
+    // A bare load (no ?tool=) keeps the static bare canonical/title/meta:
+    // the check reads location.search BEFORE the replaceState below runs, so
+    // a bare load stays bare while a later chip pick follows the new tool.
+    var toolParams = new URLSearchParams(window.location.search);
+    var loadedTool = toolParams.get('tool');
+    if (loadedTool && defById(loadedTool)) {
+      var toolCanonical = 'https://fs-ai-5w5.pages.dev/pages/tools?tool=' + def.id;
+      var toolDesc = (typeof meta !== 'undefined' && meta) ? meta.description : '';
+      document.title = def.name + ' — FS AI';
+      var descEl = document.querySelector('meta[name="description"]');
+      if (descEl && toolDesc) descEl.setAttribute('content', toolDesc);
+      var ogTitle = document.querySelector('meta[property="og:title"]');
+      if (ogTitle) ogTitle.setAttribute('content', def.name + ' — FS AI');
+      var ogDesc = document.querySelector('meta[property="og:description"]');
+      if (ogDesc && toolDesc) ogDesc.setAttribute('content', toolDesc);
+      var ogUrl = document.querySelector('meta[property="og:url"]');
+      if (ogUrl) ogUrl.setAttribute('content', toolCanonical);
+      var canon = document.querySelector('link[rel="canonical"]');
+      if (canon) canon.setAttribute('href', toolCanonical);
+    }
     if (list) {
       list.querySelectorAll('button').forEach(function (b) {
         b.classList.toggle('active', b.getAttribute('data-tool') === def.id);
