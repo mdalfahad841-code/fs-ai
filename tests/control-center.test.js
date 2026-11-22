@@ -93,7 +93,10 @@ function makeRealD1(db) {
   };
 }
 
-const NOW = '2026-11-21T12:00:00.000Z';
+// Relative to the real clock: the two "today" rows must land on the real
+// today, or the ai-usage test decays the day after it is written.
+const NOW = new Date().toISOString();
+const SIX_DAYS_AGO = new Date(Date.now() - 6 * 24 * 3600 * 1000).toISOString();
 
 function freshEnv() {
   const db = buildDb([
@@ -153,8 +156,8 @@ function freshEnv() {
     "INSERT INTO llm_usage (provider, model, purpose, outcome, tokens_in, tokens_out, neurons, created_at) VALUES ('workers-ai', '@cf/openai/gpt-oss-120b', 'fact-check-judge', 'ok', 50, 30, 47, ?)",
   ).run(NOW);
   db.prepare(
-    "INSERT INTO llm_usage (provider, model, purpose, outcome, tokens_in, tokens_out, neurons, created_at) VALUES ('workers-ai', '@cf/openai/gpt-oss-120b', 'content-draft', 'ok', 10, 10, 5, '2026-11-15T10:00:00.000Z')",
-  ).run();
+    "INSERT INTO llm_usage (provider, model, purpose, outcome, tokens_in, tokens_out, neurons, created_at) VALUES ('workers-ai', '@cf/openai/gpt-oss-120b', 'content-draft', 'ok', 10, 10, 5, ?)",
+  ).run(SIX_DAYS_AGO);
   db.prepare("INSERT INTO autonomy_settings (key, value) VALUES ('llm_daily_cap_neurons', '9000') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
   db.prepare(
     "INSERT INTO daily_reports (date, kind, summary_json) VALUES ('2026-11-21', 'daily', ?)",

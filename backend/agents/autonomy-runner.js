@@ -21,7 +21,7 @@
  *   monetization      = monetization (1:1)
  *   security-monitoring = security (1:1)
  */
-import { runResearch } from './autonomy/research.js';
+import { runResearch, runArticleFetch } from './autonomy/research.js';
 import { runContentCreation, runScaffoldRegeneration } from './autonomy/content.js';
 import { runFactChecking } from './autonomy/factcheck.js';
 import { runSeo } from './autonomy/seo.js';
@@ -128,6 +128,25 @@ export async function runAutonomyTask(task, env) {
   if (normalised.agent === 'content-creation' && normalised.kind === 'scaffold-regeneration') {
     try {
       const result = await runScaffoldRegeneration(normalised, env);
+      if (!result || typeof result !== 'object') return { outcome: 'failed', error: 'Handler returned no result.' };
+      const outcome = result.outcome === 'done' || result.outcome === 'no-op' || result.outcome === 'failed'
+        ? result.outcome : 'failed';
+      return { ...result, outcome, agent: normalised.agent };
+    } catch (err) {
+      return { outcome: 'failed', agent: normalised.agent, error: String(err && err.message ? err.message : err).slice(0, 300) };
+    }
+  }
+  // Kind-level dispatch inside the research agent: full-article
+  // evidence fetching (migration 029). Fetches ONE recorded source
+  // page for a draft article and stores its complete text as a
+  // research_items row, so regeneration and fact-checking can finally
+  // judge against the whole article instead of an RSS fragment.
+  // Invoked only via an explicit manual task (dashboard "Fetch
+  // evidence" button or the "Run a task manually" control), never by
+  // the scheduled daily run.
+  if (normalised.agent === 'research' && normalised.kind === 'article-fetch') {
+    try {
+      const result = await runArticleFetch(normalised, env);
       if (!result || typeof result !== 'object') return { outcome: 'failed', error: 'Handler returned no result.' };
       const outcome = result.outcome === 'done' || result.outcome === 'no-op' || result.outcome === 'failed'
         ? result.outcome : 'failed';

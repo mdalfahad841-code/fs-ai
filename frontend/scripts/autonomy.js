@@ -830,10 +830,15 @@
           // Protected articles (Fix 1): no automatic modification.
           // Fact-check, Re-check and SEO Check are advisory/check-only
           // and stay available; Correct and Optimize SEO are disabled
-          // here (the server also refuses them with 403).
+          // here (the server also refuses them with 403). Fetch evidence
+          // is read-only research (migration 029) — it fetches a
+          // recorded source page and stores its text as evidence; it
+          // never modifies the article body, so it stays available for
+          // protected drafts too.
           var prot = a.isProtected ? '<br><strong>PROTECTED — AUTOMATIC MODIFICATION DISABLED</strong>' : '';
           var fcBtn = '<button class="btn btn-small" type="button" data-autonomy-factcheck="' + id + '">Fact-check</button>';
           var recheckBtn = '<button class="btn btn-small" type="button" data-autonomy-recheck="' + id + '">Re-check</button>';
+          var fetchEvBtn = '<button class="btn btn-small" type="button" data-autonomy-fetch-evidence="' + id + '">Fetch evidence</button>';
           var corrBtn = a.isProtected
             ? '<button class="btn btn-small" type="button" disabled title="Protected — automatic modification disabled">Correct</button>'
             : '<button class="btn btn-small" type="button" data-autonomy-correct="' + id + '">Correct</button>';
@@ -845,7 +850,7 @@
           var detailBtn = '<button class="btn btn-small" type="button" data-autonomy-fc-detail="' + id + '">Details</button>';
           return '<tr><td><strong>' + esc(a.title || '') + '</strong><br><span class="muted">#' + id + ' · ' + esc(a.division || '') + '</span>' + prot + '</td>' +
             '<td>' + statusPill(a.status) + '</td><td>' + statusPill(gate) + '</td>' +
-            '<td>' + esc(blocked || '—') + '</td><td>' + fcBtn + ' ' + recheckBtn + ' ' + corrBtn + ' ' + seoCheckBtn + ' ' + seoOptBtn + ' ' + reviewBtn + ' ' + detailBtn + '</td></tr>';
+            '<td>' + esc(blocked || '—') + '</td><td>' + fcBtn + ' ' + recheckBtn + ' ' + fetchEvBtn + ' ' + corrBtn + ' ' + seoCheckBtn + ' ' + seoOptBtn + ' ' + reviewBtn + ' ' + detailBtn + '</td></tr>';
         }).join('') || '<tr><td colspan="5">No drafts — nothing waiting for review.</td></tr>';
       }
       if (grid) {
@@ -1385,6 +1390,8 @@
         if (fcBtn) { enqueueAgentTask('fact-checking', 'fact-check', fcBtn.getAttribute('data-autonomy-factcheck'), 'autonomyFactCheckDetail'); return; }
         var recheckBtn = e.target.closest('[data-autonomy-recheck]');
         if (recheckBtn) { recheckArticle(recheckBtn.getAttribute('data-autonomy-recheck'), recheckBtn); return; }
+        var fetchEvBtn = e.target.closest('[data-autonomy-fetch-evidence]');
+        if (fetchEvBtn) { enqueueAgentTask('research', 'article-fetch', fetchEvBtn.getAttribute('data-autonomy-fetch-evidence'), 'autonomyFactCheckDetail'); return; }
         var corrBtn = e.target.closest('[data-autonomy-correct]');
         if (corrBtn) { enqueueAgentTask('fact-checking', 'correct', corrBtn.getAttribute('data-autonomy-correct'), 'autonomyFactCheckDetail'); return; }
         var seoCheckBtn = e.target.closest('[data-autonomy-seo-check]');

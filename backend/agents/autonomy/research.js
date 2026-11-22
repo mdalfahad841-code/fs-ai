@@ -17,6 +17,12 @@
 import { d1All, slugify } from '../../middleware/validation.js';
 import { fetchFeed, normalizeTitle } from '../../rss/rss.js';
 import { fetchAllEnabledSources, loadEnabledSources } from '../../rss/sources.js';
+// Full-article evidence fetching (migration 029) is a research-agent
+// kind ('article-fetch'); the implementation lives in the service and
+// is re-exported here so the runner dispatches it like any other
+// research task. See backend/services/article-fetch.js for the
+// compliance model (robots.txt, publisher terms, SSRF, caps).
+export { runArticleFetch } from '../../services/article-fetch.js';
 
 function parsePayload(task) {
   if (!task) return {};
