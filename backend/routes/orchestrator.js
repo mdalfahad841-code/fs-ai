@@ -387,13 +387,17 @@ async function handleCreateTask(request, env) {
     priority,
     idempotency_key: body.idempotency_key || undefined,
     scheduled_for: body.scheduled_for ? new Date(body.scheduled_for).toISOString() : null,
+    // Manual dashboard enqueue only (live #33, 2026-11-22): a terminal
+    // task with the same key is re-queued for the requested work instead
+    // of being returned dead. Scheduled callers never pass this flag.
+    requeueTerminal: true,
   });
   if (!res.ok) return jsonError(res.error || 'Task could not be created.', res.status || 500);
   // Fix 8: a duplicate content-task creation carries `sourceMerge`
   // (existing-reused / sources-added / no-new-sources / rejected) so the
   // caller can tell whether its new sources were merged, duplicated, or
   // rejected. The { task, duplicate } shape is unchanged for other tasks.
-  return jsonOk({ task: res.task, duplicate: res.duplicate, ...(res.sourceMerge ? { sourceMerge: res.sourceMerge } : {}) }, res.duplicate ? 200 : 201);
+  return jsonOk({ task: res.task, duplicate: res.duplicate, ...(res.requeued ? { requeued: true } : {}), ...(res.sourceMerge ? { sourceMerge: res.sourceMerge } : {}) }, res.duplicate ? 200 : 201);
 }
 
 async function handleRunTask(request, env, id) {

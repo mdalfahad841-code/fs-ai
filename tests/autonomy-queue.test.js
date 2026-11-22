@@ -368,3 +368,141 @@ describe('autonomy status — real counts + LLM block', () => {
     assert.match(res.body.reason, /not bound|not set/);
   });
 });
+
+describe('autonomy task queue — manual re-enqueue of a terminal task (live #33, 2026-11-22)', () => {
+  // Live #33 shape: the dashboard Correct button enqueues with the dated
+  // key `manual-correct-33-2026-11-22`. The first click created task #44
+  // (kind 'correct'); its correction run #171 FAILED on the validator
+  // defect; the Re-check then reused the same row and forced its kind to
+  // 'fact-check', and run #172 finished, leaving the row status 'done',
+  // attempts 2/3. The next same-day Correct click returned that dead row
+  // unchanged ("already existed — run it from the task queue"), but a
+  // 'done' task has no Run button and the Retry button renders only for
+  // 'failed' tasks — so the correction could never be retried.
+  // A manual re-enqueue must re-queue a terminal task for the requested
+  // work instead of returning it dead. Scheduled callers are unaffected:
+  // they call enqueueTask() directly without the manual flag, so a
+  // completed daily task is never re-run by a second daily-run pass.
+  const KEY = 'manual-correct-33-2026-11-22';
+
+  async function correctViaEndpoint(env, articleId) {
+    return callAutonomy(env, 'POST', '/api/autonomy/tasks', {
+      agent: 'fact-checking', kind: 'correct',
+      payload: { article_id: articleId },
+      idempotency_key: KEY,
+    });
+  }
+
+  it('second same-day Correct enqueue re-queues the done task as a runnable correct task', async () => {
+    const { db, env } = freshEnv();
+    const first = await correctViaEndpoint(env, 33);
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    assert.equal(first.body.duplicate, false);
+    const id = first.body.task.id;
+    // Live #44 shape after runs #171 (correction failed) + #172 (re-check done).
+    db.prepare("UPDATE agent_tasks SET kind = 'fact-check', status = 'done', attempts = 2 WHERE id = ?").run(id);
+
+    const second = await correctViaEndpoint(env, 33);
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.equal(second.body.duplicate, true, 'the row is reused, not duplicated');
+    assert.equal(second.body.task.id, id, 'same task id');
+    assert.equal(second.body.requeued, true, 'manual re-enqueue of a terminal task re-queues it');
+    assert.equal(second.body.task.status, 'queued', 'terminal task is re-queued for the requested work');
+    assert.equal(second.body.task.kind, 'correct', 'kind is restored to the requested correct');
+    assert.equal(second.body.task.attempts, 0, 'attempts reset like an explicit owner retry');
+    assert.equal(second.body.task.scheduled_for, null, 'no backoff: runs when the owner runs it');
+
+    const row = db.prepare('SELECT status, kind, attempts, scheduled_for FROM agent_tasks WHERE id = ?').get(id);
+    assert.equal(row.status, 'queued');
+    assert.equal(row.kind, 'correct');
+    assert.equal(row.attempts, 0);
+    assert.equal(row.scheduled_for, null);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM agent_tasks').get().n, 1, 'still exactly one row');
+  });
+
+  it('a failed terminal task re-queues too (attempts reset, terminal state cleared)', async () => {
+    const { db, env } = freshEnv();
+    const first = await correctViaEndpoint(env, 33);
+    const id = first.body.task.id;
+    db.prepare("UPDATE agent_tasks SET status = 'failed', attempts = 3 WHERE id = ?").run(id);
+    db.prepare("INSERT INTO agent_runs (task_id, agent, started_at, finished_at, outcome, detail) VALUES (?, 'fact-checking', '2026-11-22T06:45:00.000Z', '2026-11-22T06:46:00.000Z', 'failed', '{}')").run(id);
+
+    const second = await correctViaEndpoint(env, 33);
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.equal(second.body.requeued, true);
+    assert.equal(second.body.task.status, 'queued');
+    assert.equal(second.body.task.attempts, 0);
+    const row = db.prepare('SELECT status, attempts FROM agent_tasks WHERE id = ?').get(id);
+    assert.equal(row.status, 'queued');
+    assert.equal(row.attempts, 0);
+  });
+
+  it('second enqueue while the task is queued returns the existing row unchanged (no duplicate run)', async () => {
+    const { db, env } = freshEnv();
+    const first = await correctViaEndpoint(env, 33);
+    assert.equal(first.status, 201);
+    const second = await correctViaEndpoint(env, 33);
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.equal(second.body.duplicate, true);
+    assert.equal(second.body.task.id, first.body.task.id);
+    assert.equal(second.body.task.status, 'queued');
+    assert.equal(second.body.task.kind, 'correct');
+    assert.equal(second.body.task.attempts, 0);
+    assert.equal(second.body.requeued, undefined, 'a queued task is NOT re-queued');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM agent_tasks').get().n, 1);
+  });
+
+  it('second enqueue while the task is running returns the existing row unchanged', async () => {
+    const { db, env } = freshEnv();
+    const first = await correctViaEndpoint(env, 33);
+    const id = first.body.task.id;
+    db.prepare("UPDATE agent_tasks SET status = 'running', attempts = 1 WHERE id = ?").run(id);
+    const second = await correctViaEndpoint(env, 33);
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.equal(second.body.duplicate, true);
+    assert.equal(second.body.task.id, id);
+    assert.equal(second.body.task.status, 'running');
+    assert.equal(second.body.task.attempts, 1, 'attempts untouched while running');
+    assert.equal(second.body.requeued, undefined, 'a running task is NOT re-queued');
+  });
+
+  it('a done content-creation task is NOT re-queued by a manual duplicate (Fix 8 precedence)', async () => {
+    const { db, env } = freshEnv();
+    const title = 'How AI Assistants Help Small Teams Every Day';
+    const key = 'manual-content-how-ai-assistants-help-small-teams-every-day-2026-11-22';
+    const first = await callAutonomy(env, 'POST', '/api/autonomy/tasks', {
+      agent: 'content-creation', kind: 'daily-content',
+      payload: { title, division: 'automotive', sources: ['https://example.com/ai-assistants-small-teams'] },
+      idempotency_key: key,
+    });
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    const id = first.body.task.id;
+    db.prepare("UPDATE agent_tasks SET status = 'done' WHERE id = ?").run(id);
+
+    const second = await callAutonomy(env, 'POST', '/api/autonomy/tasks', {
+      agent: 'content-creation', kind: 'daily-content',
+      payload: { title, division: 'automotive', sources: ['https://example.com/ai-assistants-new-source'] },
+      idempotency_key: key,
+    });
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.equal(second.body.duplicate, true);
+    assert.equal(second.body.task.id, id);
+    assert.equal(second.body.task.status, 'done', 'a done content task stays done');
+    assert.equal(second.body.requeued, undefined, 'content tasks never re-queue through the duplicate path');
+    assert.equal(second.body.sourceMerge.status, 'rejected', 'Fix 8: sources cannot reach an already-converted article');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM agent_tasks').get().n, 1);
+  });
+
+  it('enqueueTask without the manual flag still returns a done task unchanged (scheduled callers unaffected)', async () => {
+    const { db, env } = freshEnv();
+    const a = await enqueueTask(env, { agent: 'seo', kind: 'seo-pass', payload: { article_id: 1 }, idempotency_key: 'sched-dedupe' });
+    assert.equal(a.ok, true);
+    db.prepare("UPDATE agent_tasks SET status = 'done' WHERE id = ?").run(a.task.id);
+    const b = await enqueueTask(env, { agent: 'seo', kind: 'seo-pass', payload: { article_id: 1 }, idempotency_key: 'sched-dedupe' });
+    assert.equal(b.ok, true);
+    assert.equal(b.duplicate, true);
+    assert.equal(b.task.id, a.task.id);
+    assert.equal(b.task.status, 'done', 'without the manual flag a terminal task is returned dead, as before');
+    assert.equal(b.requeued, undefined);
+  });
+});

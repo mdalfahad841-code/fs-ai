@@ -388,6 +388,13 @@ async function logSkip(env, agent, reason) {
  * history preserved — but valid new source URLs are merged into the
  * existing task's payload (see mergeContentTaskSources), so the content
  * run, which re-reads the task row, sees every source.
+ *
+ * Manual re-enqueue exception (live #33, 2026-11-22): when
+ * `requeueTerminal` is set (manual dashboard enqueue only — scheduled
+ * callers never pass it), a duplicate whose row is terminal
+ * (done/failed/skipped) is re-queued for the requested work instead of
+ * being returned dead. Queued/running duplicates are still returned
+ * unchanged, and content tasks keep the Fix 8 merge path.
  */
 const CONTENT_TASK_SOURCE_LIMIT = 10; // matches the dashboard's 10-source cap
 
@@ -508,20 +515,47 @@ async function mergeContentTaskSources(env, existingRow, newPayload, newDivision
 }
 
 // Shared duplicate return: a content task gets its sources merged
-// (Fix 8); every other task returns the existing row unchanged.
-async function duplicateTaskResult(env, row, payload, division_id) {
+// (Fix 8); every other task returns the existing row unchanged —
+// UNLESS the caller is a manual dashboard re-enqueue (requeueTerminal)
+// and the existing row is terminal (done/failed/skipped). Live #33,
+// 2026-11-22: the dashboard Correct button re-uses the dated key
+// `manual-correct-<id>-<date>`, so a second same-day click returned the
+// finished task #44 unchanged ("already existed — run it from the task
+// queue") — but a 'done' task has no Run button and Retry renders only
+// for 'failed', so the correction could never be retried. A manual
+// re-enqueue re-queues the terminal row for the requested work instead:
+// status queued, kind + payload restored to the request, attempts reset
+// to 0 (the explicit-owner-retry precedent from retryTask) and the
+// terminal state cleared, so the task can reach a fresh terminal state.
+// Queued/running rows are never touched (genuine double-click
+// protection), content tasks keep the Fix 8 merge path, and scheduled
+// callers never pass the flag, so a completed daily task is never
+// re-run by a second daily-run pass.
+async function duplicateTaskResult(env, row, payload, division_id, opts = {}) {
   const merged = await mergeContentTaskSources(env, row, payload || {}, division_id);
   if (merged) return { ok: true, task: merged.task, duplicate: true, sourceMerge: merged.sourceMerge };
-  return { ok: true, task: normaliseTaskRow(row), duplicate: true };
+  const existing = normaliseTaskRow(row);
+  if (opts.requeueTerminal && ['done', 'failed', 'skipped'].includes(existing.status)) {
+    const now = nowIso();
+    await d1Run(env,
+      "UPDATE agent_tasks SET agent = ?, kind = ?, payload = ?, division_id = ?, priority = ?, status = 'queued', attempts = 0, scheduled_for = ?, updated_at = ? WHERE id = ?",
+      [opts.agent, opts.kind, JSON.stringify(payload || {}), division_id, opts.priority ?? 5, opts.scheduled_for ?? null, now, existing.id]);
+    // Explicit owner retry is the ONLY reset: clear the old terminal
+    // state so the re-queued task can reach a fresh terminal state.
+    await clearTerminalState(env, existing.id);
+    const fresh = await d1First(env, 'SELECT * FROM agent_tasks WHERE id = ? LIMIT 1', [existing.id]);
+    return { ok: true, task: normaliseTaskRow(fresh || existing), duplicate: true, requeued: true };
+  }
+  return { ok: true, task: existing, duplicate: true };
 }
 
-export async function enqueueTask(env, { agent, kind, payload = {}, division_id = null, priority = 5, idempotency_key, scheduled_for = null }) {
+export async function enqueueTask(env, { agent, kind, payload = {}, division_id = null, priority = 5, idempotency_key, scheduled_for = null, requeueTerminal = false }) {
   if (!env || !env.DB) return { ok: false, status: 503, error: 'D1 database is not bound.' };
   if (!agent || typeof agent !== 'string') return { ok: false, status: 400, error: 'agent is required.' };
   if (!kind || typeof kind !== 'string') return { ok: false, status: 400, error: 'kind is required.' };
   const key = idempotency_key || `manual-${agent}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const existing = await d1First(env, 'SELECT * FROM agent_tasks WHERE idempotency_key = ? LIMIT 1', [key]);
-  if (existing) return duplicateTaskResult(env, existing, payload, division_id);
+  if (existing) return duplicateTaskResult(env, existing, payload, division_id, { requeueTerminal, agent, kind, priority, scheduled_for });
   const now = nowIso();
   try {
     const result = await d1Run(env,
@@ -534,7 +568,7 @@ export async function enqueueTask(env, { agent, kind, payload = {}, division_id 
     // Race on the UNIQUE key: re-read and return the existing row.
     if (/UNIQUE|unique/i.test(String(err && err.message ? err.message : ''))) {
       const row = await d1First(env, 'SELECT * FROM agent_tasks WHERE idempotency_key = ? LIMIT 1', [key]);
-      if (row) return duplicateTaskResult(env, row, payload, division_id);
+      if (row) return duplicateTaskResult(env, row, payload, division_id, { requeueTerminal, agent, kind, priority, scheduled_for });
     }
     return { ok: false, status: 500, error: String(err && err.message ? err.message : err).slice(0, 200) };
   }
