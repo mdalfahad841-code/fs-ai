@@ -1035,8 +1035,24 @@ function evidenceIssues(newSentences, evidencePool, originalBody) {
  */
 export function validateCorrectedBody(originalBody, correctedBody, evidencePool) {
   const reasons = [];
-  const originalSentences = splitSentences(originalBody);
-  const correctedSentences = splitSentences(correctedBody);
+  // Citation-glue fix (live #33, 2026-11-22): a Sources bullet that
+  // ends in a bare URL has no terminal punctuation, so splitSentences
+  // glues it to the FOLLOWING paragraph ("...875256/ For readers
+  // interested ..."). The URL is pre-existing citation scaffolding,
+  // but any correction rewriting a claim inside that paragraph changes
+  // the glued element, so the "pre-existing" exemption breaks and the
+  // URL is flagged as a newly introduced defect (fragment + raw-url +
+  // unsupported number 875256) — the correction can never succeed on
+  // such an article. stripCitationLines is the shared definition of
+  // what is a citation (extractClaims and paragraphIssues already use
+  // it): judge the PROSE on both sides, so citation scaffolding can
+  // neither be blamed on the correction nor hide a genuine prose
+  // defect. A raw URL inside a prose sentence is still flagged
+  // (stripCitationLines only drops whole citation-only lines), and the
+  // candidate-level URL rejection (isValidReplacementSentence) still
+  // bars any URL from entering through a rewrite.
+  const originalSentences = splitSentences(stripCitationLines(originalBody));
+  const correctedSentences = splitSentences(stripCitationLines(correctedBody));
   if (correctedSentences.length === 0 && originalSentences.length > 0) {
     reasons.push('corrected body has no complete sentences left');
   }

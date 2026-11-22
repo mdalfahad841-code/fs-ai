@@ -21,6 +21,21 @@
 //     detectTruncatedBody catches a mid-sentence / mid-word cut-off
 //     before validation, as a failed (retryable) run.
 //
+//  5. Citation-glued bare URL (live #33, 2026-11-22): a Sources bullet
+//     that ends in a bare URL has no terminal punctuation, so
+//     splitSentences glues it to the FOLLOWING paragraph ("...875256/
+//     For readers interested ..."). The URL is pre-existing citation
+//     scaffolding, but any correction rewriting a claim inside that
+//     paragraph changed the glued element, so the "pre-existing"
+//     exemption broke and the URL was flagged as a newly introduced
+//     defect (fragment + raw-url + unsupported number 875256) — the
+//     correction could never succeed. validateCorrectedBody now strips
+//     citation lines (stripCitationLines, the shared definition of a
+//     citation) before splitting sentences, so it judges the prose on
+//     both sides. A raw URL inside a prose sentence is still flagged,
+//     and the candidate-level URL rejection still bars any URL from
+//     entering through a rewrite.
+//
 // Real SQLite database (schema + seed + migrations 005/006/008/009/
 // 010/011/012 — same harness as tests/factcheck-correction-quality.
 // test.js). The LLM is stubbed through env.AI. Throwaway articles
@@ -324,5 +339,109 @@ describe('runCorrection — validation rejection is a FAILED run, not a done one
     assert.match(body, /14 million/);
     assert.ok(body.includes('[The Guardian](https://example.com/ev-guide)'), 'citation tail preserved');
     assert.ok(!body.includes('20 million'));
+  });
+});
+
+describe('validateCorrectedBody — citation-glued bare URL (live #33)', () => {
+  // The exact #33 shape in miniature: a Sources bullet ending in a bare
+  // URL (numeric article id 875256), followed by the paragraph whose
+  // claim the correction rewrites. Before the fix this failed
+  // validation with the same three reasons as live run #171
+  // (fragment + raw-url + unsupported number 875256) even though the
+  // rewrite itself was clean — the URL is pre-existing citation
+  // scaffolding, glued to the paragraph by splitSentences.
+  const MSTATE_URL = 'https://www.highereddive.com/news/m-states-detroit-lakes-campus-to-close-amid-systemwide-budget-woes/875256/';
+  const MSTATE_POOL = [{
+    url: MSTATE_URL,
+    title: 'M State Detroit Lakes closure',
+    text: 'The campus will close in the summer of 2028 after a systemwide vote. The campus serves just over 100 students. The system faces a budget shortfall of 100 million dollars this year, with operating savings of 1 million dollars a year.',
+    isOutdated: false,
+  }];
+  const MSTATE_BODY = [
+    '## Introduction',
+    '',
+    'The campus will close in the summer of 2028 after a systemwide vote. The campus serves just over 100 students.',
+    '',
+    '## Sources and further reading',
+    '',
+    `- Higher Ed Dive. "M State's Detroit Lakes campus to close amid systemwide budget woes." *Higher Ed Dive*, 19 Nov 2026. ${MSTATE_URL}`,
+    '',
+    'The system faces a budget shortfall of 50 million dollars this year.',
+    '',
+    '## Key takeaways',
+    '',
+    '- **Closure announced:** Detroit Lakes campus will close in summer 2028 after a systemwide vote.',
+    '',
+    'Sources:',
+    `- ${MSTATE_URL}`,
+  ].join('\n');
+  const MSTATE_FIXED = MSTATE_BODY.replace(
+    'The system faces a budget shortfall of 50 million dollars this year.',
+    'The system faces a budget shortfall of 100 million dollars this year.',
+  );
+
+  it('a rewrite inside a paragraph glued to a bare-URL citation line passes', () => {
+    const v = validateCorrectedBody(MSTATE_BODY, MSTATE_FIXED, MSTATE_POOL);
+    assert.equal(v.ok, true, `glued-citation rewrite must pass, got: ${v.reasons.join(' | ')}`);
+    assert.deepEqual(v.reasons, []);
+    assert.ok(!v.reasons.some((r) => /875256|raw URL/.test(r)), 'no URL reason may survive');
+  });
+
+  it('a genuinely NEW mid-sentence raw URL is still rejected', () => {
+    // The fix must not blind the validator: a URL the correction
+    // itself introduces into the prose (not a pre-existing citation
+    // line) still fails.
+    const original = 'EV sales reached 20 million units worldwide in 2023, according to industry reports.';
+    const corrected = 'EV sales reached 14 million units worldwide in 2023, see https://example.com/report for details.';
+    const v = validateCorrectedBody(original, corrected, EV_POOL);
+    assert.equal(v.ok, false, 'a new mid-sentence URL must still fail validation');
+    assert.ok(v.reasons.some((r) => /raw URL/.test(r)), `got: ${v.reasons.join(' | ')}`);
+  });
+
+  it('runCorrection succeeds end to end on the #33 shape and preserves the sources lines', async () => {
+    const { db, env } = freshEnv();
+    insertResearchItem(db, {
+      title: 'M State Detroit Lakes closure',
+      summary: 'The campus will close in the summer of 2028. The system faces a budget shortfall of 100 million dollars this year.',
+      evidence: MSTATE_POOL[0].text,
+      url: MSTATE_URL,
+    });
+    const id = insertArticle(db, MSTATE_BODY);
+    addArticleSource(db, id, MSTATE_URL);
+    const first = await checkArticle(env, loadArticle(db, id));
+    assert.equal(first.claimsFailed, 1, 'only the wrong-number claim fails');
+    stubAi(env, 'The system faces a budget shortfall of 100 million dollars this year.');
+    const r = await runCorrection(env, loadArticle(db, id));
+    assert.equal(r.outcome, 'done', `glued-citation correction must succeed now, got: ${JSON.stringify(r.validationReasons || r)}`);
+    assert.equal(r.corrected, 1);
+    assert.equal(r.removed, 0);
+    const body = db.prepare('SELECT body FROM articles WHERE id = ?').get(id).body;
+    assert.match(body, /100 million/);
+    assert.ok(!body.includes('50 million'));
+    // Both pre-existing sources lines survive the correction untouched.
+    assert.equal(body.split(MSTATE_URL).length - 1, 2, 'both sources URL lines must be preserved');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM article_revisions').get().n, 1, 'one revision row preserves the original body');
+  });
+
+  it('a rewrite containing a raw URL is never inserted — the claim is removed instead', async () => {
+    // The candidate-level guard (isValidReplacementSentence) rejects
+    // any rewrite containing a URL, so the correction falls through
+    // to removal: the saved body must never contain the rewrite's URL.
+    const { db, env } = freshEnv();
+    seedEvEvidence(db);
+    const originalBody = 'EV sales reached 20 million units worldwide in 2023, according to industry reports.\n\nA home charger typically adds about 40 kilometres of range per hour of charging.';
+    const id = insertArticle(db, originalBody);
+    addArticleSource(db, id, 'https://example.com/source-1');
+    const first = await checkArticle(env, loadArticle(db, id));
+    assert.equal(first.claimsFailed, 1, 'only the wrong-number claim fails');
+    stubAi(env, 'EV sales reached 14 million units worldwide in 2023, see https://example.com/report for details.');
+    const r = await runCorrection(env, loadArticle(db, id));
+    assert.equal(r.outcome, 'done', `URL-rewrite correction must complete by removal, got: ${JSON.stringify(r.validationReasons || r)}`);
+    assert.equal(r.corrected, 0, 'a URL rewrite must never count as corrected');
+    assert.equal(r.removed, 1);
+    const body = db.prepare('SELECT body FROM articles WHERE id = ?').get(id).body;
+    assert.ok(!body.includes('https://example.com/report'), 'the rewrite URL must not reach the saved body');
+    assert.ok(!body.includes('20 million'));
+    assert.match(body, /40 kilometres/);
   });
 });
