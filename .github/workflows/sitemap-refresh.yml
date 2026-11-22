@@ -1,0 +1,50 @@
+# FS AI — scheduled sitemap refresh (Phase 2, 2026-11-22).
+#
+# Regenerates the committed sitemaps from the live published list and
+# commits ONLY when a file changed, so a newly auto-published article
+# reaches the served sitemap within ~1 hour of publishing. The push
+# triggers the existing Pages auto-deploy.
+#
+# Live source: the Worker's public GET /api/articles endpoint
+# (--from-api). No secret, no wrangler auth, no Cloudflare token: the
+# endpoint is public and read-only. --require-live makes a failed live
+# fetch (or a non-'d1' source) exit 1 instead of silently writing a
+# static-only sitemap. The workflow triggers on schedule and on demand
+# only — never on push — so its own commit cannot re-trigger it.
+name: Refresh sitemap
+
+on:
+  schedule:
+    - cron: '0 * * * *' # hourly
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sitemap-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh-sitemap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Regenerate sitemap from the live published list
+        run: node scripts/regenerate-sitemap.mjs --from-api --require-live
+      - name: Commit only if the sitemap changed
+        run: |
+          if git diff --quiet -- public/sitemap.xml frontend/sitemap.xml; then
+            echo "sitemap unchanged — nothing to commit"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add public/sitemap.xml frontend/sitemap.xml
+            git commit -m "FS AI: refresh sitemap from live published articles"
+            git push
+          fi
