@@ -63,17 +63,25 @@
   document.addEventListener('DOMContentLoaded', function () {
     var canvas = document.getElementById('divisionChart');
     if (canvas) {
-      /* Canvas needs layout first; draw after a tick so clientWidth is real. */
-      setTimeout(function () { drawDivisionChart(canvas); }, 50);
       window.addEventListener('resize', function () { drawDivisionChart(canvas); });
       /* Redraw when the theme changes so label colours follow the theme. */
       window.addEventListener('fsai:theme-change', function () { drawDivisionChart(canvas); });
     }
-    var fallback = document.getElementById('divisionChartFallback');
-    if (fallback && window.FSAI) {
-      fallback.innerHTML = window.FSAI.countsByDivision().map(function (d) {
-        return '<li>' + window.FSAI.esc(d.division) + ': ' + d.count + ' article' + (d.count === 1 ? '' : 's') + '</li>';
-      }).join('');
-    }
+    /* Phase 2: draw from the merged counts, so a newly published article
+       is counted. The fallback resolves immediately when liveReady is
+       absent (old cached app.js). */
+    var liveReady = (window.FSAI && window.FSAI.liveReady) || Promise.resolve();
+    liveReady.then(function () {
+      if (canvas) {
+        /* Canvas needs layout first; draw after a tick so clientWidth is real. */
+        setTimeout(function () { drawDivisionChart(canvas); }, 50);
+      }
+      var fallback = document.getElementById('divisionChartFallback');
+      if (fallback && window.FSAI) {
+        fallback.innerHTML = window.FSAI.countsByDivision().map(function (d) {
+          return '<li>' + window.FSAI.esc(d.division) + ': ' + d.count + ' article' + (d.count === 1 ? '' : 's') + '</li>';
+        }).join('');
+      }
+    });
   });
 })();

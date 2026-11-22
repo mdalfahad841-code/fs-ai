@@ -48,6 +48,11 @@
 <script src="../scripts/animations.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+  /* Phase 2: wait for the live merge so a newly published article is
+     listed instead of missing. Fallback resolves immediately when
+     liveReady is absent (old cached app.js). */
+  var liveReady = (window.FSAI && window.FSAI.liveReady) || Promise.resolve();
+  liveReady.then(function () {
   var params = new URLSearchParams(window.location.search);
   var id = params.get('division');
   var state = window.FSAI.divisionPageState(id);
@@ -111,6 +116,7 @@ document.addEventListener('DOMContentLoaded', function () {
     heading.textContent = 'Latest articles';
     window.FSAI.renderArticles(grid);
   }
+  });
 });
 </script>
 </body>

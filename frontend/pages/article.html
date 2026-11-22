@@ -48,6 +48,12 @@
 <script src="../scripts/animations.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+  /* Phase 2: wait for the live merge so a newly published article is
+     found by articleById instead of showing "Article not found". The
+     fallback resolves immediately when liveReady is absent (old cached
+     app.js) — the page then renders from the static bundle as before. */
+  var liveReady = (window.FSAI && window.FSAI.liveReady) || Promise.resolve();
+  liveReady.then(function () {
   var params = new URLSearchParams(window.location.search);
   var a = window.FSAI.articleById(params.get('id'));
   var body = document.getElementById('articleBody');
@@ -142,6 +148,7 @@ document.addEventListener('DOMContentLoaded', function () {
       '<h3><a href="article?id=' + x.id + '">' + window.FSAI.esc(x.title) + '</a></h3>' +
       '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time> <span class="article-no">' + window.FSAI.articleNo(x.id) + '</span></article>';
   }).join('') || '<p>No other articles in this division yet.</p>';
+  });
 });
 </script>
 </body>

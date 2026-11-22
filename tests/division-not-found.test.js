@@ -172,8 +172,12 @@ describe('frontend-data path: shipped division.html rendered', () => {
     assert.ok(DIVISION_HTML.includes('id="divisionBackLinks"'), 'page must have the #divisionBackLinks element');
   });
 
-  it('?division=nope shows "Division not found" with a link back to all divisions', () => {
+  it('?division=nope shows "Division not found" with a link back to all divisions', async () => {
     const { els, document } = runDivisionPage('?division=nope');
+    // Phase 2: the page render waits on FSAI.liveReady (a resolved promise
+    // here — no fetch in this sandbox), so flush the microtask queue
+    // before asserting, exactly as a browser would before painting.
+    await new Promise((r) => setImmediate(r));
     assert.equal(document.title, 'Division not found — FS AI');
     assert.equal(els.divisionTitle.textContent, 'Division not found');
     assert.match(els.divisionIntro.textContent, /nope/, 'message must name the requested slug');
@@ -188,8 +192,9 @@ describe('frontend-data path: shipped division.html rendered', () => {
     assert.match(els.divisionBackLinks.innerHTML, /href="\.\.\/"/, 'Back to home must be kept');
   });
 
-  it('?division=automotive still renders that division and its articles', () => {
+  it('?division=automotive still renders that division and its articles', async () => {
     const { els, document } = runDivisionPage('?division=automotive');
+    await new Promise((r) => setImmediate(r)); // Phase 2: flush the liveReady microtask (see above)
     assert.equal(document.title, 'Automotive — FS AI');
     assert.match(els.divisionTitle.textContent, /Automotive/);
     assert.equal(els.divisionArticlesHeading.textContent, 'Articles in Automotive');
@@ -203,8 +208,9 @@ describe('frontend-data path: shipped division.html rendered', () => {
     assert.match(els.divisionBanner.innerHTML, /background:#2878FF/);
   });
 
-  it('no ?division= still renders the all-divisions view with latest articles', () => {
+  it('no ?division= still renders the all-divisions view with latest articles', async () => {
     const { els, document } = runDivisionPage('');
+    await new Promise((r) => setImmediate(r)); // Phase 2: flush the liveReady microtask (see above)
     assert.equal(document.title, 'Divisions — FS AI');
     assert.equal(els.divisionTitle.textContent, 'All divisions');
     assert.equal(els.divisionArticlesHeading.textContent, 'Latest articles');

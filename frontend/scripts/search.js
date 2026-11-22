@@ -61,9 +61,14 @@
     input.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); run(); results.scrollIntoView({ behavior: 'smooth' }); }
     });
-    /* Pre-fill from ?q= when arriving from another page's search box. */
+    /* Pre-fill from ?q= when arriving from another page's search box.
+       Phase 2: wait for the live merge so a preset query can match a
+       newly published article too. */
     var params = new URLSearchParams(window.location.search);
     var preset = params.get('q');
-    if (preset) { input.value = preset; run(); }
+    if (preset) {
+      var liveReady = (window.FSAI && window.FSAI.liveReady) || Promise.resolve();
+      liveReady.then(function () { input.value = preset; run(); });
+    }
   });
 })();

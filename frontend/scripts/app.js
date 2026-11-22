@@ -237,11 +237,136 @@
     return cleaned === body ? body : cleaned;
   }
 
+  /* Live articles (Phase 2, 2026-11-22): the public pages read the live
+     published list from the Worker (GET /api/articles, published-only,
+     D1-backed) and merge it over the static bundle, so a newly
+     auto-published article appears without a manual deploy.
+     Merge rule — VERIFIED against the live endpoint 2026-11-23: the D1
+     rows for the existing 25 do NOT match the static bundle (different
+     excerpts, different published dates, punctuation variants in 10
+     bodies). The static bundle is the displayed, verified content, and
+     existing URLs must keep the same content — so for ids present in
+     both, the static object is kept EXACTLY as-is. Live rows only ADD
+     ids the bundle does not have. Static-only ids are kept, so a partial
+     or empty live response can never delete an article. This makes the
+     merge byte-identical on the existing 25; a D1 correction to an
+     already-published article does NOT surface through this loader
+     (known limitation — it would need a static-bundle timestamp to
+     compare against, which does not exist yet).
+     Field mapping: the live row carries `division` (slug) and
+     `division_name`; the frontend carries `division` (name). The live
+     row has no `category` (the D1 table holds only category_id), so a
+     new article's category is ''. publishedAt (or published_at) is
+     normalised to a YYYY-MM-DD date. The body is rendered by the exact
+     same code path as a static article's body — there is no second
+     renderer. On ANY failure the static bundle is used exactly as today.
+     In-memory only: nothing is persisted, so there is no stale data
+     across visits. */
+  var LIVE_API_URL = 'https://fs-ai.mdalfahad841.workers.dev/api/articles?limit=100';
+  var LIVE_TIMEOUT_MS = 5000;
+
+  function divisionNameForSlug(slug) {
+    var d = DIVISIONS.find(function (x) { return x.id === slug; });
+    return d ? d.name : '';
+  }
+
+  function mapLiveArticle(row) {
+    if (!row || typeof row !== 'object') return null;
+    var id = Number(row.id);
+    if (!id || !isFinite(id)) return null;
+    if (typeof row.title !== 'string' || row.title.trim() === '') return null;
+    var publishedAt = (typeof row.publishedAt === 'string') ? row.publishedAt : ((typeof row.published_at === 'string') ? row.published_at : '');
+    var date = (/^\d{4}-\d{2}-\d{2}/.test(publishedAt)) ? publishedAt.slice(0, 10) : '';
+    var divisionName = (typeof row.division_name === 'string' && row.division_name) ? row.division_name : divisionNameForSlug(row.division);
+    if (!divisionName) return null; /* unplaceable row (no division name and unknown slug) — skip, never render half-mapped */
+    var a = {
+      id: id,
+      title: row.title,
+      division: divisionName,
+      category: '',
+      date: date,
+      excerpt: (typeof row.excerpt === 'string') ? row.excerpt : '',
+      body: (typeof row.body === 'string') ? row.body : ''
+    };
+    if (typeof row.slug === 'string' && row.slug) a.slug = row.slug;
+    if (typeof row.disclaimer === 'string' && row.disclaimer) a.disclaimer = row.disclaimer;
+    return a;
+  }
+
+  function mergeLiveArticles(staticList, liveRows) {
+    var byId = {};
+    var i;
+    for (i = 0; i < staticList.length; i += 1) byId[staticList[i].id] = staticList[i];
+    var merged = staticList.slice();
+    var added = [];
+    var rows = Array.isArray(liveRows) ? liveRows : [];
+    for (i = 0; i < rows.length; i += 1) {
+      var mapped = mapLiveArticle(rows[i]);
+      if (!mapped) continue;
+      if (byId[mapped.id]) continue; /* shared id: static wins, kept exactly */
+      byId[mapped.id] = mapped;
+      added.push(mapped);
+    }
+    added.sort(function (a, b) { return a.id - b.id; });
+    for (i = 0; i < added.length; i += 1) merged.push(added[i]);
+    return merged;
+  }
+
+  function applyLiveArticles(liveRows) {
+    var merged = mergeLiveArticles(ARTICLES, liveRows);
+    if (merged.length === ARTICLES.length) return false; /* nothing new */
+    /* Replace the array contents IN PLACE: window.FSAI.ARTICLES and every
+       closure over ARTICLES keep pointing at the same array object. */
+    ARTICLES.length = 0;
+    for (var i = 0; i < merged.length; i += 1) ARTICLES.push(merged[i]);
+    /* Division card counts are data-driven from the merged list. */
+    DIVISIONS.forEach(function (d) { d.articleCount = articlesByDivision(d.name).length; });
+    return true;
+  }
+
+  /* The fetch starts at parse time (app.js loads synchronously, before the
+     page scripts), so it usually resolves before DOMContentLoaded. The
+     promise ALWAYS resolves — true when live articles were merged, false
+     otherwise — so a render waiting on it can never hang: the wait is
+     bounded by the 5 s timeout even if AbortController is unavailable. */
+  var liveReady = (function () {
+    if (typeof fetch !== 'function') return Promise.resolve(false);
+    var controller = null;
+    if (typeof AbortController !== 'undefined') {
+      try { controller = new AbortController(); } catch (e) { controller = null; }
+    }
+    var timeoutId = null;
+    var fetched = fetch(LIVE_API_URL, { cache: 'no-store', signal: controller ? controller.signal : undefined })
+      .then(function (res) {
+        if (!res || !res.ok) return null;
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data || !Array.isArray(data.articles)) return false;
+        return applyLiveArticles(data.articles);
+      })
+      .catch(function () { return false; });
+    var timeout = (typeof setTimeout === 'function')
+      ? new Promise(function (resolve) {
+          timeoutId = setTimeout(function () {
+            if (controller) { try { controller.abort(); } catch (e) { /* already settled */ } }
+            resolve(false);
+          }, LIVE_TIMEOUT_MS);
+        })
+      : null;
+    var raced = timeout ? Promise.race([fetched, timeout]) : fetched;
+    return raced.then(function (ok) {
+      if (timeoutId !== null && typeof clearTimeout === 'function') clearTimeout(timeoutId);
+      return !!ok;
+    });
+  })();
+
   window.FSAI = {
     SITE: SITE, DIVISIONS: DIVISIONS, ARTICLES: ARTICLES, TOOLS: TOOLS, AGENTS: AGENTS, ACCOUNTS: ACCOUNTS,
     DISCLAIMER: GENERAL_DISCLAIMER,
     divisionById: divisionById, divisionPageState: divisionPageState, articlesByDivision: articlesByDivision, articleById: articleById,
-    countsByDivision: countsByDivision, formatDate: formatDate, esc: esc, stripDraftBanner: stripDraftBanner
+    countsByDivision: countsByDivision, formatDate: formatDate, esc: esc, stripDraftBanner: stripDraftBanner,
+    liveReady: liveReady, mapLiveArticle: mapLiveArticle, mergeLiveArticles: mergeLiveArticles, applyLiveArticles: applyLiveArticles
   };
 
   /* Shared rendering: header, footer, division grid, article cards, tools grid. */
@@ -363,7 +488,11 @@
   };
   window.FSAI.renderHeroPreview = renderHeroPreview;
 
-  document.addEventListener('DOMContentLoaded', function () {
+  /* Shared rendering waits for the live merge (Phase 2): the grids, hero
+     and footer must see the merged list, not the static-only one. The wait
+     is bounded by the 5 s fetch timeout, and resolves immediately when
+     there is no fetch (old browser / offline test sandbox). */
+  function renderShared() {
     var h = document.getElementById('siteHeader');
     if (h) h.innerHTML = renderHeader(h.getAttribute('data-active') || 'Home');
     var f = document.getElementById('siteFooter');
@@ -378,5 +507,8 @@
     if (tg) renderTools(tg);
     var y = document.getElementById('year');
     if (y) y.textContent = '2026';
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    liveReady.then(renderShared);
   });
 })();
