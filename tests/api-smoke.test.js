@@ -89,6 +89,18 @@ describe('Local Worker route functions', localOpts, () => {
     assert.equal(body.ok, true);
   });
 
+  it('handleRequest answers HEAD /api/health with 200 and an empty body (same headers as GET)', async () => {
+    const head = await localRoutes.handleRequest(new Request('http://localhost/api/health', { method: 'HEAD' }));
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), '');
+    assert.equal(head.headers.get('content-type'), 'application/json');
+    const get = await localRoutes.handleRequest(new Request('http://localhost/api/health'));
+    assert.equal(get.status, 200);
+    for (const name of ['content-security-policy', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'access-control-allow-origin']) {
+      assert.equal(head.headers.get(name), get.headers.get(name), `${name} must match GET`);
+    }
+  });
+
   it('handleRequest answers /api/auth/login with 503 when no owner password is configured', async () => {
     const res = await localRoutes.handleRequest(new Request('http://localhost/api/auth/login', {
       method: 'POST',
