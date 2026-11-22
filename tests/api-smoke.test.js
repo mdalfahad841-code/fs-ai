@@ -93,7 +93,7 @@ describe('Local Worker route functions', localOpts, () => {
     const head = await localRoutes.handleRequest(new Request('http://localhost/api/health', { method: 'HEAD' }));
     assert.equal(head.status, 200);
     assert.equal(await head.text(), '');
-    assert.equal(head.headers.get('content-type'), 'application/json');
+    assert.equal(head.headers.get('content-type'), 'application/json; charset=utf-8');
     const get = await localRoutes.handleRequest(new Request('http://localhost/api/health'));
     assert.equal(get.status, 200);
     for (const name of ['content-security-policy', 'x-frame-options', 'x-content-type-options', 'referrer-policy', 'access-control-allow-origin']) {

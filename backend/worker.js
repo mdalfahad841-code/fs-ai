@@ -96,8 +96,9 @@ async function route(request, env, ctx) {
 
   // HEAD on the health endpoint — same headers as GET, empty body.
   // (2026-11-22 autonomy fix: HEAD used to fall through to the 404.)
+  // Content-Type matches GET exactly (jsonOk sets 'application/json; charset=utf-8').
   if (path === '/api/health' && method === 'HEAD') {
-    return new Response(null, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    return new Response(null, { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
   }
 
   // Public read routes.
