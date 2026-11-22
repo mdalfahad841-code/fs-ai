@@ -1,0 +1,11 @@
+# FS AI — Pages security headers (2026-11-22 autonomy fix, item 3).
+# Audit (22 Nov): the site loads exactly ONE external resource — the GA4
+# script from www.googletagmanager.com. No external stylesheets or fonts,
+# no images, no iframes or embeds. Fetches go only to the Worker
+# (https://fs-ai.mdalfahad841.workers.dev) and to this origin. GA4 beacons go
+# to www.google-analytics.com. The CSP ships REPORT-ONLY first: nothing is
+# enforced, nothing can break. X-Frame-Options: DENY is enforced (the site
+# is never embedded; the Worker already denies framing on API responses).
+/*
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://fs-ai.mdalfahad841.workers.dev https://www.googletagmanager.com https://www.google-analytics.com; frame-ancestors 'none'; base-uri 'self'
+  X-Frame-Options: DENY
