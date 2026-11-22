@@ -101,7 +101,7 @@ export const OAUTH_CLIENT_ENV = {
 
 /** Redirect URI for a platform: SOCIAL_OAUTH_REDIRECT_BASE + /api/social/oauth/:platform/callback. */
 export function oauthRedirectUri(env, platform) {
-  const base = String(env?.SOCIAL_OAUTH_REDIRECT_BASE || 'https://fs-ai-5w5.pages.dev').replace(/\/$/, '');
+  const base = String(env?.SOCIAL_OAUTH_REDIRECT_BASE || 'https://fs-ai.mdalfahad841.workers.dev').replace(/\/$/, '');
   return `${base}/api/social/oauth/${platform}/callback`;
 }
 

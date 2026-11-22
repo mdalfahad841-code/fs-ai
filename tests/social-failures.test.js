@@ -23,7 +23,7 @@ const { createPost, getPostById } = require('../backend/social/store.js');
 const { dispatchPost } = require('../backend/social/dispatcher.js');
 const { validateMediaBytes, imageDimensions, detectImageFormat } = require('../backend/social/media.js');
 const {
-  createOAuthState, validateOAuthState, missingScopes, hasRequiredScopes, authorizationUrl,
+  createOAuthState, validateOAuthState, missingScopes, hasRequiredScopes, authorizationUrl, oauthRedirectUri,
 } = require('../backend/social/oauth.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -368,7 +368,7 @@ describe('OAuth routes (owner-only, mocked platform)', () => {
     assert.ok(body.authorizationUrl.startsWith('https://www.pinterest.com/oauth/'));
     assert.ok(body.authorizationUrl.includes('client_id=test-client-id'));
     assert.ok(body.authorizationUrl.includes('state='));
-    assert.equal(body.redirectUri, 'https://fs-ai-5w5.pages.dev/api/social/oauth/pinterest/callback');
+    assert.equal(body.redirectUri, 'https://fs-ai.mdalfahad841.workers.dev/api/social/oauth/pinterest/callback');
     return body;
   });
 
@@ -444,12 +444,33 @@ describe('OAuth state validation', () => {
   });
 
   it('authorizationUrl builds a per-platform URL with the required scopes', () => {
-    const url = authorizationUrl('pinterest', { clientId: 'cid', redirectUri: 'https://fs-ai-5w5.pages.dev/api/social/oauth/pinterest/callback', state: 's1' });
+    const url = authorizationUrl('pinterest', { clientId: 'cid', redirectUri: 'https://fs-ai.mdalfahad841.workers.dev/api/social/oauth/pinterest/callback', state: 's1' });
     assert.ok(url.startsWith('https://www.pinterest.com/oauth/'));
     assert.ok(url.includes('scope=boards%3Aread') || url.includes('boards'), 'scopes are included');
     assert.ok(url.includes('state=s1'));
+    assert.equal(new URL(url).searchParams.get('redirect_uri'), 'https://fs-ai.mdalfahad841.workers.dev/api/social/oauth/pinterest/callback');
     assert.throws(() => authorizationUrl('x', { clientId: 'c', redirectUri: 'https://example.com', state: 's' }), /no free official posting path/);
     assert.throws(() => authorizationUrl('unknown-platform', { clientId: 'c', redirectUri: 'https://example.com', state: 's' }), /Unknown social platform/);
     assert.throws(() => authorizationUrl('pinterest', { redirectUri: 'https://example.com', state: 's' }), /client id is not configured/i);
+  });
+
+  it('default redirect base is the Worker (pages.dev cannot serve /api/*)', () => {
+    for (const platform of ['pinterest', 'facebook', 'instagram', 'linkedin', 'youtube']) {
+      assert.equal(
+        oauthRedirectUri({}, platform),
+        `https://fs-ai.mdalfahad841.workers.dev/api/social/oauth/${platform}/callback`,
+      );
+      const url = authorizationUrl(platform, { clientId: 'cid', redirectUri: oauthRedirectUri({}, platform), state: 's1' });
+      assert.equal(
+        new URL(url).searchParams.get('redirect_uri'),
+        `https://fs-ai.mdalfahad841.workers.dev/api/social/oauth/${platform}/callback`,
+        `${platform} authorization URL must carry the workers.dev callback`,
+      );
+    }
+    // The env override is kept: an explicit base still wins over the default.
+    assert.equal(
+      oauthRedirectUri({ SOCIAL_OAUTH_REDIRECT_BASE: 'https://example.invalid' }, 'pinterest'),
+      'https://example.invalid/api/social/oauth/pinterest/callback',
+    );
   });
 });

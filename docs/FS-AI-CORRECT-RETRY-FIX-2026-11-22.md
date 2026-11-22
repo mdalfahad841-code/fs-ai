@@ -60,6 +60,15 @@ Delta is exactly +6 tests / +1 suite. No test weakened, none deleted. No migrati
 5. **Verify in D1 afterwards:** article #33 body length changed from 4801, exactly 1 new `article_revisions` row, `article_corrections` rows for the 13 claims show `applied`/`removed` (not `failed`), latest `fact_checks` row for #33 has `check_kind` `recheck` and `evidence_signature` starting `714:`.
 6. **If the re-run still fails:** do NOT re-run in a loop. Read the run's `validationReasons` / recovery report from the `agent_runs` detail first — a new failure means a different defect, not this one.
 
+## 8. Live outcome (parent verification, 2026-11-22 14:07–14:15 Dhaka)
+
+Deployed as commit `1d14068` (workflow run #31, 11s; post-deploy SHA/counts/settings/E-Stop verified). Dashboard re-run for #33:
+
+- Correct re-queued task #44 (kind `correct`, status `queued`, attempts 0/3) — the retry fix works.
+- Run #173 reported `done`. **The correction APPLIED** (parent D1 verification): body 4801 → **3478 chars**, revision row id 20 preserves the old body, 4 applied + 5 removed (attempt-2 rows 52–60). The dashboard's Correction review still lists the 13 stale attempt-1 `failed` rows from run #171 — that display made it look like nothing was saved; the D1 rows prove otherwise.
+- Fact-check now **PASS 15/15**: fc 33 (correction-recheck, run #173) and fc 34 (recheck, run #174), both 15/15, body_hash `67330d2e…` verified exact against the corrected body, evidence signature `714:…`. Invented claims gone (`scholarship`/`placement` absent from the body); Sources lines kept.
+- Gate still Blocked on 4 stale failed rows (those 4 claims flipped to VERIFIED on the full evidence — #39/#44/#46/#50 — so they needed no correction, but the gate counts their old attempt-1 rows) + no SEO check yet (runs in the 23 Nov 00:00 UTC daily run). #33 stays a draft (legacy, needs separate authorization to publish).
+
 ## 6. Notes / limits
 
 - The fix does not change the saved article: it only makes the correction runnable again. The Sources lines stay in the body.
