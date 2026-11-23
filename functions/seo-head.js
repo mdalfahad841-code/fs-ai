@@ -1,7 +1,7 @@
 /**
  * FS AI — Server-side SEO heads for crawlers (Fix Pass 2, item 2, 2026-11-23).
  *
- * A Cloudflare Pages Function (functions/pages/*.js) rewrites the three
+ * A Cloudflare Pages Function (frontend/functions/pages/*.js) rewrites the three
  * JS-rendered pages — /pages/article?id=N, /pages/division?division=X,
  * /pages/tools?tool=Y — so a crawler that does not run JavaScript sees
  * the same per-page title / description / canonical / og+twitter tags /
@@ -19,11 +19,11 @@
  * deploy setup CAN host one: the Pages project is Git-connected
  * (auto-deploys on push to main) with build output directory `frontend`
  * (README.md "Build command: (none) / Build output directory: frontend"),
- * so the project root is the repo root and `functions/` lives there,
+ * so the project root is the repo root and `frontend/functions/` lives there,
  * alongside — not inside — the build output, exactly as the Cloudflare
  * Pages Functions routing docs require ("If no Function is matched, it
  * will fall back to a static asset" — a matched Function runs first, so
- * functions/pages/article.js runs for /pages/article even though
+ * frontend/functions/pages/article.js runs for /pages/article even though
  * frontend/pages/article.html exists). frontend/_routes.json (in the
  * build output directory, per the same docs) limits Function invocation
  * to the three page paths, so every other request stays purely static.
@@ -31,7 +31,7 @@
  * "Root directory" is the repo root (the default, implied by the
  * relative output dir `frontend`). If the live curl proof shows generic
  * heads after deploy, the root is set to `frontend` instead and the
- * functions/ tree belongs under frontend/functions/.
+ * frontend/functions/ tree belongs under frontend/frontend/functions/.
  *
  * WHY A STRING TRANSFORM, NOT HTMLRewriter: HTMLRewriter is a Workers
  * runtime API that does not exist in Node, so a Function built on it
@@ -94,7 +94,7 @@
  * real browsers — the rewrite is head/noscript-only. Hero wording is
  * untouched.
  *
- * This module is imported by functions/pages/{article,division,tools}.js
+ * This module is imported by frontend/functions/pages/{article,division,tools}.js
  * AND by tests/fixpass2-item2.test.js. It must stay free of Workers-only
  * APIs (no HTMLRewriter, no env access except through the injected
  * deps of handleSeoRequest) so the Node suite can load it.
@@ -691,11 +691,17 @@ export function seoHeaders(headers) {
   // Content-Length copied from the static response would truncate or
   // error it. Delete it and let the runtime recompute it from the body.
   h.delete('Content-Length');
+  // Temporary live diagnostic (Fix Pass 2, item 2, 2026-11-23): proves the
+  // Function ran and rewrote the page. The matching 'fallback' value is
+  // set by passthrough(). Remove both once the Function's live behaviour
+  // is proven and the root cause of the first two deploys is known
+  // (see the Fix Pass 2 ledger, item 2).
+  h.set('x-seo-head', 'rewritten');
   return h;
 }
 
 /* ------------------------------------------------------------------ */
-/* Handler (used by functions/pages/*.js; deps injectable for tests).  */
+/* Handler (used by frontend/functions/pages/*.js; deps injectable for tests).  */
 /*                                                                     */
 /* Never throws for a rewritable page: any failure returns the static  */
 /* page exactly as context.next() served it. The ONLY throw path is    */
@@ -752,7 +758,13 @@ async function loadStaticData(context, deps) {
 }
 
 function passthrough(res, html) {
-  return new Response(html, { status: res.status, headers: res.headers });
+  const h = new Headers(res.headers);
+  // Temporary live diagnostic (Fix Pass 2, item 2, 2026-11-23): proves the
+  // Function ran even when it falls back to the static page. The matching
+  // 'rewritten' value is set by seoHeaders(). Remove both once the
+  // Function's live behaviour is proven (see the Fix Pass 2 ledger).
+  h.set('x-seo-head', 'fallback');
+  return new Response(html, { status: res.status, headers: h });
 }
 
 export async function handleSeoRequest(context, kind, deps = {}) {

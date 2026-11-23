@@ -691,6 +691,12 @@ export function seoHeaders(headers) {
   // Content-Length copied from the static response would truncate or
   // error it. Delete it and let the runtime recompute it from the body.
   h.delete('Content-Length');
+  // Temporary live diagnostic (Fix Pass 2, item 2, 2026-11-23): proves the
+  // Function ran and rewrote the page. The matching 'fallback' value is
+  // set by passthrough(). Remove both once the Function's live behaviour
+  // is proven and the root cause of the first two deploys is known
+  // (see the Fix Pass 2 ledger, item 2).
+  h.set('x-seo-head', 'rewritten');
   return h;
 }
 
@@ -752,7 +758,13 @@ async function loadStaticData(context, deps) {
 }
 
 function passthrough(res, html) {
-  return new Response(html, { status: res.status, headers: res.headers });
+  const h = new Headers(res.headers);
+  // Temporary live diagnostic (Fix Pass 2, item 2, 2026-11-23): proves the
+  // Function ran even when it falls back to the static page. The matching
+  // 'rewritten' value is set by seoHeaders(). Remove both once the
+  // Function's live behaviour is proven (see the Fix Pass 2 ledger).
+  h.set('x-seo-head', 'fallback');
+  return new Response(html, { status: res.status, headers: h });
 }
 
 export async function handleSeoRequest(context, kind, deps = {}) {

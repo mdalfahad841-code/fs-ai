@@ -601,10 +601,11 @@ describe('2.9 cache headers', () => {
     const cl = res.headers.get('content-length');
     assert.ok(cl === null || Number(cl) === Buffer.byteLength(body, 'utf8'),
       'no stale Content-Length (absent, or the rewritten body length), got ' + cl);
+    assert.equal(res.headers.get('x-seo-head'), 'rewritten', 'live diagnostic: Function ran and rewrote');
     assert.ok(body.includes('<title>EV Charging at Home'), 'and it really is rewritten');
   });
 
-  it('a fallback response keeps the original headers untouched', async () => {
+  it('a fallback response keeps the original headers, plus the x-seo-head: fallback diagnostic', async () => {
     const { res, body } = await handle(PAGES_BASE + '/pages/article?id=999', ARTICLE_HTML, {
       kind: 'article',
       fetchLiveArticles: async () => [],
@@ -613,6 +614,7 @@ describe('2.9 cache headers', () => {
     assert.equal(res.headers.get('etag'), '"static-etag-1"');
     assert.equal(res.headers.get('last-modified'), 'Mon, 23 Nov 2026 00:00:00 GMT');
     assert.equal(res.headers.get('content-length'), String(Buffer.byteLength(body, 'utf8')));
+    assert.equal(res.headers.get('x-seo-head'), 'fallback', 'live diagnostic: Function ran but fell back');
   });
 
   it('seoHeaders sets the exact Cache-Control and strips ETag/Last-Modified/Content-Length', () => {
@@ -628,6 +630,7 @@ describe('2.9 cache headers', () => {
     assert.equal(h.get('last-modified'), null);
     assert.equal(h.get('content-length'), null);
     assert.equal(h.get('content-type'), 'text/html', 'other headers kept');
+    assert.equal(h.get('x-seo-head'), 'rewritten', 'live diagnostic set on rewritten responses');
   });
 
   it('no Vary header is set on rewritten responses (the URL is the cache key)', async () => {
@@ -800,5 +803,39 @@ describe('2.12 wiring: _routes.json, route files, dashboard', () => {
     assert.ok(src.includes('WHY A PAGES FUNCTION, NOT BUILD-TIME GENERATION'), 'mechanism decision documented');
     assert.ok(src.includes('Root directory'), 'root-directory assumption recorded');
     assert.ok(src.includes('SEO_CACHE_CONTROL'), 'cache constant documented');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 2.13 — two Function copies: repo root AND frontend/ are identical. */
+/*                                                                     */
+/* The first two live deploys (runs #55, #56) showed generic heads    */
+/* everywhere, so the Pages project's root directory is unproven: the   */
+/* Function is shipped in BOTH candidate locations with identical      */
+/* bytes, so whichever location the project uses, the live Function is */
+/* the current code (including the x-seo-head diagnostic). Once the    */
+/* header proves which location is live, delete the other copy.        */
+/* ------------------------------------------------------------------ */
+describe('2.13 two Function copies are byte-identical', () => {
+  const COPIES = [
+    'seo-head.js',
+    'package.json',
+    'pages/article.js',
+    'pages/division.js',
+    'pages/tools.js',
+  ];
+
+  for (const rel of COPIES) {
+    it(rel + ' is identical in functions/ and frontend/functions/', () => {
+      assert.equal(read('functions/' + rel), read('frontend/functions/' + rel), rel + ' differs between the two copies');
+    });
+  }
+
+  it('both copies carry the x-seo-head diagnostic', () => {
+    for (const base of ['functions', 'frontend/functions']) {
+      const src = read(base + '/seo-head.js');
+      assert.ok(src.includes("h.set('x-seo-head', 'rewritten')"), base + ' sets rewritten');
+      assert.ok(src.includes("h.set('x-seo-head', 'fallback')"), base + ' sets fallback');
+    }
   });
 });
