@@ -50,6 +50,17 @@
  * Worker cannot read its state. No paused date is hardcoded here — it
  * would go stale on resume; the last-known state lives in the ledger.
  *
+ * Server-side heads (check 14, Fix Pass 2 item 2): the Pages Function
+ * rewrites article/division/tool pages with per-page heads for crawlers.
+ * This check fetches five samples the way a no-JS crawler would and
+ * asserts the per-page title, canonical, og:url, JSON-LD and a noscript
+ * body are present. Expected titles and dates come from D1 (the source
+ * of truth for published articles + divisions); the tool's expected
+ * title is a constant — tool metadata lives in the frontend bundle,
+ * not in D1. The excerpt is deliberately NOT asserted: D1 excerpts
+ * differ from the static-bundle excerpts by design (static-wins), so
+ * an excerpt comparison would FAIL live.
+ *
  * No secrets are read, stored or logged by any check. Details carry
  * only numbers, ids and short reasons — never article bodies.
  */
@@ -79,7 +90,7 @@ export const AUTO_PUBLISH_PROOF_KEY = 'auto_publish_proof';
 export const HEALTH_REPORT_CHECK_KEYS = [
   'workerHealth', 'pages', 'sitemap', 'recentArticles', 'queue', 'lastRuns',
   'sitemapRefresh', 'protectedDrafts', 'settings', 'shortsCron', 'lastVideo',
-  'cspViolations', 'autoPublishProof',
+  'cspViolations', 'autoPublishProof', 'serverSideHeads',
 ];
 
 const OK = 'OK';
@@ -580,6 +591,136 @@ async function autoPublishProofCheck(env) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Check 14 — server-side heads (Fix Pass 2, item 2, 2026-11-23).      */
+/* ------------------------------------------------------------------ */
+
+/** The samples the check verifies, the way a no-JS crawler would:
+ * articles 1, 12, 25 (first / middle / last published), division
+ * automotive and tool percentage. */
+export const SERVER_SIDE_HEAD_SAMPLES = [
+  { kind: 'article', id: 1, path: '/pages/article?id=1' },
+  { kind: 'article', id: 12, path: '/pages/article?id=12' },
+  { kind: 'article', id: 25, path: '/pages/article?id=25' },
+  { kind: 'division', slug: 'automotive', path: '/pages/division?division=automotive' },
+  { kind: 'tool', slug: 'percentage', path: '/pages/tools?tool=percentage', expectedTitle: 'Percentage Calculator' },
+];
+
+/** Escape for matching a value inside the served head (same rules as
+ * functions/seo-head.js escHtml — duplicated here because the Worker
+ * must not import the Pages Function module). */
+function escHead(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Assert the server-side head of one fetched page. `sample` carries
+ * kind + title (+ date for articles) and `url` is the full canonical
+ * URL. Returns a list of problems (empty = the sample passes). The
+ * excerpt is deliberately not asserted (see the header note). */
+export function assertServerSideHead(html, sample, url) {
+  const problems = [];
+  const title = sample.title + ' — FS AI';
+  if (!html.includes('<title>' + escHead(title) + '</title>')) problems.push('title');
+  if (!html.includes('<link rel="canonical" href="' + url + '">')) problems.push('canonical');
+  if (!html.includes('<meta property="og:url" content="' + url + '">')) problems.push('og:url');
+  const noscriptMatch = html.match(/<noscript>([\s\S]*?)<\/noscript>/);
+  if (!noscriptMatch) {
+    problems.push('noscript');
+  } else if (sample.kind === 'article') {
+    if (!noscriptMatch[1].includes(escHead(sample.title))) problems.push('noscript body');
+  } else if (sample.kind === 'division') {
+    if (!noscriptMatch[1].includes('article?id=')) problems.push('noscript article list');
+  } else if (!noscriptMatch[1].trim()) {
+    problems.push('noscript body');
+  }
+  if (sample.kind === 'article') {
+    if (!html.includes('<meta property="article:published_time" content="' + sample.date + '">')) {
+      problems.push('article:published_time');
+    }
+    if (!html.includes('"@type":"Article"')) problems.push('Article JSON-LD');
+    if (!html.includes('"datePublished":"' + sample.date + '"')) problems.push('datePublished');
+  }
+  if (sample.kind === 'division' && !html.includes('"@type":"CollectionPage"')) {
+    problems.push('CollectionPage JSON-LD');
+  }
+  if (sample.kind === 'tool' && !html.includes('"@type":"WebApplication"')) {
+    problems.push('WebApplication JSON-LD');
+  }
+  return problems;
+}
+
+async function serverSideHeadsCheck(env, fetchImpl, pagesBase) {
+  // 1. Expected values from D1 — without them the check cannot run.
+  const missing = [];
+  const expected = [];
+  for (const sample of SERVER_SIDE_HEAD_SAMPLES) {
+    if (sample.kind === 'article') {
+      const row = await safeFirst(env,
+        'SELECT title, published_at FROM articles WHERE id = ? AND status = ? LIMIT 1',
+        [sample.id, 'published']);
+      if (!row || typeof row.title !== 'string' || !row.title
+        || typeof row.published_at !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(row.published_at)) {
+        missing.push(`article ${sample.id}`);
+        continue;
+      }
+      expected.push({ ...sample, title: row.title, date: row.published_at.slice(0, 10) });
+    } else if (sample.kind === 'division') {
+      const row = await safeFirst(env,
+        'SELECT name FROM business_divisions WHERE slug = ? LIMIT 1', [sample.slug]);
+      if (!row || typeof row.name !== 'string' || !row.name) {
+        missing.push(`division ${sample.slug}`);
+        continue;
+      }
+      expected.push({ ...sample, title: row.name });
+    } else {
+      expected.push({ ...sample, title: sample.expectedTitle });
+    }
+  }
+  if (missing.length) {
+    return notTested(`Server-side head check could not run: no D1 row for ${missing.join(', ')} — expected titles/dates undeterminable.`);
+  }
+  // 2. Fetch each sample the way a no-JS crawler would (plain fetch,
+  // no JS execution) and assert the per-page head is really served.
+  const failures = [];
+  const passed = [];
+  for (const sample of expected) {
+    const url = pagesBase + sample.path;
+    let res;
+    try {
+      res = await fetchWithTimeout(fetchImpl, url);
+    } catch (err) {
+      failures.push(`${sample.path}: fetch failed (${fetchErrorReason(err)})`);
+      continue;
+    }
+    if (!res || res.status !== 200) {
+      failures.push(`${sample.path}: HTTP ${res ? res.status : 'no response'}`);
+      continue;
+    }
+    let html = '';
+    try {
+      html = await res.text();
+    } catch {
+      failures.push(`${sample.path}: body unreadable`);
+      continue;
+    }
+    const problems = assertServerSideHead(html, sample, url);
+    if (problems.length) failures.push(`${sample.path}: ${problems.join('; ')}`);
+    else passed.push(sample.path);
+  }
+  const detail = { checked: expected.length, passed: passed.length, failures };
+  if (failures.length) {
+    return check(FAIL, {
+      ...detail,
+      reason: `Server-side heads missing or wrong on ${failures.length} of ${expected.length} samples: ${failures.join(' | ')}`,
+    });
+  }
+  return check(OK, detail);
+}
+
+/* ------------------------------------------------------------------ */
 /* Builder.                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -636,6 +777,7 @@ async function buildReport(env, { health, fetchImpl, nowMs, pagesBase, githubRep
   await runCheck('lastVideo', () => lastVideoCheck(env));
   await runCheck('cspViolations', () => cspViolationsCheck(env));
   await runCheck('autoPublishProof', () => autoPublishProofCheck(env));
+  await runCheck('serverSideHeads', () => serverSideHeadsCheck(env, fetchImpl, pagesBase));
 
   // Snapshots are the baselines the NEXT daily report compares against.
   // They are taken from the same reads the checks just did, so the

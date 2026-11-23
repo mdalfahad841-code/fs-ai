@@ -7,7 +7,8 @@
 //   A5.1 all-green report — every check OK except the honest NOT
 //         TESTED ones (shortsCron, lastVideo with 0 rows,
 //         autoPublishProof absent, protectedDrafts/settings first-run
-//         baselines); overall OK; all 13 check keys present
+//         baselines); overall OK; all 14 check keys present (check 14,
+//         serverSideHeads, added by Fix Pass 2 item 2)
 //   A5.2 sitemap — missing a published id FAILs listing it; non-200 FAILs
 //   A5.3 recent article unreachable FAILs listing it
 //   A5.4 protected drafts — body changed vs previous snapshot FAILs
@@ -50,6 +51,7 @@ const {
   buildDailyHealthReport,
   PROTECTED_DRAFT_IDS,
   HEALTH_REPORT_CHECK_KEYS,
+  SERVER_SIDE_HEAD_SAMPLES,
   FETCH_TIMEOUT_MS,
 } = require('../backend/services/daily-health-report.js');
 const { bodyHash } = require('../backend/utils/bodyHash.js');
@@ -207,14 +209,70 @@ function allPublishedIds() {
   return Array.from({ length: 25 }, (_, i) => i + 1);
 }
 
+/* Server-side heads fixture (Fix Pass 2, item 2): the canned rewritten
+   HTML the mock serves for the five check-14 sample URLs, built
+   independently of the rewrite module — it defines the contract the
+   check asserts. Canonical copy: tests/fixpass2-item2.test.js
+   (sampleHeadHtml). The default map uses the SEED titles/dates, which
+   are identical in every fresh DB in this file; a test that changes a
+   sample article's D1 title/date must pass its own headsHtml instead. */
+function sampleHeadHtml({ kind, title, date, url }) {
+  const jsonLd = kind === 'article'
+    ? `{"@context":"https://schema.org","@type":"Article","datePublished":"${date}"}`
+    : kind === 'division'
+      ? '{"@context":"https://schema.org","@type":"CollectionPage"}'
+      : '{"@context":"https://schema.org","@type":"WebApplication"}';
+  const meta = kind === 'article'
+    ? `<meta property="article:published_time" content="${date}">`
+    : '';
+  const noscript = kind === 'article'
+    ? `<noscript><h1>${title}</h1><p>The article body text.</p></noscript>`
+    : kind === 'division'
+      ? '<noscript><ul><li><a href="article?id=1">An article</a></li></ul></noscript>'
+      : '<noscript>Does a calculation.</noscript>';
+  return '<!doctype html><html><head><title>' + title + ' — FS AI</title>'
+    + '<link rel="canonical" href="' + url + '">'
+    + '<meta property="og:url" content="' + url + '">' + meta
+    + '<script type="application/ld+json">' + jsonLd + '</script></head><body>'
+    + noscript + '</body></html>';
+}
+
+const SEED_HEAD_SAMPLES = {
+  1: { title: 'EV Charging at Home: A Complete Beginner\'s Guide', date: '2026-11-01' },
+  12: { title: 'Best Family Cars Compared: Space, Safety and Running Costs', date: '2026-11-06' },
+  25: { title: 'How to Plan a Road Trip: Checklist and Costs', date: '2026-11-11' },
+  automotive: { title: 'Automotive' },
+  percentage: { title: 'Percentage Calculator' },
+};
+
+function defaultHeadsHtml() {
+  const map = {};
+  for (const s of SERVER_SIDE_HEAD_SAMPLES) {
+    const url = PAGES_BASE + s.path;
+    const sample = s.kind === 'article'
+      ? { kind: 'article', title: SEED_HEAD_SAMPLES[s.id].title, date: SEED_HEAD_SAMPLES[s.id].date, url }
+      : s.kind === 'division'
+        ? { kind: 'division', title: SEED_HEAD_SAMPLES[s.slug].title, url }
+        : { kind: 'tool', title: SEED_HEAD_SAMPLES[s.slug].title, url };
+    map[url] = sampleHeadHtml(sample);
+  }
+  return map;
+}
+
 function makeMockFetch({
   sitemapIds = allPublishedIds(),
   sitemapStatus = 200,
   github = 'success',
   articleStatus = {},
+  headsHtml = defaultHeadsHtml(),
 } = {}) {
   return async (url) => {
     const u = String(url);
+    // A sample URL with a canned rewritten head answers first: the
+    // fixture models a site where the Pages Function is live.
+    if (headsHtml && Object.prototype.hasOwnProperty.call(headsHtml, u)) {
+      return { status: 200, text: async () => headsHtml[u] };
+    }
     if (u.includes('api.github.com')) {
       if (github === 'error') throw new Error('network down');
       if (github === 'forbidden') return { status: 403, text: async () => 'rate limited' };
@@ -353,6 +411,12 @@ describe('A5.1 all-green report: OK everywhere except the honest NOT TESTED chec
     assert.equal(report.checks.cspViolations.detail.total, 0);
     assert.equal(report.checks.autoPublishProof.status, 'NOT TESTED');
     assert.match(report.checks.autoPublishProof.detail.reason, /No auto-published article has been verified yet/);
+    // Check 14 (Fix Pass 2, item 2): the fixture models a site where
+    // the Pages Function serves per-page heads, so all five samples pass.
+    assert.equal(report.checks.serverSideHeads.status, 'OK');
+    assert.equal(report.checks.serverSideHeads.detail.checked, 5);
+    assert.equal(report.checks.serverSideHeads.detail.passed, 5);
+    assert.deepEqual(report.checks.serverSideHeads.detail.failures, []);
 
     // The baselines this run records are stored in the snapshots.
     assert.equal(report.snapshots.protectedDrafts.length, 7);

@@ -1388,6 +1388,7 @@
     lastVideo: 'Last video',
     cspViolations: 'CSP violations (last 7 days)',
     autoPublishProof: 'Auto-publish proof',
+    serverSideHeads: 'Server-side heads (crawlers)',
   };
 
   function healthReportLine(key, check) {
@@ -1463,6 +1464,12 @@
           return 'article #' + d.articleId + ' verified' + (d.verifiedAt ? ' ' + fmtDhaka(d.verifiedAt) : '') + ' — verdict ' + d.verdict;
         }
         return reason || 'no auto-published article verified yet';
+      case 'serverSideHeads':
+        if (typeof d.checked === 'number') {
+          return d.passed + ' of ' + d.checked + ' samples passed'
+            + (arr(d.failures).length ? ' — ' + arr(d.failures).join(' | ') : '');
+        }
+        return reason || 'could not run the server-side head check';
       default:
         return reason;
     }

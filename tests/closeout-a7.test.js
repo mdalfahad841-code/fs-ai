@@ -26,6 +26,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const {
   buildDailyHealthReport,
+  SERVER_SIDE_HEAD_SAMPLES,
   SITEMAP_REFRESH_STALE_HOURS,
 } = require('../backend/services/daily-health-report.js');
 
@@ -147,14 +148,67 @@ function sitemapXml(articleIds) {
     + locs.map((u) => `<url><loc>${u}</loc><lastmod>2026-11-01</lastmod></url>`).join('') + '</urlset>';
 }
 
+/* Server-side heads fixture (Fix Pass 2, item 2): the canned rewritten
+   HTML the mock serves for the five check-14 sample URLs, built
+   independently of the rewrite module. Canonical copy:
+   tests/fixpass2-item2.test.js (sampleHeadHtml). The default map uses
+   the SEED titles/dates, identical in every fresh DB in this file. */
+function sampleHeadHtml({ kind, title, date, url }) {
+  const jsonLd = kind === 'article'
+    ? `{"@context":"https://schema.org","@type":"Article","datePublished":"${date}"}`
+    : kind === 'division'
+      ? '{"@context":"https://schema.org","@type":"CollectionPage"}'
+      : '{"@context":"https://schema.org","@type":"WebApplication"}';
+  const meta = kind === 'article'
+    ? `<meta property="article:published_time" content="${date}">`
+    : '';
+  const noscript = kind === 'article'
+    ? `<noscript><h1>${title}</h1><p>The article body text.</p></noscript>`
+    : kind === 'division'
+      ? '<noscript><ul><li><a href="article?id=1">An article</a></li></ul></noscript>'
+      : '<noscript>Does a calculation.</noscript>';
+  return '<!doctype html><html><head><title>' + title + ' — FS AI</title>'
+    + '<link rel="canonical" href="' + url + '">'
+    + '<meta property="og:url" content="' + url + '">' + meta
+    + '<script type="application/ld+json">' + jsonLd + '</script></head><body>'
+    + noscript + '</body></html>';
+}
+
+const SEED_HEAD_SAMPLES = {
+  1: { title: 'EV Charging at Home: A Complete Beginner\'s Guide', date: '2026-11-01' },
+  12: { title: 'Best Family Cars Compared: Space, Safety and Running Costs', date: '2026-11-06' },
+  25: { title: 'How to Plan a Road Trip: Checklist and Costs', date: '2026-11-11' },
+  automotive: { title: 'Automotive' },
+  percentage: { title: 'Percentage Calculator' },
+};
+
+function defaultHeadsHtml() {
+  const map = {};
+  for (const s of SERVER_SIDE_HEAD_SAMPLES) {
+    const url = PAGES_BASE + s.path;
+    const sample = s.kind === 'article'
+      ? { kind: 'article', title: SEED_HEAD_SAMPLES[s.id].title, date: SEED_HEAD_SAMPLES[s.id].date, url }
+      : s.kind === 'division'
+        ? { kind: 'division', title: SEED_HEAD_SAMPLES[s.slug].title, url }
+        : { kind: 'tool', title: SEED_HEAD_SAMPLES[s.slug].title, url };
+    map[url] = sampleHeadHtml(sample);
+  }
+  return map;
+}
+
 /* Mock fetchImpl: never touches the network. The GitHub run answers
    per `github`: 'success' (fresh, 1 h old) | 'stale-success' (5 h old)
    | 'boundary' (exactly 3.0 h old) | 'just-over' (3.1 h old)
    | 'success-bad-date' (unparseable created_at) | 'failure'
    | 'in-progress' (conclusion null). */
-function makeMockFetch({ github = 'success' } = {}) {
+function makeMockFetch({ github = 'success', headsHtml = defaultHeadsHtml() } = {}) {
   return async (url) => {
     const u = String(url);
+    // A sample URL with a canned rewritten head answers first: the
+    // fixture models a site where the Pages Function is live.
+    if (headsHtml && Object.prototype.hasOwnProperty.call(headsHtml, u)) {
+      return { status: 200, text: async () => headsHtml[u] };
+    }
     if (u.includes('api.github.com')) {
       const ageHours = {
         success: 1, 'stale-success': 5, boundary: 3, 'just-over': 3.1,
