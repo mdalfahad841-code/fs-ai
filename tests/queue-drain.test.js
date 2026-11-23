@@ -258,11 +258,14 @@ describe('drainTaskQueue — daily content cap', () => {
     assert.equal(taskStatus(db, goodId).status, 'done');
   });
 
-  it('counts articles created today (seeded articles count — they were created today)', async () => {
+  it('counts articles created today (seeded articles do NOT count — published on earlier dates)', async () => {
     const { db, env } = freshEnv();
     const total = db.prepare('SELECT COUNT(*) AS n FROM articles').get().n;
     assert.ok(total > 0, 'seed.sql inserts articles');
-    assert.equal(await countArticlesCreatedToday(env), total, 'every seeded article was created today');
+    // B2 (O2): the count follows the content handler's rule — created
+    // today AND not already published on an earlier date. All seeded
+    // articles were published 2026-11-01..11-11, so none counts.
+    assert.equal(await countArticlesCreatedToday(env), 0, 'seeded articles were published on earlier dates, so none counts');
   });
 });
 

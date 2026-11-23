@@ -12,7 +12,7 @@ import { d1All, d1First, d1Run, nowIso, isMissingColumnError, slugify } from '..
 import { getEmergencyStop } from './admin.js';
 import { publishDueArticles } from './admin-articles.js';
 import { runAutonomyTask, DIVISION_RESEARCH_REGISTRY, registryIdForTask, QUEUE_AGENTS } from '../agents/autonomy-runner.js';
-import { convertScaffoldToDraft } from '../agents/autonomy/content.js';
+import { convertScaffoldToDraft, articlesCreatedToday } from '../agents/autonomy/content.js';
 import { runHealthCheck } from '../services/healthcheck.js';
 import { buildDailyHealthReport } from '../services/daily-health-report.js';
 import { runResearch } from '../agents/autonomy/research.js';
@@ -192,11 +192,23 @@ export async function clearTerminalState(env, taskId) {
   return setTerminalState(env, taskId, null, null, null);
 }
 
-/** Articles created today (UTC) — the daily-content cap counts these. */
+/**
+ * Articles created today (UTC) — the daily-content GENERATION cap counts
+ * these. This is the ONE shared rule: it delegates to
+ * articlesCreatedToday in backend/agents/autonomy/content.js, the single
+ * definition — created today AND not already published on an earlier
+ * date (a draft, or an article published today, counts; a seeded/live
+ * article created today but published on an earlier date does not).
+ * Fail-open: a lookup error returns 0 (the handler's version throws;
+ * the drain must never throw on a counting error). This is the
+ * GENERATION cap count (UTC day) and is intentionally separate from
+ * the PUBLISH cap in backend/publishing/gate.js
+ * (countPublishedTodayDhaka), which counts articles published today
+ * on the Dhaka day — a different quantity.
+ */
 export async function countArticlesCreatedToday(env) {
   try {
-    const row = await d1First(env, "SELECT COUNT(*) AS n FROM articles WHERE date(created_at) = date('now')");
-    return Number(row ? row.n : 0);
+    return await articlesCreatedToday(env);
   } catch {
     return 0;
   }
@@ -945,15 +957,20 @@ export async function convertContentDraft(env, task, scaffold) {
 // Rules:
 //   - only status='queued' AND (scheduled_for IS NULL OR
 //     scheduled_for <= now) — scheduled_for was write-only before.
-//   - at most MAX_DRAIN_TASKS_PER_RUN (10) tasks per run.
+//   - at most MAX_DRAIN_TASKS_PER_RUN (10) tasks ATTEMPTED per run.
+//     Skipped tasks do not consume a slot: the drain pages past them
+//     (cursor fetch, same order) until 10 tasks have been attempted or
+//     the queue is exhausted, so more than 10 rows may be examined.
 //   - stop after MAX_DRAIN_CONSECUTIVE_FAILURES (3) consecutive
 //     failures; a success resets the counter.
 //   - kinds with no handler (agent not in QUEUE_AGENTS) are skipped
 //     and left queued, recorded with reason 'no-handler'.
 //   - daily-content tasks obey the daily cap: articles created today
-//     are counted before each content task, and further content tasks
-//     are skipped once maxArticlesPerDay is reached (the cap was
-//     previously enforced only at enqueue time).
+//     AND not already published on an earlier date are counted before
+//     each content task (the same rule the content handler uses — see
+//     countArticlesCreatedToday), and further content tasks are skipped
+//     once maxArticlesPerDay is reached (the cap was previously
+//     enforced only at enqueue time).
 //   - a blocked health check (E-Stop ON, DB unreachable) refuses the
 //     whole drain; 'degraded' proceeds and is recorded.
 //   - an E-Stop that flips on mid-drain stops the drain at the next
@@ -977,15 +994,6 @@ export async function drainTaskQueue(env, options = {}) {
   }
 
   const dailyLimit = await maxArticlesPerDay(env);
-  let rows = [];
-  try {
-    rows = await d1All(env,
-      "SELECT * FROM agent_tasks WHERE status = 'queued' AND (scheduled_for IS NULL OR scheduled_for <= ?) ORDER BY created_at ASC, id ASC LIMIT ?",
-      [nowIso(), maxTasks]) || [];
-  } catch (err) {
-    return { ok: false, blocked: false, health, results: [], processed: 0, done: 0, failed: 0, skipped: 0, draftsConverted: 0, stoppedReason: `queue-read-failed: ${String((err && err.message) || err).slice(0, 200)}` };
-  }
-
   const results = [];
   let consecutiveFailures = 0;
   let stoppedReason = null;
@@ -993,82 +1001,133 @@ export async function drainTaskQueue(env, options = {}) {
   let failed = 0;
   let skipped = 0;
   let draftsConverted = 0;
+  // B2 (O1): LIMIT-before-filtering — a skipped task used to consume a
+  // drain slot, so eligible tasks behind it waited for the next run.
+  // Page instead: keep fetching until maxTasks tasks have been
+  // ATTEMPTED (runTask invoked) or the queue is exhausted. The first
+  // fetch is exactly as before; later pages use a (created_at, id)
+  // cursor on the same ORDER BY — row-value comparison keeps the
+  // order exact where OFFSET would shift under the drain's own status
+  // updates. agent_tasks.created_at is TEXT NOT NULL DEFAULT
+  // (datetime('now')), so the initial cursor ('', 0) matches every row.
+  let attempted = 0;
+  let cursorCreatedAt = '';
+  let cursorId = 0;
+  let firstPage = true;
 
-  for (const raw of rows) {
-    if (consecutiveFailures >= maxConsecutiveFailures) {
-      stoppedReason = 'consecutive-failure-limit';
-      break;
+  pageLoop: while (attempted < maxTasks) {
+    const pageLimit = firstPage ? maxTasks : maxTasks - attempted;
+    let rows = [];
+    try {
+      if (firstPage) {
+        rows = await d1All(env,
+          "SELECT * FROM agent_tasks WHERE status = 'queued' AND (scheduled_for IS NULL OR scheduled_for <= ?) ORDER BY created_at ASC, id ASC LIMIT ?",
+          [nowIso(), maxTasks]) || [];
+        firstPage = false;
+      } else {
+        rows = await d1All(env,
+          "SELECT * FROM agent_tasks WHERE status = 'queued' AND (scheduled_for IS NULL OR scheduled_for <= ?) AND (created_at, id) > (?, ?) ORDER BY created_at ASC, id ASC LIMIT ?",
+          [nowIso(), cursorCreatedAt, cursorId, pageLimit]) || [];
+      }
+    } catch (err) {
+      const reason = `queue-read-failed: ${String((err && err.message) || err).slice(0, 200)}`;
+      if (results.length === 0) {
+        return { ok: false, blocked: false, health, results: [], processed: 0, done: 0, failed: 0, skipped: 0, draftsConverted: 0, stoppedReason: reason };
+      }
+      // A later page failed after some work was done: work done is
+      // work done — report the partial results with ok:true.
+      stoppedReason = reason;
+      break pageLoop;
     }
-    const task = normaliseTaskRow(raw);
-    const base = { taskId: task.id, kind: task.kind, agent: task.agent, attempts: task.attempts || 0 };
-    if (!QUEUE_AGENTS.includes(task.agent)) {
-      skipped += 1;
-      results.push({ ...base, outcome: 'skipped', reason: `No handler for agent '${task.agent}' — task left queued.` });
-      continue;
-    }
-    if (task.agent === 'content-creation' && task.kind === 'daily-content') {
-      const createdToday = await countArticlesCreatedToday(env);
-      if (createdToday >= dailyLimit) {
+    if (rows.length === 0) break pageLoop;
+
+    for (const raw of rows) {
+      // Advance the cursor to the last examined row, whatever happens
+      // to it below, so the next page never re-reads it.
+      cursorCreatedAt = typeof raw.created_at === 'string' ? raw.created_at : '';
+      cursorId = raw.id;
+      if (consecutiveFailures >= maxConsecutiveFailures) {
+        stoppedReason = 'consecutive-failure-limit';
+        break pageLoop;
+      }
+      const task = normaliseTaskRow(raw);
+      const base = { taskId: task.id, kind: task.kind, agent: task.agent, attempts: task.attempts || 0 };
+      if (!QUEUE_AGENTS.includes(task.agent)) {
         skipped += 1;
-        results.push({ ...base, outcome: 'skipped', reason: `Daily content cap reached (${createdToday}/${dailyLimit} articles created today) — task left queued.` });
+        results.push({ ...base, outcome: 'skipped', reason: `No handler for agent '${task.agent}' — task left queued.` });
         continue;
       }
-    }
-    let res;
-    try {
-      res = await runTask(env, task.id, { leaseMs });
-    } catch (err) {
-      res = { ok: false, outcome: 'failed', error: String((err && err.message) || err).slice(0, 300) };
-    }
-    if (res && res.status === 423) {
-      // Emergency Stop flipped on mid-drain: stop now, record it.
-      skipped += 1;
-      results.push({ ...base, outcome: 'skipped', reason: 'Emergency Stop is on — drain stopped.' });
-      stoppedReason = 'emergency-stop';
-      break;
-    }
-    if (res && res.inFlight) {
-      skipped += 1;
-      results.push({ ...base, outcome: 'skipped', reason: 'Task already running in another execution.' });
-      continue;
-    }
-    if (res && res.recoveredStale) {
-      skipped += 1;
-      results.push({ ...base, outcome: 'skipped', reason: 'Task was recovered from a stale lock and re-queued with backoff — it runs automatically once the backoff elapses.' });
-      continue;
-    }
-    if (!res || res.ok !== true) {
-      // runTask refused without running (409 protection / pause /
-      // already-resolved): a skip, not a drain failure.
-      skipped += 1;
-      results.push({ ...base, outcome: 'skipped', reason: String((res && res.error) || 'Task could not run.').slice(0, 300) });
-      continue;
-    }
-    const outcome = res.outcome || 'failed';
-    if (outcome === 'done' || outcome === 'no-op') {
-      done += 1;
-      consecutiveFailures = 0;
-      // A drained content task that produced a real LLM draft must
-      // persist it as a CMS draft now (see convertContentDraft) —
-      // otherwise the drain reports 'done' and no article appears.
-      // 'no-op' scaffolds are never converted.
-      let conversion = null;
-      if (outcome === 'done' && task.agent === 'content-creation' && res.result
-        && res.result.scaffold && res.result.scaffold.llmGenerated
-        && typeof res.result.scaffold.body === 'string' && res.result.scaffold.body.trim()) {
-        try {
-          conversion = await convertContentDraft(env, task, res.result.scaffold);
-        } catch (err) {
-          conversion = { converted: false, error: String((err && err.message) || err).slice(0, 300) };
+      if (task.agent === 'content-creation' && task.kind === 'daily-content') {
+        const createdToday = await countArticlesCreatedToday(env);
+        if (createdToday >= dailyLimit) {
+          skipped += 1;
+          results.push({ ...base, outcome: 'skipped', reason: `Daily content cap reached (${createdToday}/${dailyLimit} articles created today) — task left queued.` });
+          continue;
         }
-        if (conversion && conversion.converted) draftsConverted += 1;
       }
-      results.push({ ...base, outcome, attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, ...(conversion ? { conversion } : {}) });
-    } else {
-      failed += 1;
-      consecutiveFailures += 1;
-      results.push({ ...base, outcome: 'failed', attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, reason: String((res.result && res.result.error) || 'Task failed.').slice(0, 300) });
+      // Attempted the moment runTask is invoked: skips found only by
+      // attempting (inFlight, recoveredStale, 409 refusals, E-Stop 423)
+      // count as attempted — they were attempted.
+      attempted += 1;
+      let res;
+      try {
+        res = await runTask(env, task.id, { leaseMs });
+      } catch (err) {
+        res = { ok: false, outcome: 'failed', error: String((err && err.message) || err).slice(0, 300) };
+      }
+      if (res && res.status === 423) {
+        // Emergency Stop flipped on mid-drain: stop now, record it.
+        skipped += 1;
+        results.push({ ...base, outcome: 'skipped', reason: 'Emergency Stop is on — drain stopped.' });
+        stoppedReason = 'emergency-stop';
+        break pageLoop;
+      }
+      if (res && res.inFlight) {
+        skipped += 1;
+        results.push({ ...base, outcome: 'skipped', reason: 'Task already running in another execution.' });
+        continue;
+      }
+      if (res && res.recoveredStale) {
+        skipped += 1;
+        results.push({ ...base, outcome: 'skipped', reason: 'Task was recovered from a stale lock and re-queued with backoff — it runs automatically once the backoff elapses.' });
+        continue;
+      }
+      if (!res || res.ok !== true) {
+        // runTask refused without running (409 protection / pause /
+        // already-resolved): a skip, not a drain failure.
+        skipped += 1;
+        results.push({ ...base, outcome: 'skipped', reason: String((res && res.error) || 'Task could not run.').slice(0, 300) });
+        continue;
+      }
+      const outcome = res.outcome || 'failed';
+      if (outcome === 'done' || outcome === 'no-op') {
+        done += 1;
+        consecutiveFailures = 0;
+        // A drained content task that produced a real LLM draft must
+        // persist it as a CMS draft now (see convertContentDraft) —
+        // otherwise the drain reports 'done' and no article appears.
+        // 'no-op' scaffolds are never converted.
+        let conversion = null;
+        if (outcome === 'done' && task.agent === 'content-creation' && res.result
+          && res.result.scaffold && res.result.scaffold.llmGenerated
+          && typeof res.result.scaffold.body === 'string' && res.result.scaffold.body.trim()) {
+          try {
+            conversion = await convertContentDraft(env, task, res.result.scaffold);
+          } catch (err) {
+            conversion = { converted: false, error: String((err && err.message) || err).slice(0, 300) };
+          }
+          if (conversion && conversion.converted) draftsConverted += 1;
+        }
+        results.push({ ...base, outcome, attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, ...(conversion ? { conversion } : {}) });
+      } else {
+        failed += 1;
+        consecutiveFailures += 1;
+        results.push({ ...base, outcome: 'failed', attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, reason: String((res.result && res.result.error) || 'Task failed.').slice(0, 300) });
+      }
     }
+    // A short page means the queue is exhausted — no further page can
+    // return rows (the cursor already sits past the last row read).
+    if (rows.length < pageLimit) break pageLoop;
   }
 
   return {
@@ -1148,7 +1207,8 @@ async function step(env, agent, label, fn) {
 
 /**
  * Daily workflow. Steps: (0) drain the queue (W1: runHealthCheck,
- * then runTask per eligible queued task, oldest-first, max 10);
+ * then runTask per eligible queued task, oldest-first, max 10
+ * ATTEMPTED per run — skipped tasks do not consume a slot, B2);
  * (1) security health check; (2) enqueue research
  * for the two thinnest divisions; (3) fetch RSS inline when
  * auto_research is on; (4) enqueue content tasks from today's fresh
