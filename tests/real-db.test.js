@@ -291,6 +291,17 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
       status: 'approved', publish_at: '2020-01-01T00:00:00.000Z',
     }), env);
     assert.equal(due.status, 201);
+    // B1 (2026-11-23): the scheduled path now enforces the 1/day
+    // Dhaka-day limit, and this test already created one published
+    // article today (the future article above) — with the live default
+    // the due article would (correctly) be skipped as over-limit. This
+    // test is about due/future visibility, not the limit (pinned in
+    // tests/closeout-b1.test.js), so raise the limit to 2 for this run.
+    // This fresh-deploy DB (schema + seed) predates migration 005, so
+    // the autonomy_settings table itself must be created first — live
+    // D1 has had it since migration 005.
+    db.exec("CREATE TABLE IF NOT EXISTS autonomy_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')))");
+    db.prepare("INSERT OR REPLACE INTO autonomy_settings (key, value) VALUES ('max_articles_per_day', '2')").run();
     const result = await publishDueArticles(env);
     assert.equal(result.ok, true);
     assert.ok(result.slugs.includes('real-db-due-article'));

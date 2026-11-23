@@ -194,6 +194,13 @@ describe('CMS admin articles (/api/admin/articles)', () => {
       status: 'approved', publish_at: '2020-01-01T00:00:00.000Z',
     });
     assert.equal(due.res.status, 201);
+    // B1 (2026-11-23): the scheduled path now enforces the 1/day
+    // Dhaka-day limit, and this SHARED env already published 4
+    // articles today in earlier tests — with the live default the due
+    // article would (correctly) be skipped as over-limit. This test is
+    // about due/future filtering, not the limit (pinned in
+    // tests/closeout-b1.test.js), so raise the limit for this run only.
+    await env.DB.prepare('UPDATE autonomy_settings SET value = ? WHERE key = ?').bind('10', 'max_articles_per_day').run();
     const result = await publishDueArticles(env);
     assert.equal(result.ok, true);
     assert.ok(result.published >= 1, 'at least the due article publishes');

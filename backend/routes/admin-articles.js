@@ -23,6 +23,7 @@ import {
 import { getEmergencyStop } from './admin.js';
 import { stripDraftBanner, hasDraftBanner } from '../utils/draftBanner.js';
 import { assertNotProtected } from '../publishing/protection.js';
+import { countPublishedTodayDhaka } from '../publishing/gate.js';
 
 const ARTICLE_COLUMNS = 'a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt';
 
@@ -400,6 +401,16 @@ export async function handleAdminArticles(request, env, ctx, auth) {
  * directly by tests. When the Emergency Stop flag is on, nothing is
  * published and the skip is logged. Nothing else is ever auto-published:
  * only owner-approved (status='approved') articles with a due publish_at.
+ *
+ * Daily limit (B1, 2026-11-23): the run publishes at most
+ * `max_articles_per_day` articles per Dhaka day — the same 1/day rule
+ * the publish gate enforces on the approval path (gate.js check 9),
+ * counted with the gate's own countPublishedTodayDhaka(). A due article
+ * beyond the remaining slots stays 'approved' and is reported as
+ * skipped-due-to-limit. A banner-blocked article never consumes a slot.
+ * If the limit or the published-today count cannot be read, the run
+ * FAILS SAFE: nothing publishes and ok:false is returned — never
+ * publish past an unverifiable limit.
  */
 export async function publishDueArticles(env) {
   if (!env || !env.DB) return { ok: false, published: 0, error: 'D1 database is not bound.' };
@@ -409,6 +420,29 @@ export async function publishDueArticles(env) {
       [null, 'scheduled_publish', 'article', JSON.stringify({ outcome: 'skipped', reason: 'Emergency Stop is on.' }), 'skipped', nowIso()]).catch(() => {});
     return { ok: true, published: 0, skipped: true, reason: 'Emergency Stop is on.' };
   }
+  // B1 daily-limit check — BEFORE anything publishes. The setting read
+  // is deliberately strict (unlike the gate's local setting() helper,
+  // which swallows errors and falls back): a lookup failure must fail
+  // safe. A missing row still means the default '1'; only a thrown
+  // error refuses the run. The limit parse matches gate.js check 9
+  // (parseInt, finite and >= 0, else 1).
+  let dailyLimit;
+  let publishedToday;
+  try {
+    const limitRow = await d1First(env, 'SELECT value FROM autonomy_settings WHERE key = ? LIMIT 1', ['max_articles_per_day']);
+    const limitRaw = limitRow && typeof limitRow.value === 'string' ? limitRow.value : '1';
+    const parsed = Number.parseInt(limitRaw, 10);
+    dailyLimit = Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+    publishedToday = await countPublishedTodayDhaka(env);
+    if (!Number.isFinite(publishedToday) || publishedToday < 0) throw new Error('Published-today count is not a number.');
+  } catch (e) {
+    const message = e && e.message ? e.message : String(e);
+    await d1Run(env,
+      'INSERT INTO agent_activity_logs (agent_id, action, entity_type, details, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [null, 'scheduled_publish', 'article', JSON.stringify({ outcome: 'failed', reason: `Daily-limit check failed: ${message}` }), 'failed', nowIso()]).catch(() => {});
+    return { ok: false, published: 0, error: `Daily-limit check failed: ${message}` };
+  }
+  const remainingSlots = dailyLimit - publishedToday;
   const now = nowIso();
   const due = await d1All(env,
     'SELECT id, slug, body FROM articles WHERE status = ? AND publish_at IS NOT NULL AND publish_at <= ? ORDER BY publish_at ASC',
@@ -419,14 +453,24 @@ export async function publishDueArticles(env) {
   // publish handler. A due article whose banner strips cleanly publishes
   // with the cleaned body; one whose banner survives the strip stays
   // 'approved' (a draft in effect) and is never published — a scheduled
-  // run must never expose a banner either.
+  // run must never expose a banner either. A banner skip never consumes
+  // a daily-limit slot: the slot is only spent by an actual publish.
   let skippedBanner = 0;
   const skippedBannerSlugs = [];
+  // B1: due articles beyond the remaining daily slots stay 'approved'
+  // and are reported as skipped-due-to-limit (never touched).
+  let skippedDailyLimit = 0;
+  const skippedDailyLimitSlugs = [];
   for (const row of due || []) {
     const prep = preparePublishBody(row.body || '');
     if (!prep.ok) {
       skippedBanner += 1;
       skippedBannerSlugs.push(row.slug);
+      continue;
+    }
+    if (published >= remainingSlots) {
+      skippedDailyLimit += 1;
+      skippedDailyLimitSlugs.push(row.slug);
       continue;
     }
     if (prep.body !== (row.body || '')) {
@@ -444,6 +488,6 @@ export async function publishDueArticles(env) {
   await d1Run(env,
     'INSERT INTO agent_activity_logs (agent_id, action, entity_type, details, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     [agent ? agent.id : null, 'scheduled_publish', 'article',
-     JSON.stringify({ outcome: 'completed', published, slugs: publishedSlugs, skippedBanner, skippedBannerSlugs }), 'success', nowIso()]).catch(() => {});
-  return { ok: true, published, slugs: publishedSlugs, skippedBanner, skippedBannerSlugs };
+     JSON.stringify({ outcome: 'completed', published, slugs: publishedSlugs, skippedBanner, skippedBannerSlugs, skippedDailyLimit, skippedDailyLimitSlugs, dailyLimit, publishedToday }), 'success', nowIso()]).catch(() => {});
+  return { ok: true, published, slugs: publishedSlugs, skippedBanner, skippedBannerSlugs, skippedDailyLimit, skippedDailyLimitSlugs, dailyLimit, publishedToday };
 }

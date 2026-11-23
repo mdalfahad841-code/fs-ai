@@ -70,8 +70,13 @@ function makeFakeD1() {
       { id: 2, platform: 'Facebook', account_name: null, account_url: null, handle: null, status: 'pending', notes: 'PENDING — account not yet created.', verified_at: null },
     ],
     revenue_records: [],
+    // B1 (2026-11-23): publishDueArticles reads the daily limit from
+    // here — seeded with migration 005's live default of 1/day.
+    autonomy_settings: [
+      { key: 'max_articles_per_day', value: '1' },
+    ],
   };
-  const nextId = { articles: 1, article_revisions: 1, article_tags: 1, business_divisions: 9, ai_agents: 17, agent_activity_logs: 1, automation_jobs: 1, newsletter_subscribers: 1, website_settings: 3, digital_tools: 3, monetization_accounts: 3, website_analytics: 2, categories: 1 };
+  const nextId = { articles: 1, article_revisions: 1, article_tags: 1, business_divisions: 9, ai_agents: 17, agent_activity_logs: 1, automation_jobs: 1, newsletter_subscribers: 1, website_settings: 3, digital_tools: 3, monetization_accounts: 3, website_analytics: 2, categories: 1, autonomy_settings: 1 };
 
   function insertRow(table, row) {
     const id = nextId[table]++;
@@ -259,6 +264,22 @@ function makeFakeD1() {
     if (q.startsWith('SELECT COUNT(*) AS count FROM automation_jobs WHERE status IN')) {
       return { results: [{ count: tables.automation_jobs.filter((j) => j.status === 'queued' || j.status === 'running').length }] };
     }
+    // B1 (2026-11-23): the daily-limit queries publishDueArticles
+    // issues — the setting read (same shape as the gate's local
+    // setting() helper) and the gate's Dhaka-day published count.
+    // A missing key returns no row, so the caller falls back to '1'.
+    if (q.startsWith('SELECT value FROM autonomy_settings WHERE key = ? LIMIT 1')) {
+      const row = tables.autonomy_settings.find((r) => r.key === params[0]);
+      return { results: row ? [{ value: row.value }] : [] };
+    }
+    if (q.startsWith("SELECT COUNT(*) AS n FROM articles WHERE status = 'published' AND datetime(published_at) >=")) {
+      // Dhaka day start in UTC: now +6h, start of that day, -6h.
+      const dhaka = new Date(Date.now() + 6 * 60 * 60 * 1000);
+      dhaka.setUTCHours(0, 0, 0, 0);
+      const dayStartUtc = new Date(dhaka.getTime() - 6 * 60 * 60 * 1000);
+      const n = tables.articles.filter((a) => a.status === 'published' && a.published_at && new Date(a.published_at) >= dayStartUtc).length;
+      return { results: [{ n }] };
+    }
     if (q.startsWith('SELECT COALESCE(SUM(amount), 0) AS total FROM revenue_records')) {
       const total = tables.revenue_records.reduce((s, r) => s + Number(r.amount || 0), 0);
       return { results: [{ total }] };
@@ -406,6 +427,14 @@ function makeFakeD1() {
       const row = tables.articles.find((a) => a.id === Number(id));
       if (!row) return { success: true, meta: { changes: 0, last_row_id: 0 } };
       Object.assign(row, { division_id, title, slug, excerpt, body, author, status, fact_checked, seo_title, seo_description, featured_image, published_at, publish_at, updated_at });
+      return { success: true, meta: { changes: 1, last_row_id: 0 } };
+    }
+    if (q.startsWith('UPDATE autonomy_settings SET value = ? WHERE key = ?')) {
+      // B1 (2026-11-23): lets a test raise the daily limit for its own
+      // fixture (e.g. a shared env that already published today).
+      const row = tables.autonomy_settings.find((r) => r.key === params[1]);
+      if (!row) return { success: true, meta: { changes: 0, last_row_id: 0 } };
+      row.value = params[0];
       return { success: true, meta: { changes: 1, last_row_id: 0 } };
     }
     if (q.startsWith("UPDATE articles SET status = ?, published_at = ?, updated_at = ? WHERE id = ?")) {

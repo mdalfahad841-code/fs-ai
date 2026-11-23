@@ -330,6 +330,12 @@ describe('publishDueArticles — scheduled publish', () => {
       db.prepare('UPDATE articles SET publish_at = ? WHERE id = ?')
         .run(id === futureId ? '2999-01-01T00:00:00.000Z' : past, id);
     }
+    // B1 (2026-11-23): the scheduled path now enforces the 1/day
+    // Dhaka-day limit, and this fixture has TWO publishable due
+    // articles. This test is about banner stripping/skipping, not the
+    // limit (pinned in tests/closeout-b1.test.js), so raise the limit
+    // to 2 for this run only. Assertions below are unchanged.
+    db.prepare("UPDATE autonomy_settings SET value = '2' WHERE key = 'max_articles_per_day'").run();
     const result = await publishDueArticles(env);
     assert.equal(result.ok, true);
     assert.equal(result.published, 2);
