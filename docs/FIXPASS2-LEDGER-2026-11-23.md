@@ -6,8 +6,9 @@ started by the Item 1 builder; items 1 + 4 are DONE and deployed together
 1b52f98, live-verified — see the end of the item 2 section); item 3 is
 DONE (run #59, HEAD cc11a86, live-verified — see the end of the item 3
 section); item 5 is DONE (run #60, HEAD 7576811, live-verified — see the
-end of the item 5 section); later items append their sections here
-(parent merges).
+end of the item 5 section); item 6 is DONE (run #61, HEAD 72d496a,
+live-verified — see the end of the item 6 section); later items append
+their sections here (parent merges).
 **Working tree:** `~/workspace/fs-ai-source/fs-ai/` (local only, NOT a git repo).
 Parent deploys (zip + one-time workflow) and live-verifies with raw curl
 between items. One deployable item at a time. Build only — this item was
@@ -511,3 +512,20 @@ real publishing to test; $0 only; no secrets in code, logs or reports.
 - **NOT TESTED live:** everything visual (no live render, no viewport resize, no computed-style read in this environment); the no-flash observation on a slow connection; the 390 px layout. NOT DONE: the briefly-blank Latest guide card (see above — needs static pre-render, stale-data risk, out of scope); deleting the loading `<p>` elements (deliberately kept — SEO Function anchors, see Fix 2); the noscript `<style>` blocks (kept, redundant but harmless).
 - **Rollback:** revert the deploy commit (CSS-only change; no migration, no data written by the change itself).
 - **Confirmation (item 6):** no protected article was published/edited/touched; no live D1 writes of any kind; no settings, E-Stop, schedule, or cron changed; Shorts cron stays PAUSED; social_auto_post OFF; no OAuth; no secrets; no existing test weakened; hero wording untouched.
+
+### Item 6 — run #61 live verification: DONE (2026-11-23 ~14:40)
+- **Run #61 GREEN** (2026-11-23 14:37–14:38, HEAD 72d496a603fbe9025b808478adb383059996d61a, parent 7576811, 3 files, +204/−2). Parent live-verified by raw curl + a browser task (cloud, Environment 1, 1919×998):
+  - Served main.css contains `align-items: start` (in `.grid`) + `.grid-loading { display: none; }`.
+  - Division automotive still `x-seo-head: rewritten` (title "Automotive — FS AI", noscript 13 article links) — the SEO anchor survived the CSS change.
+  - Home 200; noscript division links 8; loading paragraphs still in the HTML (anchors intact); hero stats "8 divisions · 25 articles · 20 free tools" confirmed in the rendered page (it is JS-rendered, so it is absent from the raw HTML — expected, not a regression).
+  - **Flash: GONE.** No "Loading divisions…" / "Loading articles…" text on the home page or the division page, on initial open or hard reloads (a text search for "Loading" found nothing).
+  - **Dead space: GONE, both themes.** Every division card ends ~20–30 px below its "Explore … →" link (visual estimate, not measured) in dark AND light; all 12 Automotive article cards likewise end shortly below their date line. All 8 division cards render with correct counts (12/2/2/3/2/1/2/1).
+  - **Honest nuance:** the division page's first captured paint is still a brief unhydrated/blank state (generic "All divisions" heading, empty "Articles" area, no header/footer) before it hydrates to "Automotive" + 12 articles. It contains no loading text, but the blank paint itself remains — the same JS-hydration shape as the not-fixed Latest guide blank card. Recorded, not hidden.
+- **NOT TESTED live:** the 390 px layout (the cloud browser cannot resize viewports — a real-phone check is needed); no-flash on a slow connection.
+- **Confirmation (item 6):** no protected article was published/edited/touched; no live D1 writes; no settings, E-Stop, schedule, or cron changed; Shorts cron stays PAUSED; social_auto_post OFF; no OAuth; no secrets; hero wording untouched (main.css diff was 1 line changed + 17 added, 0 deletions).
+
+### Item 7 — docs only: DONE (2026-11-23 ~14:41, parent-written, no deploy)
+- **File:** `docs/SEARCH-CONSOLE-RESUBMIT-2026-11-23.md` (6,741 B). Owner-only steps, no action taken.
+- **Content:** why now (item 2's server-side heads are live since run #58 — crawlers see per-article heads without JS); current state as of the 23 Nov 11:00 check (sitemap "Couldn't fetch", last read 22 Nov, 0 discovered; Article 1 quota exceeded 8× consecutively, quota did not reset overnight; Article 6 unknown to Google; Overview 0 indexed / 1 not indexed — homepage "Crawled - currently not indexed", last crawled 18 Nov); Step 1 — resubmit the sitemap ONCE (and what success looks like: status "Success", discovered pages > 0 of 60); Step 2 — request indexing ONE URL per day (quota is the binding constraint; suggested order Article 1, then newest articles; homepage needs no request); how to read the results (Pages report, URL Inspection, Sitemaps discovered count, Performance baseline 0 clicks / 3 impressions); what NOT to do (no many-per-day requests, no repeated resubmits, "Crawled - currently not indexed" is Google's decision not a site bug, no paid indexing services); if-something-looks-wrong (sitemap still failing after 3–4 days, quota still exceeded, live test saying "cannot be indexed").
+- **No code, no tests, no deploy for this item.** The doc ships with the final ledger deploy (run #62).
+- **Confirmation (item 7):** no protected article was published/edited/touched; no live D1 writes; no settings, E-Stop, schedule, or cron changed; Shorts cron stays PAUSED; social_auto_post OFF; no OAuth; no secrets.
