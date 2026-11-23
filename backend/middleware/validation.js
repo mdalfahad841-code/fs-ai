@@ -182,6 +182,32 @@ export async function d1Run(env, sql, params = []) {
 }
 
 /**
+ * Run several statements as ONE atomic batch (Fix Pass 2 item 5,
+ * 2026-11-23 — deleteArticle's dependent-row deletes + article DELETE
+ * + audit INSERT). Cloudflare D1's env.DB.batch() executes the prepared
+ * statements as a single transaction: if any statement fails, the whole
+ * batch is rolled back, so a failed delete can never leave half the
+ * rows deleted or an audit row for an article that still exists
+ * (close-out B4). Bindings that do not offer batch() (test doubles)
+ * fall back to sequential d1Run calls in the same order — that fallback
+ * is NOT atomic, so callers that need all-or-nothing must run against
+ * a binding with batch(); real D1 always has it.
+ */
+export async function d1Batch(env, statements) {
+  if (!env || !env.DB) return null;
+  if (typeof env.DB.batch === 'function') {
+    const prepared = statements.map(({ sql, params = [] }) => {
+      const stmt = env.DB.prepare(sql);
+      return params.length ? stmt.bind(...params) : stmt;
+    });
+    return env.DB.batch(prepared);
+  }
+  const results = [];
+  for (const { sql, params = [] } of statements) results.push(await d1Run(env, sql, params));
+  return results;
+}
+
+/**
  * True when an error means "the referenced column does not exist".
  * SQLite (local tests) says "table X has no column named Y"; Cloudflare
  * D1 says "no such column: Y". Phase 3 migrations 016–018 add columns

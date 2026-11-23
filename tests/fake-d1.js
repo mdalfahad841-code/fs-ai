@@ -61,6 +61,17 @@ function makeFakeD1() {
     article_corrections: [],
     seo_checks: [],
     article_publish_overrides: [],
+    // Fix Pass 2 item 5 (2026-11-23): deleteArticle now removes the
+    // NO ACTION dependent rows in one batch. The fake models these six
+    // tables as plain arrays so the CMS delete test runs the same
+    // statements as the real route; the generic DELETE handler below
+    // (and the generic INSERT handler) stores rows in them.
+    correction_resolutions: [],
+    publication_logs: [],
+    article_fingerprints: [],
+    daily_publication_reservations: [],
+    article_fetch_runs: [],
+    article_deletion_audit: [],
     business_divisions: DIVISIONS.map((d) => ({ ...d, created_at: now, updated_at: now })),
     categories: [],
     ai_agents: AGENTS.map((a) => ({ ...a, status: 'active', created_at: now, updated_at: now })),
@@ -89,7 +100,7 @@ function makeFakeD1() {
       { key: 'max_articles_per_day', value: '1' },
     ],
   };
-  const nextId = { articles: 1, article_revisions: 1, article_tags: 1, business_divisions: 9, ai_agents: 17, agent_activity_logs: 1, automation_jobs: 1, newsletter_subscribers: 1, website_settings: 3, digital_tools: 3, monetization_accounts: 3, website_analytics: 2, categories: 1, autonomy_settings: 1, fact_checks: 1, claim_checks: 1, article_sources: 1, article_corrections: 1, seo_checks: 1, article_publish_overrides: 1 };
+  const nextId = { articles: 1, article_revisions: 1, article_tags: 1, business_divisions: 9, ai_agents: 17, agent_activity_logs: 1, automation_jobs: 1, newsletter_subscribers: 1, website_settings: 3, digital_tools: 3, monetization_accounts: 3, website_analytics: 2, categories: 1, autonomy_settings: 1, fact_checks: 1, claim_checks: 1, article_sources: 1, article_corrections: 1, seo_checks: 1, article_publish_overrides: 1, correction_resolutions: 1, publication_logs: 1, article_fingerprints: 1, daily_publication_reservations: 1, article_fetch_runs: 1, article_deletion_audit: 1 };
 
   function insertRow(table, row) {
     const id = nextId[table]++;
@@ -443,6 +454,15 @@ function makeFakeD1() {
         .map((r) => ({ id: r.id, claim_key: r.claim_key || null, original_text: r.original_text }));
       return { results: open };
     }
+    // Fix Pass 2 item 5 (2026-11-23): deleteArticle probes sqlite_master
+    // for the dependent tables it must clean up. The fake answers from
+    // its registered tables (params are the requested names).
+    if (q.startsWith('SELECT name FROM sqlite_master WHERE type = ')) {
+      return { results: params.filter((n) => tables[n]).map((n) => ({ name: n })) };
+    }
+    if (q.startsWith('SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?')) {
+      return { results: [{ n: tables.article_revisions.filter((r) => r.article_id === Number(params[0])).length }] };
+    }
     // Backup export: ORDER BY id DESC (all id tables) or ORDER BY rowid
     // DESC (autonomy_settings has no id column — its PK is `key`).
     const backup = /^SELECT \* FROM ([a-z_]+) ORDER BY (?:id|rowid) DESC LIMIT \?$/.exec(q);
@@ -486,6 +506,26 @@ function makeFakeD1() {
       const before = tables.business_divisions.length;
       tables.business_divisions = tables.business_divisions.filter((d) => d.id !== Number(params[0]));
       return { success: true, meta: { changes: before - tables.business_divisions.length, last_row_id: 0 } };
+    }
+    // Fix Pass 2 item 5 (2026-11-23): deleteArticle's batch removes the
+    // NO ACTION dependent rows first. The claim_checks delete joins its
+    // fact_checks by subquery (same shape as the real statement); every
+    // other dependent table deletes by article_id. Placed after the
+    // specific DELETE handlers above so they keep precedence.
+    if (q.startsWith('DELETE FROM claim_checks WHERE fact_check_id IN (SELECT id FROM fact_checks WHERE article_id = ?)')) {
+      const fcIds = new Set(tables.fact_checks.filter((r) => r.article_id === Number(params[0])).map((r) => r.id));
+      const before = tables.claim_checks.length;
+      tables.claim_checks = tables.claim_checks.filter((r) => !fcIds.has(r.fact_check_id));
+      return { success: true, meta: { changes: before - tables.claim_checks.length, last_row_id: 0 } };
+    }
+    {
+      const genericDelete = /^DELETE FROM ([a-z_]+) WHERE article_id = \?$/.exec(q);
+      if (genericDelete && tables[genericDelete[1]]) {
+        const table = genericDelete[1];
+        const before = tables[table].length;
+        tables[table] = tables[table].filter((r) => r.article_id !== Number(params[0]));
+        return { success: true, meta: { changes: before - tables[table].length, last_row_id: 0 } };
+      }
     }
     if (q.startsWith('UPDATE articles SET division_id = ?')) {
       const [division_id, title, slug, excerpt, body, author, status, fact_checked, seo_title, seo_description, featured_image, published_at, publish_at, updated_at, id] = params;

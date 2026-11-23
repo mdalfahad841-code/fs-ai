@@ -5,7 +5,9 @@
  *   GET    /api/admin/articles                  list ALL incl. drafts (?status= & ?division=)
  *   GET    /api/admin/articles/:id              one article, any status
  *   PUT    /api/admin/articles/:id              edit (stores a revision first)
- *   DELETE /api/admin/articles/:id              delete (revisions remain)
+ *   DELETE /api/admin/articles/:id              delete (dependent rows
+ *          removed in one atomic batch; audit written with the delete —
+ *          Fix Pass 2 item 5, 2026-11-23; revisions stay cascade-governed)
  *   POST   /api/admin/articles/:id/publish      manual publish — runs
  *          the publish gate (Fix Pass 2 item 1, 2026-11-23): a Blocked
  *          gate refuses with the failed-check reason list (422); an
@@ -27,7 +29,7 @@
 import {
   jsonOk, jsonError, parseQuery, readJsonBody, sanitiseText,
   isValidSlug, isValidIsoDateTime, isSafeUrl, slugify, nowIso,
-  d1All, d1First, d1Run, ARTICLE_STATUSES,
+  d1All, d1First, d1Run, d1Batch, ARTICLE_STATUSES,
 } from '../middleware/validation.js';
 import { getEmergencyStop } from './admin.js';
 import { stripDraftBanner, hasDraftBanner } from '../utils/draftBanner.js';
@@ -291,48 +293,118 @@ async function deleteArticle(env, id, auth) {
   if (!guard.ok) return jsonError(guard.reason, 403);
   const current = await fetchArticle(env, id);
   if (!current) return jsonError('Article not found', 404);
-  // Deletion audit (migration 025, Workstream A): record what is about
-  // to be deleted BEFORE deleting it — the audit row keeps the title,
-  // slug, status and body length after the article row is gone.
-  // Best-effort pre-025 (a missing table skips the write); the table
-  // is applied at deploy, after which every deletion is audited.
+  // Fix Pass 2 item 5 (2026-11-23): delete the article and its
+  // dependent rows in ONE atomic batch (d1Batch — real D1 executes it
+  // as a single transaction), with the deletion audit as the LAST
+  // statement of the same batch — the audit row lands only when the
+  // delete lands. Close-out B4: the old code wrote the audit row
+  // BEFORE the DELETE, so a delete that failed on the FK left an audit
+  // row for an article that still exists; and the old code deleted only
+  // the articles row, so a draft with fact-check/SEO rows failed on
+  // live D1 with FOREIGN KEY constraint failed and nothing was deleted.
+  let statements;
   try {
-    const revs = await d1First(env, 'SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?', [id]);
-    await d1Run(env,
-      'INSERT INTO article_deletion_audit (article_id, title, slug, status_at_delete, deleted_by, body_length, revisions_kept) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [Number(id), current.title || '', current.slug || '', current.status || '', (auth && auth.owner) || null, String(current.body || '').length, Number(revs ? revs.n : 0)]);
-  } catch {
-    // Pre-025 database: no audit table yet — the deletion still
-    // proceeds (same degrade pattern as the SEO body-hash fallback).
+    statements = await buildDeleteStatements(env, id, current, auth);
+  } catch (err) {
+    return jsonError('Article delete failed', 500);
   }
-  await d1Run(env, 'DELETE FROM articles WHERE id = ?', [id]);
-  // WS-E finding L4 (Workstream A fix, 2026-11-21): the old code
-  // deleted only the articles row, leaving orphan article_tags and
-  // article_sources rows behind. Clean up the article's own rows.
-  // Both tables declare ON DELETE CASCADE, and D1 enforces foreign
-  // keys by default (PRAGMA foreign_keys reads 1 on live D1), so the
-  // cascade already removes them there — these DELETEs delete 0 rows
-  // and are harmless. The explicit DELETEs are the safety net for a
-  // store where the cascade does not fire. Either way no orphan
-  // survives.
-  // B4 (2026-11-23, comment corrected — behaviour UNCHANGED, see the
-  // close-out ledger): article_revisions also declares ON DELETE
-  // CASCADE, so a delete removes its revisions; the audit row
-  // (migration 025, no FK to articles) is the durable record either
-  // way — it records how many revisions existed at delete time
-  // (revisions_kept). But fact_checks and seo_checks declare
-  // REFERENCES articles(id) with NO ACTION, so deleting an article
-  // that has fact-check/SEO rows FAILS on live D1 with FOREIGN KEY
-  // constraint failed — nothing is deleted. This function does NOT
-  // delete those rows first and does NOT refuse the delete up front;
-  // whether to delete them explicitly or refuse with a clean 409 is
-  // an open decision (ledger B4 carried item) — do NOT test it by
-  // deleting a live article. Note: the audit row above is written
-  // before the DELETE, so a delete that fails on the FK still leaves
-  // an audit row for an article that still exists.
-  await d1Run(env, 'DELETE FROM article_tags WHERE article_id = ?', [id]);
-  await d1Run(env, 'DELETE FROM article_sources WHERE article_id = ?', [id]);
+  try {
+    await d1Batch(env, statements);
+  } catch {
+    // Atomic batch: a failure anywhere rolls the whole batch back, so
+    // the article and every dependent row are still there and no audit
+    // row claims a deletion that did not happen.
+    return jsonError('Article delete failed', 500);
+  }
   return jsonOk({ ok: true, deleted: Number(id) });
+}
+
+// Tables whose rows reference articles(id) with NO ACTION (default) —
+// each blocks DELETE FROM articles until its rows for the article are
+// gone. Verified against database/migrations/ (Fix Pass 2 item 5).
+// Order is FK-safe: correction_resolutions references
+// article_corrections(id), article_corrections references
+// claim_checks(id), claim_checks references fact_checks(id).
+// article_tags / article_sources declare ON DELETE CASCADE; their
+// explicit DELETEs are the pre-existing WS-A safety net for a store
+// where the cascade does not fire (kept, unchanged).
+// article_revisions is deliberately NOT deleted here: it declares
+// ON DELETE CASCADE, so the cascade governs it — and the revisions
+// endpoint must keep listing a deleted article's revisions where the
+// cascade does not fire (tests/cms.test.js pins this).
+// NOT deleted (no FK, so they never block the delete — history kept):
+// article_publish_overrides (override audit, migration 032),
+// social_posts + youtube_videos (article_id is a plain value column,
+// migrations 022/028 — distribution/analytics history, not owned rows),
+// keywords + affiliate_links (ON DELETE SET NULL — the FK nulls them).
+const DELETE_DEPENDENTS = [
+  { table: 'correction_resolutions', sql: 'DELETE FROM correction_resolutions WHERE article_id = ?' },
+  { table: 'article_corrections', sql: 'DELETE FROM article_corrections WHERE article_id = ?' },
+  { table: 'claim_checks', sql: 'DELETE FROM claim_checks WHERE fact_check_id IN (SELECT id FROM fact_checks WHERE article_id = ?)', needs: ['claim_checks', 'fact_checks'] },
+  { table: 'fact_checks', sql: 'DELETE FROM fact_checks WHERE article_id = ?' },
+  { table: 'seo_checks', sql: 'DELETE FROM seo_checks WHERE article_id = ?' },
+  { table: 'publication_logs', sql: 'DELETE FROM publication_logs WHERE article_id = ?' },
+  { table: 'article_fingerprints', sql: 'DELETE FROM article_fingerprints WHERE article_id = ?' },
+  { table: 'daily_publication_reservations', sql: 'DELETE FROM daily_publication_reservations WHERE article_id = ?' },
+  { table: 'article_fetch_runs', sql: 'DELETE FROM article_fetch_runs WHERE article_id = ?' },
+  { table: 'article_tags', sql: 'DELETE FROM article_tags WHERE article_id = ?' },
+  { table: 'article_sources', sql: 'DELETE FROM article_sources WHERE article_id = ?' },
+];
+
+// Which of the named tables exist in this database — one read-only
+// sqlite_master query (D1 exposes it; close-out B4 used it live).
+// A table that does not exist cannot hold rows that block the delete,
+// so it is simply left out of the batch: harness databases built from
+// a partial migration set (e.g. backup-restore, no 015/021/024/026/029)
+// delete cleanly instead of failing on "no such table". When the probe
+// itself fails (a test double without the handler), null means "assume
+// the full set" — the batch then fails loudly on the first missing
+// table instead of silently deleting half the rows.
+async function existingTables(env, names) {
+  try {
+    const placeholders = names.map(() => '?').join(', ');
+    const rows = await d1All(env,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${placeholders})`, names);
+    if (!rows) return null;
+    return new Set(rows.map((r) => r.name));
+  } catch {
+    return null;
+  }
+}
+
+async function buildDeleteStatements(env, id, current, auth) {
+  const allNames = [...new Set([
+    ...DELETE_DEPENDENTS.flatMap((d) => d.needs || [d.table]),
+    'article_revisions', 'article_deletion_audit',
+  ])];
+  const existing = await existingTables(env, allNames);
+  const has = (name) => !existing || existing.has(name);
+  // Deletion audit (migration 025): record how many revisions existed
+  // at delete time — the audit row is the durable record either way.
+  let revisionsKept = 0;
+  if (has('article_revisions')) {
+    try {
+      const revs = await d1First(env, 'SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?', [id]);
+      revisionsKept = Number(revs ? revs.n : 0);
+    } catch {
+      revisionsKept = 0;
+    }
+  }
+  const statements = [];
+  for (const dep of DELETE_DEPENDENTS) {
+    if ((dep.needs || [dep.table]).every(has)) statements.push({ sql: dep.sql, params: [id] });
+  }
+  statements.push({ sql: 'DELETE FROM articles WHERE id = ?', params: [id] });
+  if (has('article_deletion_audit')) {
+    statements.push({
+      sql: 'INSERT INTO article_deletion_audit (article_id, title, slug, status_at_delete, deleted_by, body_length, revisions_kept) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      params: [Number(id), current.title || '', current.slug || '', current.status || '', (auth && auth.owner) || null, String(current.body || '').length, revisionsKept],
+    });
+  }
+  // Else: pre-025 database — the deletion proceeds unaudited, as before
+  // (the old code's degrade; the backup-restore harness has no audit
+  // table). No false audit row can be written when the table is absent.
+  return statements;
 }
 
 /**
