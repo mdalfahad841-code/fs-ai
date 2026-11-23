@@ -10,6 +10,7 @@
  * No password, hash or raw token is ever logged or returned to the client.
  */
 import { createSession, requireOwner, revokeSession } from '../middleware/auth.js';
+import { checkLoginLockout, clearLoginAttempts, normalizeLoginEmail, recordFailedLogin } from '../middleware/login-lockout.js';
 import { isValidEmail, jsonError, jsonOk, readJsonBody } from '../middleware/validation.js';
 
 function bearerToken(request) {
@@ -38,12 +39,37 @@ export async function handleAuth(request, env) {
     if (!env.OWNER_PASSWORD_HASH) {
       return jsonError('Owner password is not configured on the server.', 503);
     }
+    // Login lockout (close-out B3): 5 failed attempts for this email
+    // lock the address out for a fixed 15 minutes. During the window
+    // ALL attempts for the key are rejected with 429 — the password
+    // is not checked and nothing is recorded, so the window can never
+    // self-extend. A missing/unavailable lockout store fails open
+    // (checkLoginLockout reports "not locked"), so login still works.
+    // Existing sessions are never locked out: requireOwner does not
+    // consult the lockout table.
+    const lockKey = normalizeLoginEmail(email);
+    const lock = await checkLoginLockout(env, lockKey);
+    if (lock.locked) {
+      const res = jsonError('Too many failed login attempts. Please try again later.', 429, { retryAfterSeconds: lock.retryAfterSeconds });
+      res.headers.set('Retry-After', String(lock.retryAfterSeconds));
+      return res;
+    }
     const session = await createSession(env, email, password);
     if (!session.ok) {
+      // Wrong password: record the failure (a no-op while locked —
+      // unreachable here, since a locked key returns 429 above — and
+      // fail-open when the store is unavailable). The triggering
+      // attempt itself still answers 401; the lock bites from the
+      // NEXT attempt.
+      await recordFailedLogin(env, lockKey);
       // createSession only fails here on a bad password (the unconfigured
       // case is handled above) — never reveal which part was wrong.
       return jsonError('Invalid email or password.', 401);
     }
+    // Correct password: clear any failure count for this key, so a
+    // successful login always resets the lockout state. Best-effort —
+    // a failed clear never fails the login.
+    await clearLoginAttempts(env, lockKey);
     return jsonOk({ token: session.token, expiresAt: session.expiresAt, owner: session.owner });
   }
 
