@@ -490,13 +490,14 @@ describe('A1.6 search hint, badge gap, Latest-guide tie-break', () => {
     assert.equal(list.slice().sort(FSAI.sortLatestFirst)[1].id, 13, 'then the next id');
   });
 
-  it('static bundle: Latest guide is now id 13 (the tie-break winner), not id 1', async () => {
+  it('static bundle: Latest guide is now id 25 (A2 Set B dates — max date 2026-11-11, highest id)', async () => {
     const { FSAI, made } = loadApp(fetchFail());
     made.fire();
     await FSAI.liveReady;
     await tick();
-    assert.ok(made.els.heroPreview.innerHTML.includes('What Is AI?'), 'hero shows id 13');
-    assert.ok(made.els.heroPreview.innerHTML.includes('No. 13'), 'hero plate shows No. 13');
+    assert.ok(made.els.heroPreview.innerHTML.includes('How to Plan a Road Trip'), 'hero shows id 25');
+    assert.ok(made.els.heroPreview.innerHTML.includes('No. 25'), 'hero plate shows No. 25');
+    assert.ok(!made.els.heroPreview.innerHTML.includes('What Is AI?'), 'hero no longer shows id 13');
     assert.ok(!made.els.heroPreview.innerHTML.includes('EV Charging at Home'), 'hero no longer shows id 1');
   });
 
