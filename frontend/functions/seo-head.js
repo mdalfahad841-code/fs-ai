@@ -624,6 +624,61 @@ function divisionSlugForName(divisions, name) {
   return d ? d.id : null;
 }
 
+/* ------------------------------------------------------------------ */
+/* Related articles — the same picker as the client-side block.        */
+/* ------------------------------------------------------------------ */
+
+/** Newest first: date desc, id desc on ties (mirror of app.js
+ * sortLatestFirst). Dates are validated YYYY-MM-DD strings. */
+function sortLatestFirst(a, b) {
+  const d = b.date.localeCompare(a.date);
+  return d !== 0 ? d : b.id - a.id;
+}
+
+/**
+ * The 3 related articles for the article page (site traffic,
+ * 2026-11-23) — a pure mirror of app.js relatedArticles: same
+ * division first (newest first), then other divisions to fill to 3,
+ * never the current article. `list` is the merged published list
+ * (see mergeArticles); drafts can never appear because they never
+ * enter that list. Pure: returns a new array, changes nothing.
+ */
+export function relatedArticles(current, list) {
+  const items = Array.isArray(list) ? list : [];
+  const currentId = current ? current.id : null;
+  const same = [];
+  const other = [];
+  for (const a of items) {
+    if (!a || a.id === currentId) continue;
+    if (current && a.division === current.division) same.push(a); else other.push(a);
+  }
+  same.sort(sortLatestFirst);
+  other.sort(sortLatestFirst);
+  return same.concat(other).slice(0, 3);
+}
+
+/**
+ * The merged published list the picker reads: the static bundle
+ * first (static wins for shared ids), plus mapped live rows for ids
+ * the bundle lacks. Draft rows are dropped by mapLiveArticle, and a
+ * live row without a valid date is dropped too (same rule as
+ * findArticle) — the picker never sees either. Pure.
+ */
+export function mergeArticles(staticArticles, liveRows, divisions) {
+  const list = Array.isArray(staticArticles) ? staticArticles.slice() : [];
+  const seen = new Set(list.map((a) => a.id));
+  if (Array.isArray(liveRows)) {
+    for (const row of liveRows) {
+      const mapped = mapLiveArticle(row, divisions);
+      if (mapped && isValidDate(mapped.date) && !seen.has(mapped.id)) {
+        seen.add(mapped.id);
+        list.push(mapped);
+      }
+    }
+  }
+  return list;
+}
+
 function articleNo(id) {
   return 'No. ' + String(id).padStart(2, '0');
 }
@@ -678,18 +733,31 @@ function articleBreadcrumbs(article, divisions) {
   };
 }
 
-/** The noscript body for an article page: title, meta line, excerpt
- * and the full body HTML (the same HTML the page JS renders). The body
- * is the site's own trusted content — it is already rendered via
- * innerHTML by the page JS. A body containing a noscript breakout is
- * refused by the rewriter (see rewriteArticleHtml). */
-export function articleNoscript(article) {
-  return '<h1>' + escHtml(article.title) + '</h1>'
+/** The noscript body for an article page: title, meta line, excerpt,
+ * the full body HTML (the same HTML the page JS renders), and — when
+ * `related` is a non-empty list — a "Related guides" list of the
+ * related articles (site traffic, 2026-11-23; same picker as the
+ * client-side block, so a no-JS crawler sees the same internal links
+ * a JS browser renders). The body is the site's own trusted content
+ * — it is already rendered via innerHTML by the page JS. A body
+ * containing a noscript breakout is refused by the rewriter (see
+ * rewriteArticleHtml). Related titles are escaped, so they can never
+ * break out of the noscript. The whole noscript stays on one line
+ * (no newlines), which the byte-identical test in
+ * tests/fixpass2-item2.test.js relies on. */
+export function articleNoscript(article, related) {
+  let out = '<h1>' + escHtml(article.title) + '</h1>'
     + '<p class="card-tag">' + escHtml(article.division) + ' · ' + escHtml(article.category) + '</p>'
     + '<p class="article-meta"><span class="article-no">' + escHtml(articleNo(article.id)) + '</span> · Published '
     + escHtml(article.date) + ' · FS AI · ' + escHtml(article.division) + '</p>'
     + '<p><strong>' + escHtml(article.excerpt) + '</strong></p>'
     + '<div class="article-full">' + article.body + '</div>';
+  if (Array.isArray(related) && related.length > 0) {
+    out += '<h2>Related guides</h2><ul>'
+      + related.map((a) => '<li><a href="/pages/article?id=' + a.id + '">' + escHtml(a.title) + '</a></li>').join('')
+      + '</ul>';
+  }
+  return out;
 }
 
 function divisionJsonLd(division) {
@@ -761,9 +829,13 @@ function hasNoscriptBreakout(body) {
  * { html, rewritten: true } or { html: <original>, rewritten: false }.
  * The loading paragraph is replaced by the noscript body (JS browsers
  * discard it when the page JS renders; no-JS browsers read the
- * article). Everything else in the file is untouched.
+ * article). `allArticles` is the merged published list (see
+ * mergeArticles); the noscript carries the 3 related articles from
+ * it. When it is absent, no related section is rendered — the old
+ * 3-argument calls keep their exact behaviour. Everything else in
+ * the file is untouched.
  */
-export function rewriteArticleHtml(html, article, divisions) {
+export function rewriteArticleHtml(html, article, divisions, allArticles) {
   if (typeof html !== 'string' || !article || hasNoscriptBreakout(article.body || '')) {
     return { html, rewritten: false };
   }
@@ -802,10 +874,11 @@ export function rewriteArticleHtml(html, article, divisions) {
     + '<script type="application/ld+json" id="articleCrumbs">' + safeJsonLd(articleBreadcrumbs(article, divisions)) + '</script>\n';
   out = replaceOnce(out, '</head>', extra + '</head>');
   if (out === null) return { html, rewritten: false };
+  const related = relatedArticles(article, Array.isArray(allArticles) ? allArticles : []);
   out = replaceOnce(
     out,
     '<p class="muted">Loading article…</p>',
-    '<noscript>' + articleNoscript(article) + '</noscript>',
+    '<noscript>' + articleNoscript(article, related) + '</noscript>',
   );
   if (out === null) return { html, rewritten: false };
   return { html: out, rewritten: true };
@@ -1016,14 +1089,23 @@ export async function handleSeoRequest(context, kind, deps = {}) {
     if (kind === 'article') {
       const rawId = url.searchParams.get('id');
       let article = findArticle(staticData, null, rawId);
+      let liveRows = null;
       if (!article) {
         // Only an id the static bundle lacks justifies a live fetch.
         const fetchLiveArticles = (deps && deps.fetchLiveArticles) || defaultFetchLiveArticles;
-        const liveRows = await fetchLiveArticles(context);
+        liveRows = await fetchLiveArticles(context);
         article = findArticle(staticData, liveRows, rawId);
       }
       if (!article) return passthrough(res, html);
-      out = rewriteArticleHtml(html, article, staticData.divisions);
+      // The related list merges the static bundle with the live rows
+      // already fetched above (null for a static id — the live fetch
+      // must never run for an id the bundle already has, suite 2.7).
+      // A newly auto-published article therefore joins the noscript
+      // related list only when it is itself the requested article,
+      // or at the next deploy — the same static-only precedent as the
+      // division noscript list.
+      const allArticles = mergeArticles(staticData.articles, liveRows, staticData.divisions);
+      out = rewriteArticleHtml(html, article, staticData.divisions, allArticles);
     } else if (kind === 'division') {
       const slug = url.searchParams.get('division');
       if (!slug) return passthrough(res, html); // all-divisions view: generic is correct
