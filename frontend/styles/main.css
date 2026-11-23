@@ -91,7 +91,24 @@ img, canvas { max-width: 100%; }
 #search { padding: 24px 0 8px; }
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
 .section-head h2 { font-size: 32px; margin: 0; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 24px; align-items: start; }
+/* Fix Pass 2 item 6 (2026-11-23): the grid's default align-items: stretch
+   forced every card in a row to the tallest card's height, so shorter
+   division/article/tool cards showed a large empty area below their link.
+   align-items: start sizes each card to its own content instead; no card's
+   own look changes (banner, title, tagline, description, count, link,
+   colours, 24px gap all untouched). */
+/* Fix Pass 2 item 6 (2026-11-23): the pre-JS "Loading divisions…" /
+   "Loading articles…" paragraphs never paint — main.css is render-blocking,
+   so they are hidden before first paint and the flash is gone. The <p>
+   elements STAY in index.html / division.html: the division page's
+   "Loading articles…" paragraph is the anchor the SEO Function
+   (frontend/functions/seo-head.js rewriteDivisionHtml) replaces with the
+   noscript article list — deleting it would fail the Function's
+   fail-closed anchor check and division pages would fall back to generic
+   heads. No-JS users are unaffected: they get the <noscript> lists, as
+   before (the noscript <style> hides the text for them too). */
+.grid-loading { display: none; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
 .card h3 { margin: 8px 0 8px; font-size: 20px; line-height: 1.35; }
 .card h3 a { color: var(--text); }
