@@ -735,10 +735,13 @@ function articleBreadcrumbs(article, divisions) {
 
 /** The noscript body for an article page: title, meta line, excerpt,
  * the full body HTML (the same HTML the page JS renders), and — when
- * `related` is a non-empty list — a "Related guides" list of the
+ * `related` is a non-empty list — a related-articles list of the
  * related articles (site traffic, 2026-11-23; same picker as the
  * client-side block, so a no-JS crawler sees the same internal links
- * a JS browser renders). The body is the site's own trusted content
+ * a JS browser renders). The list carries LINKS ONLY, no heading:
+ * the page itself ships <h2>Related guides</h2> above the
+ * JS-rendered grid (article.html), and a heading here duplicated it
+ * in the served source (A4, Fix Pass 3, 2026-11-23: 2x on ids 1/12/25).
  * — it is already rendered via innerHTML by the page JS. A body
  * containing a noscript breakout is refused by the rewriter (see
  * rewriteArticleHtml). Related titles are escaped, so they can never
@@ -753,7 +756,12 @@ export function articleNoscript(article, related) {
     + '<p><strong>' + escHtml(article.excerpt) + '</strong></p>'
     + '<div class="article-full">' + article.body + '</div>';
   if (Array.isArray(related) && related.length > 0) {
-    out += '<h2>Related guides</h2><ul>'
+    // A4 (Fix Pass 3, 2026-11-23): links only, no <h2> — the page
+    // itself ships <h2>Related guides</h2> above the JS-rendered grid
+    // (article.html:46), so a heading here duplicated it in the served
+    // source. The static heading labels the section for every reader;
+    // the noscript only adds the links a crawler needs.
+    out += '<ul>'
       + related.map((a) => '<li><a href="/pages/article?id=' + a.id + '">' + escHtml(a.title) + '</a></li>').join('')
       + '</ul>';
   }

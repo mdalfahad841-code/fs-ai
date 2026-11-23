@@ -193,6 +193,9 @@ describe('article.html wiring', () => {
       const { html, rewritten } = seo.rewriteArticleHtml(ARTICLE_HTML, article, data.divisions);
       assert.equal(rewritten, true, `article ${id} still rewrites`);
       assert.ok(html.includes('<h2>Related guides</h2>'), 'heading survives the rewrite');
+      // A4 (Fix Pass 3, 2026-11-23): exactly one heading — the static
+      // one. The noscript no longer adds a second.
+      assert.equal((html.match(/Related guides/g) || []).length, 1, 'exactly one Related guides heading');
       assert.ok(html.includes('<title>' + article.title + ' — FS AI</title>'), 'per-article title still lands');
     }
   });

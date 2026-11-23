@@ -141,7 +141,7 @@ that one settings row to `workers-ai`.
   allowlist test `tests/autonomy-llm.test.js` 7/0 (3 suites). No other
   setting touched; no code changed; no deploy needed for A2.
 
-## A3. factCheckRun STARVATION — PENDING
+## A3. factCheckRun STARVATION — DONE (deployed + live-verified)
 
 Same fix pattern as seoRun (Fix Pass 2 item 4): widen candidate fetch,
 body_hash + body_length freshness on the latest fact_checks row (NULL or
@@ -150,12 +150,59 @@ unreadable = not fresh; never skip on unproven freshness), record
 checks, protected-article guards byte-identical. Tests including the
 starvation case. No live fact-check of any protected draft.
 
-- Status: PENDING
-- Files:
-- Tests before/after:
-- Deployed commit:
-- Raw live evidence:
-- Rollback:
+- Status: DONE
+- Files (diff vs the fixpass3 backup — exactly 2 new paths for A3):
+  `backend/routes/scheduler.js` (63 changed lines: new helper
+  `isFactCheckFreshForCurrentBody` + factCheckRun rework),
+  `tests/fixpass3-a3.test.js` (new, 301 lines, 5 tests).
+- Columns found (verified from the migrations): migration 009 creates
+  fact_checks with id, article_id, verdict, claims_total,
+  claims_verified, claims_failed, created_at, updated_at — NO body_hash,
+  NO body_length. Migration 019 adds **body_hash TEXT ONLY** — body_length
+  does NOT exist on fact_checks. No column invented, no migration added.
+  Freshness is therefore body_hash alone — which is also exactly the
+  staleness rule evaluatePublishGate() already applies to fact_checks
+  (migration 019 header). NULL hash never fresh; any read failure returns
+  false (fail-safe). Any verdict counts as fresh (needs-review/failed rows
+  are correctionRun's job). Latest row by created_at DESC, id DESC (same
+  as checkArticle's own lookup).
+- Protected guards: factCheckRun had NO protectedExclusion guard before
+  and has none now — parent-verified: 0 'protect' hits in the pre-change
+  step body (backup grep), protection.js byte-identical to the backup.
+  Fact-checking is advisory/read-only (never modifies an article), so
+  #26/#27 need no exclusion here, unlike seoRun/correctionRun. No guard
+  was added; adding one would have been a behaviour change beyond the
+  brief. seoRun's guard (scheduler.js:1477) untouched.
+- Loop: LIMIT 3 → 10 (same ORDER BY updated_at ASC, same status filter);
+  fresh → {articleId, outcome:'skipped-fresh'}, no slot consumed; stop
+  after 3 real checks; result {outcome:'done', checked, skippedFresh,
+  results}; counts.factChecksRun reads result?.checked (real checks only).
+- Tests before/after: 1727/0 (444 suites) → **1732/0 (445 suites)** (+5,
+  +1 suite — exactly the new file). Parent re-ran: 1732/0 exact match.
+  Tests: (a) fresh #28 skipped, stale #33 checked; (a2) stale latest row
+  → both re-checked; (b) cap 5 stale → exactly 3 real checks; (c) no
+  migrations 018/019 → lookup fails open, draft still checked;
+  (d) STARVATION: 4 fresh drafts + stale #44 behind them → 4×
+  skipped-fresh, #44 checked. Negative control: test (d) FAILS against
+  pre-change scheduler.js (counts 3 vs expected 1) and passes on the new
+  code.
+- Deployed commit: **d6afa39** (run #68 GREEN, 12 s, parent 2b4d75b;
+  run https://github.com/mdalfahad841-code/fs-ai/actions/runs/45186184837).
+- Raw live evidence (parent curl, 2026-11-23 ~19:41 Dhaka): home 200;
+  Worker health 200 ok:true db connected; sitemap 60 URLs; deployed
+  scheduler.js at commit d6afa39 AND on main contains
+  isFactCheckFreshForCurrentBody ×2 and skipped-fresh ×2; live D1
+  protected #26–#33 all draft, lengths exactly at baselines; live
+  fact_checks row counts (new baseline for A6): #28 7, #29 2, #30 5,
+  #31 6, #33 5 — no live fact-check ran as part of this deploy (the
+  deploy pushes code only; the next daily run is 24 Nov 00:00 UTC).
+- Expected live effect (to verify after the 24 Nov run): the daily run
+  should skip fresh drafts and reach genuinely stale ones — same shape
+  as the item-4 prediction for seoRun.
+- NOT TESTED live: the factCheckRun step itself against the live Worker
+  (it runs only inside the daily run; fixtures only, by design).
+- Rollback: restore `backend/routes/scheduler.js` from the fixpass3
+  backup and redeploy; no D1 change was made by A3.
 
 ## A4. DUPLICATE "Related guides" HEADING — PENDING
 

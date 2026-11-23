@@ -19,11 +19,15 @@
 //   3. mergeArticles: static wins, draft rows dropped, live rows
 //      without a valid date dropped, live-only published rows added.
 //   4. rewriteArticleHtml: the noscript carries the related list
-//      (heading + links in order) for articles 1 and 22; a 3-arg call
-//      (no list) renders no related section — old behaviour preserved;
-//      related titles are escaped; the noscript stays one line (the
-//      byte-identical test in tests/fixpass2-item2.test.js relies on
-//      it); the division noscript list is unchanged.
+//      (links only, in order — A4, Fix Pass 3, 2026-11-23: the
+//      <h2>Related guides</h2> that used to head the noscript list
+//      duplicated the page's own static heading, so it was removed;
+//      the links are what the crawler needs) for articles 1 and 22;
+//      a 3-arg call (no list) renders no related section — old
+//      behaviour preserved; related titles are escaped; the noscript
+//      stays one line (the byte-identical test in
+//      tests/fixpass2-item2.test.js relies on it); the division
+//      noscript list is unchanged.
 //   5. handleSeoRequest end to end: static article 1 rewrites with
 //      the related list; live-only id 34 rewrites with static
 //      related articles and no draft leak; the live fetch still never
@@ -90,12 +94,16 @@ async function handle(url, html, deps = {}) {
 }
 
 /** The related ids in a rewritten page, in order, from the noscript
- * related list only (the `<h2>Related guides</h2><ul>` marker is
- * unambiguous: the visible heading is followed by a <div>, and
- * article bodies may contain their own links). Returns null when the
- * noscript has no related list. */
+ * related list only. The list is the <ul> directly after the
+ * .article-full close (no article body contains a <div>, so that
+ * </div> is unique in the noscript; 8 bodies contain their own <ul>,
+ * so a bare <ul> match would be ambiguous). A4 (Fix Pass 3,
+ * 2026-11-23): the noscript list carries links only — the
+ * <h2>Related guides</h2> that used to mark it duplicated the
+ * page's own static heading, so it was removed. Returns null when
+ * the noscript has no related list. */
 function noscriptRelatedIds(html) {
-  const m = html.match(/<h2>Related guides<\/h2><ul>([\s\S]*?)<\/ul>/);
+  const m = html.match(/<\/div><ul>([\s\S]*?)<\/ul><\/noscript>/);
   if (!m) return null;
   return [...m[1].matchAll(/href="\/pages\/article\?id=(\d+)"/g)].map((x) => Number(x[1]));
 }
@@ -250,7 +258,10 @@ describe('rewriteArticleHtml carries the related list in the noscript', () => {
     const lines = html.split('\n').filter((l) => l.includes('<noscript>'));
     assert.equal(lines.length, 1, 'exactly one line carries the noscript');
     assert.ok(lines[0].includes('</noscript>'), 'that line closes the noscript');
-    assert.ok(lines[0].includes('<h2>Related guides</h2><ul>'), 'related list is on that line');
+    // A4: the related list is on that line, links only — no second
+    // heading inside the noscript (the static heading is on its own line).
+    assert.ok(lines[0].includes('</div><ul><li><a href="/pages/article?id=12">'), 'related list is on that line');
+    assert.ok(!lines[0].includes('<h2>Related guides</h2>'), 'no heading inside the noscript');
   });
 
   it('related titles with " < & are escaped in the noscript links', () => {
