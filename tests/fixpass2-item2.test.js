@@ -819,22 +819,39 @@ describe('2.12 wiring: _routes.json, route files, dashboard', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 2.13 — two Function copies: repo root AND frontend/ are identical. */
+/* 2.13 — two Function copies: identical EXCEPT the A5 Step A marker. */
 /*                                                                     */
 /* The first two live deploys (runs #55, #56) showed generic heads    */
 /* everywhere, so the Pages project's root directory is unproven: the   */
-/* Function is shipped in BOTH candidate locations with identical      */
-/* bytes, so whichever location the project uses, the live Function is */
-/* the current code (including the x-seo-head diagnostic). Once the    */
-/* header proves which location is live, delete the other copy.        */
+/* Function is shipped in BOTH candidate locations, so whichever       */
+/* location the project uses, the live Function is the current code    */
+/* (including the x-seo-head diagnostic). A5 Step A (Fix Pass 3,      */
+/* 2026-11-23) TEMPORARILY breaks the byte-identity: the               */
+/* frontend/functions/ copy alone emits `x-seo-src: frontend` (one    */
+/* marker line in seoHeaders() + one in passthrough(), so the header   */
+/* is present on rewritten AND fallback responses), which proves live  */
+/* which copy serves. The copies must differ ONLY by those marker     */
+/* lines — pinned below. Step B removes the marker (with the           */
+/* x-seo-head diagnostic) and deletes the non-live copy, restoring    */
+/* a single copy.                                                      */
 /* ------------------------------------------------------------------ */
-describe('2.13 two Function copies are byte-identical', () => {
+describe('2.13 two Function copies are identical except the A5 marker', () => {
   const COPIES = [
-    'seo-head.js',
     'package.json',
     'pages/article.js',
     'pages/division.js',
     'pages/tools.js',
+  ];
+
+  // The exact lines the A5 Step A marker adds to the frontend copy
+  // (same 4-line block in seoHeaders() and in passthrough()).
+  // tests/fixpass3-a5a.test.js pins the same lines behaviourally
+  // (the header on live responses from each copy).
+  const MARKER_LINES = [
+    '  // A5 Step A (Fix Pass 3, 2026-11-23): TEMPORARY live-copy marker.',
+    '  // A5 Step A: ONLY in this frontend/functions/ copy — the repo-root',
+    '  // A5 Step A: copy must NOT emit it. Removed in Step B with x-seo-head.',
+    "  h.set('x-seo-src', 'frontend');",
   ];
 
   for (const rel of COPIES) {
@@ -842,6 +859,16 @@ describe('2.13 two Function copies are byte-identical', () => {
       assert.equal(read('functions/' + rel), read('frontend/functions/' + rel), rel + ' differs between the two copies');
     });
   }
+
+  it('seo-head.js differs ONLY by the A5 Step A marker lines', () => {
+    const root = read('functions/seo-head.js');
+    const front = read('frontend/functions/seo-head.js');
+    const stripped = front.split('\n').filter((l) => !MARKER_LINES.includes(l));
+    assert.deepEqual(stripped, root.split('\n'), 'frontend seo-head.js must equal root seo-head.js + marker lines only');
+    assert.equal(front.split('\n').length - root.split('\n').length, MARKER_LINES.length * 2, 'exactly 8 added lines (4 marker lines x 2 sites)');
+    assert.equal(front.split("h.set('x-seo-src', 'frontend');").length - 1, 2, 'marker set twice in the frontend copy (rewritten + fallback)');
+    assert.equal(root.split("h.set('x-seo-src', 'frontend');").length - 1, 0, 'marker never set in the repo-root copy');
+  });
 
   it('both copies carry the x-seo-head diagnostic', () => {
     for (const base of ['functions', 'frontend/functions']) {

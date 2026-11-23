@@ -1006,6 +1006,10 @@ export function seoHeaders(headers) {
   // is proven and the root cause of the first two deploys is known
   // (see the Fix Pass 2 ledger, item 2).
   h.set('x-seo-head', 'rewritten');
+  // A5 Step A (Fix Pass 3, 2026-11-23): TEMPORARY live-copy marker.
+  // A5 Step A: ONLY in this frontend/functions/ copy — the repo-root
+  // A5 Step A: copy must NOT emit it. Removed in Step B with x-seo-head.
+  h.set('x-seo-src', 'frontend');
   return h;
 }
 
@@ -1073,6 +1077,10 @@ function passthrough(res, html) {
   // 'rewritten' value is set by seoHeaders(). Remove both once the
   // Function's live behaviour is proven (see the Fix Pass 2 ledger).
   h.set('x-seo-head', 'fallback');
+  // A5 Step A (Fix Pass 3, 2026-11-23): TEMPORARY live-copy marker.
+  // A5 Step A: ONLY in this frontend/functions/ copy — the repo-root
+  // A5 Step A: copy must NOT emit it. Removed in Step B with x-seo-head.
+  h.set('x-seo-src', 'frontend');
   return new Response(html, { status: res.status, headers: h });
 }
 

@@ -204,21 +204,79 @@ starvation case. No live fact-check of any protected draft.
 - Rollback: restore `backend/routes/scheduler.js` from the fixpass3
   backup and redeploy; no D1 change was made by A3.
 
-## A4. DUPLICATE "Related guides" HEADING — PENDING
+## A4. DUPLICATE "Related guides" HEADING — DONE (deployed + live-verified)
 
-On rewritten article pages (e.g. /pages/article?id=12) the server-side
-output ends with "Related guides" followed by a second, empty "Related
-guides" heading. Cause: the noscript body plus the existing
-related-guides container. Remove the duplicate without breaking the
-Function's fail-closed anchor checks or the JS-rendered page. Prove with
-raw GET on ids 1, 12, 25: one heading only, related links present once.
+Cause: the served article source carried the heading twice — (1) the
+noscript heading from `articleNoscript()` (seo-head.js:756,
+`'<h2>Related guides</h2><ul>'` + links) and (2) the static heading in
+`frontend/pages/article.html:46` above the JS-rendered `#relatedGrid`
+(empty in served source). Fix: the noscript now emits LINKS ONLY
+(`'<ul>'` + links); the single remaining heading is the static one,
+which labels the visible card block in real browsers. The alternative
+(remove the static heading, inject it from JS) was rejected — it would
+put the visible page's heading behind a JS injection to fix a no-JS
+cosmetic detail. Trade-off recorded by the builder: for a no-JS reader
+the bare `<ul>` now sits directly above its heading (links, then
+`<h2>Related guides</h2>`, then the empty grid); links and heading are
+both present and the section is unambiguous. No Function anchor touched
+(the static `<h2>` is not an anchor; the noscript content is a
+replacement value, not an anchor) — fail-closed behaviour unaffected,
+proven by test.
 
-- Status: PENDING
-- Files:
-- Tests before/after:
-- Deployed commit:
-- Raw live evidence:
-- Rollback:
+- Status: DONE
+- Files (diff vs the fixpass3 backup — exactly 5 paths for A4):
+  `functions/seo-head.js` + `frontend/functions/seo-head.js`
+  (byte-identical, cmp-verified; docstring + the one code line + comment),
+  `tests/fixpass3-a4.test.js` (new, 11 tests),
+  `tests/site-traffic-noscript.test.js` (spec-driven: the
+  `noscriptRelatedIds` helper re-anchored from
+  `<h2>Related guides</h2><ul>` to `</div><ul>…</ul></noscript>` —
+  parent-verified independently: 0 of 25 article bodies contain
+  `<div>`, 8 contain `<ul>`, so the new anchor is unambiguous; plus an
+  added negative assertion, no heading inside the noscript),
+  `tests/site-traffic-related.test.js` (one ADDED exact-count assertion:
+  exactly one `Related guides` occurrence — a strengthening, not a
+  weakening). `article.html` byte-untouched; `app.js` picker untouched.
+- Tests before/after: 1732/0 (445 suites) → **1743/0 (448 suites)**
+  (+11, +3 suites — exactly the new file). Parent re-ran: 1743/0 exact
+  match. Negative control: the new one-heading assertions fail 3/3
+  against pre-change Function code (heading count 2) and pass 3/3 on
+  the fixed code. New tests cover handleSeoRequest end-to-end for
+  articles 1 (12/11/10), 12 (11/10/9), 25 (19/24/23) — one heading,
+  each link once; division automotive + tool percentage unchanged;
+  fail-closed anchors (missing/duplicated Loading paragraph, missing
+  `<title>`, missing `</head>` → original page untouched).
+- Deployed commit: **d68ab48** (run #69 GREEN, 10 s, parent d6afa39;
+  run https://github.com/mdalfahad841-code/fs-ai/actions/runs/45188030080).
+- Raw live evidence (parent curl, 2026-11-23 ~19:53–19:56 Dhaka):
+  articles 1, 12, 25 — "Related guides" ×1 each, `x-seo-head:
+  rewritten`, related links exactly once each (1→12/11/10,
+  12→11/10/9, 25→24/23/19); tool percentage WebApplication ×1,
+  rewritten; 999 fallback; draft 28 fallback, 0 draft-title leaks
+  ("Related guides" ×1 there is the static heading on the untouched
+  original page — expected for a fallback); home 200; Worker health
+  200 ok:true db connected; sitemap 60 URLs; live D1 protected
+  #26–#33 all draft, lengths exactly at baselines; published 25 /
+  drafts 8.
+- VERIFICATION CORRECTION (parent, recorded so the next check does not
+  repeat it): the division check first used the WRONG URL
+  `/pages/division?id=automotive` and showed `fallback` — the site's
+  division URL scheme is **`?division=`**, not `?id=` (app.js:434/471
+  builds `pages/division?division=<id>`; division.html:65 reads
+  `params.get('division')`; the sitemap lists
+  `division?division=automotive`). The correct live check
+  `/pages/division?division=automotive` returns `x-seo-head:
+  rewritten`, CollectionPage ×3, 12 unique article links,
+  `<title>Automotive — FS AI</title>` and the per-division canonical.
+  There is NO division regression — the handler reads `?division=`
+  (seo-head.js division branch) and the site links use `?division=`.
+  Article pages use `?id=`; tools use `?tool=`.
+- NOT TESTED live: the JS-rendered Related guides block in a real
+  browser after this change (the static heading + grid are untouched,
+  and the client picker is untouched — the served-source check is the
+  equivalent proof for the duplicate itself).
+- Rollback: restore the two seo-head.js copies from the fixpass3
+  backup and redeploy; no D1 change was made by A4.
 
 ## A5. FUNCTION CLEANUP WITH PROOF — PENDING
 
@@ -260,7 +318,7 @@ re-check.
 - Status:
 - Findings:
 
-## B1. SEARCH CONSOLE SITEMAP RESUBMIT (once) — PENDING
+## B1. SEARCH CONSOLE SITEMAP RESUBMIT (once) — DONE
 
 After A4 is deployed. Follow docs/SEARCH-CONSOLE-RESUBMIT-2026-11-23.md.
 NOTE: the sitemap was already resubmitted 23 Nov ~16:40 (remove +
@@ -269,10 +327,33 @@ still "Couldn't fetch", Last read blank, 0 discovered pages. This B1
 resubmit is the post-A4 one, done once per the brief. Do not resubmit
 again the same day.
 
-- Status:
-- Exact status text / discovered pages / time:
+- Status: DONE — performed once, 2026-11-23 ~19:58 Dhaka, by browser
+  task on cloud Environment 1. (The Environment 2 attempt at ~19:57
+  stopped at sign-in — that browser's session had expired; Environment
+  1's profile was still signed in as mdalfahad841@gmail.com. The
+  initially active account there was mdalfahad406@gmail.com; the agent
+  switched to 841 with one click in the account menu — no credentials
+  entered or requested, no sign-in step triggered.)
+- Before: /sitemap.xml — Status "Couldn't fetch", Submitted Nov 23,
+  Discovered pages 0, Discovered videos 0.
+- Action: removed via the sitemap detail page (More options > Remove
+  sitemap > Remove; toast "Sitemap removed", table "0-0 of 0"), then
+  added https://fs-ai-5w5.pages.dev/sitemap.xml again. Dialog:
+  "Sitemap submitted successfully — Google will periodically process
+  it and look for changes. You will be notified if anything goes wrong
+  with it in the future." NOT resubmitted a second time.
+- Exact status text / discovered pages / time: after reloading the
+  Sitemaps page at 19:58 — /sitemap.xml, Type Unknown, Submitted
+  Nov 23, 2026, Last read (blank), Status "Couldn't fetch",
+  Discovered pages 0, Discovered videos 0. Google has NOT re-fetched
+  yet — the status reflects that no fetch has happened since the
+  re-add, not a failure of the sitemap itself (the sitemap file was
+  verified healthy as Googlebot UA earlier today: HTTP 200, valid XML,
+  60 URLs). Success criteria for a later check remain: status
+  "Success" + discovered pages > 0 of 60.
+- Screenshot: in the browser execution record (view v15).
 
-## B2. INDEXING REQUEST (ONE URL, ONE TIME TODAY) — PENDING
+## B2. INDEXING REQUEST (ONE URL, ONE TIME TODAY) — DONE (quota exceeded, 9th consecutive)
 
 URL Inspection on https://fs-ai-5w5.pages.dev/pages/article?id=1,
 Request indexing exactly once. NOTE: Article 1's request was already
@@ -282,8 +363,27 @@ outcome (accepted / "Quota exceeded" / other) with a screenshot. If
 quota exceeded, do not retry and do not try other URLs today. Next URL
 in order (newest articles after Article 1) is for the following day.
 
-- Status:
-- Inspection result / outcome / screenshot:
+- Status: DONE — performed once, 2026-11-23 ~19:59–20:00 Dhaka, by the
+  same browser task as B1 (cloud Environment 1, signed in as
+  mdalfahad841@gmail.com; no password, code, CAPTCHA or sign-in step
+  requested at any point).
+- Inspection result: "URL is not on Google — This page is not indexed.
+  Pages that aren't indexed can't be served on Google." Detail: "Page
+  is not indexed: URL is unknown to Google"; Discovery: "No referring
+  sitemaps detected", Referring page "None detected"; Last crawl N/A;
+  Crawled as N/A; Crawl allowed? N/A; Page fetch N/A; Indexing
+  allowed? N/A; User-declared canonical N/A; Google-selected canonical
+  N/A.
+- Outcome: "REQUEST INDEXING" clicked exactly once; after ~1 minute
+  of "Testing if live URL can be indexed", Google showed a dialog
+  verbatim — heading "Quota Exceeded": "Sorry--we couldn't process
+  this request because you've exceeded your daily quota. Please try
+  submitting this again tomorrow." This is the **9th consecutive**
+  quota hit for Article 1 (11:00 today was the 8th). NOT retried; NO
+  other URL requested today. The next attempt is the scheduled 24 Nov
+  11:00 retry — a new day, when the quota may have reset.
+- Screenshot: inspection result in the browser execution record
+  (view v17); quota dialog (view v20).
 
 ## B3. PHONE CHECKS — NOT TESTED
 

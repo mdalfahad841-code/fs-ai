@@ -36,7 +36,9 @@
 //      copies x seo-head.js, package.json, pages/article.js,
 //      pages/division.js, pages/tools.js) contain no `new Function`,
 //      `eval(`, `WebAssembly.compile` or `WebAssembly.instantiate`,
-//      and the two seo-head.js copies are byte-identical.
+//      and the two seo-head.js copies differ ONLY by the A5 Step A
+//      marker lines (Fix Pass 3, 2026-11-23 — the frontend copy alone
+//      emits `x-seo-src: frontend`).
 // Run: node --test tests/site-traffic-noscript.test.js (or: npm test)
 'use strict';
 
@@ -342,9 +344,26 @@ describe('no code generation in the shipped Function files', () => {
     }
   }
 
-  it('the two seo-head.js copies are byte-identical', () => {
-    const a = fs.readFileSync(path.join(ROOT, 'functions', 'seo-head.js'));
-    const b = fs.readFileSync(path.join(ROOT, 'frontend', 'functions', 'seo-head.js'));
-    assert.ok(a.equals(b), 'functions/seo-head.js must equal frontend/functions/seo-head.js');
+  // A5 Step A (Fix Pass 3, 2026-11-23): the copies are NO LONGER
+  // byte-identical on purpose — the frontend copy alone carries the
+  // `x-seo-src: frontend` live-copy marker (same 4-line block in
+  // seoHeaders() and in passthrough()). They must differ ONLY by
+  // those marker lines; tests/fixpass3-a5a.test.js pins the same
+  // lines behaviourally (the header on responses from each copy).
+  const MARKER_LINES = [
+    '  // A5 Step A (Fix Pass 3, 2026-11-23): TEMPORARY live-copy marker.',
+    '  // A5 Step A: ONLY in this frontend/functions/ copy — the repo-root',
+    '  // A5 Step A: copy must NOT emit it. Removed in Step B with x-seo-head.',
+    "  h.set('x-seo-src', 'frontend');",
+  ];
+
+  it('the two seo-head.js copies differ ONLY by the A5 marker lines', () => {
+    const a = fs.readFileSync(path.join(ROOT, 'functions', 'seo-head.js'), 'utf8');
+    const b = fs.readFileSync(path.join(ROOT, 'frontend', 'functions', 'seo-head.js'), 'utf8');
+    const stripped = b.split('\n').filter((l) => !MARKER_LINES.includes(l));
+    assert.deepEqual(stripped, a.split('\n'), 'frontend seo-head.js must equal root seo-head.js + marker lines only');
+    assert.equal(b.split('\n').length - a.split('\n').length, MARKER_LINES.length * 2, 'exactly 8 added lines (4 marker lines x 2 sites)');
+    assert.equal(b.split("h.set('x-seo-src', 'frontend');").length - 1, 2, 'marker set twice in the frontend copy (rewritten + fallback)');
+    assert.equal(a.split("h.set('x-seo-src', 'frontend');").length - 1, 0, 'marker never set in the repo-root copy');
   });
 });
