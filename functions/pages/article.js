@@ -3,7 +3,7 @@
  * with per-article server-side heads (title, meta, canonical, og/twitter,
  * Article + BreadcrumbList JSON-LD) and a noscript body for crawlers.
  * Falls back to the static page on any error or unknown id — never a
- * 500. See frontend/functions/seo-head.js for the mechanism, data and cache
+ * 500. See ../seo-head.js for the mechanism, data and cache
  * decisions (Fix Pass 2, item 2, 2026-11-23).
  */
 import { handleSeoRequest } from '../seo-head.js';

@@ -278,7 +278,7 @@ proven by test.
 - Rollback: restore the two seo-head.js copies from the fixpass3
   backup and redeploy; no D1 change was made by A4.
 
-## A5. FUNCTION CLEANUP WITH PROOF — PENDING
+## A5. FUNCTION CLEANUP WITH PROOF — STEP A DONE (verdict: repo-root copy live); STEP B BUILD STARTED
 
 Two byte-identical Pages Function copies (repo-root functions/ and
 frontend/functions/) plus the x-seo-head diagnostic header.
@@ -292,13 +292,150 @@ body — not only a header), that 999 and draft 28 still fall back with
 zero draft-title leaks, and that the removed copy is gone from the repo
 and the served site. Update the pinned tests.
 
-- Status: PENDING
-- Step A deployed commit / live header observed:
+### Step A — marker design + build
+
+Marker `x-seo-src: frontend`, set in the FRONTEND copy only
+(`frontend/functions/seo-head.js`), in exactly two places — one line in
+each response builder so it rides on EVERY response the Function
+builds, rewritten and fallback: `seoHeaders()` (rewritten path) and
+`passthrough()` (fallback path). Each site is the same 4-line block
+(3 comment lines + `h.set('x-seo-src', 'frontend');`). No entry-file
+change needed: all three routes are thin wrappers calling
+`handleSeoRequest`; every response the handler builds goes through
+`seoHeaders()` or `passthrough()`. The only responses without the
+marker are ones returned untouched (non-GET, non-200, non-HTML) —
+pinned by test. The repo-root copy is byte-untouched by Step A
+(verified: the frontend-vs-root diff is exactly the 8 marker lines;
+marker counts frontend ×2, root ×0).
+
+- Files (diff vs the fixpass3 backup — exactly 4 paths for A5 Step A):
+  `frontend/functions/seo-head.js` (+8 lines, marker only),
+  `tests/fixpass3-a5a.test.js` (new, 10 tests),
+  `tests/fixpass2-item2.test.js` (suite 2.13: the byte-identical
+  assertion replaced by a TIGHT pin — stripped frontend copy
+  deep-equals the root copy, exactly 8 added lines, marker set exactly
+  twice in frontend / zero in root; not a weakening),
+  `tests/site-traffic-noscript.test.js` (same marker-only-diff
+  assertion replacing its byte-identical test).
+- Tests before/after: 1743/0 (448 suites) → **1753/0 (451 suites)**
+  (+10, +3 suites — exactly the new file). Parent re-ran: 1753/0 exact
+  match. Negative control: the new marker assertions fail against the
+  pre-change frontend copy (`x-seo-src: null`) and pass on the fixed
+  code. New tests cover: frontend copy rewritten article 1 + fallback
+  999 + fallback draft 28 + division automotive + tool percentage
+  (marker present on all); root copy same URLs (marker absent);
+  POST returns the static response untouched (neither header); the
+  static diff pin.
+- Step A deployed commit: **f4b2838** (run #70 GREEN, 13 s, parent
+  d68ab48; run https://github.com/mdalfahad841-code/fs-ai/actions/runs/45190549425;
+  5 files +364/−33). Deployed code verified on main at f4b2838:
+  frontend seo-head.js contains x-seo-src ×2, root copy ×0.
+- Live header observed (parent raw GET, ~20:09 Dhaka, minutes after
+  the deploy finished): article 1 `x-seo-head: rewritten`, article 999
+  `fallback`, division automotive rewritten, tool percentage rewritten
+  — **`x-seo-src` ABSENT on all four**. A4 still holds (article 1
+  "Related guides" ×1); home 200; sitemap 60.
+- VERDICT (recorded 2026-11-23 ~20:19 Dhaka): **the repo-root
+  `functions/` copy is LIVE; the `frontend/functions/` copy does NOT
+  serve.** Evidence: the marker was ABSENT on all four URLs at three
+  reads — ~20:09 (~1 min post-deploy), ~20:10 (~2 min), and 20:19:14
+  (~11 min post-deploy, after a 10-minute sleep + re-check):
+  article 1 `x-seo-head: rewritten`, article 999 `fallback`,
+  division automotive rewritten, tool percentage rewritten — none
+  carried `x-seo-src`. The marker is set in BOTH seoHeaders() and
+  passthrough() in the frontend copy, so ANY frontend-copy response
+  would carry it, rewritten or fallback. The deployed code at f4b2838
+  was verified on main (frontend copy ×2, root copy ×0). The ~11 min
+  wait matches/passes the worst observed Pages stall (run #63, ~11
+  min); a merely-slow deploy would have shown the marker by now on at
+  least the fallback URL. A4 still holds (article 1 "Related guides"
+  ×1). Caveat, recorded honestly: the verdict rests on the marker's
+  continued absence past the stall window, not on a Pages deployment
+  status (not checkable — token is D1-only, dashboard Turnstile-
+  blocked). Step B's own live verification is the final confirmation:
+  if removing the frontend copy broke the live Function (no rewritten
+  heads at all), the verdict would be falsified and the rollback
+  (restore the deleted copy from backup + redeploy) applies.
+
+### Step B — BUILD DONE (2026-11-23 ~20:34 Dhaka); DEPLOY PENDING
+
+- Build (coordinator): delete the non-live `frontend/functions/`
+  directory from the local tree (5 files: seo-head.js, package.json,
+  pages/article.js, pages/division.js, pages/tools.js — gone locally,
+  verified) + remove BOTH diagnostic headers from the surviving
+  repo-root `functions/seo-head.js` (the `h.set('x-seo-head',
+  'rewritten')` line + 5-line comment in seoHeaders(), the
+  `h.set('x-seo-head', 'fallback')` line + 4-line comment in
+  passthrough(); the `x-seo-src` marker existed only in the deleted
+  copy). Comment-only updates in the same file: path references
+  `frontend/functions/...` → `functions/...`; the "ONE config
+  assumption … root is set to `frontend`" paragraph replaced with the
+  proven outcome ("Root directory IS the repo root — proved by the A5
+  Step A marker"). `functions/pages/*.js` (3 files): 1 comment line
+  each (path reference). NO rewrite logic, data, or `_routes.json`
+  touched. Byte-identity proof (coordinator, scratch script): rewritten
+  bodies for articles 1/12/25, division automotive, tool percentage,
+  fallback 999, fallback draft 28 are byte-identical old vs new; only
+  the headers differ (old `x-seo-head: rewritten`/`fallback`, new
+  `null`). Negative control passed (new no-diagnostic-header assertions
+  fail against pre-change Step A code).
+- Tests: suite 2.13 rewritten to the single-copy pin;
+  tests/fixpass3-a5a.test.js DELETED (marker tests — false by design
+  after Step B); new tests/fixpass3-a5b.test.js (10 tests: rewritten
+  1/12/25, division, tool, fallback 999 byte-identical, fallback draft
+  28 no-leak, non-GET untouched — all with no diagnostic headers; plus
+  the static single-copy pin; the A4 one-heading, both fallback, draft-
+  28 no-leak and non-GET assertions kept from a5a, re-anchored).
+  Four more test files needed spec-driven updates than the brief
+  estimated (fixpass2-item6, site-traffic-related, fixpass3-a4, plus
+  fixpass2-item2's 2.9 suite — all `require`d the frontend copy or
+  asserted the diagnostic header; 9 assertions updated, nothing else
+  in those files changed). Deliberately NOT touched: stale comments
+  only — `frontend/styles/main.css:106`,
+  `backend/services/daily-health-report.js:609`,
+  `tests/fixpass3-a4.test.js:8` ("both copies" — historical A4 note).
+- Tests before/after: **1753/0 (451 suites) → 1746/0 (450 suites)**;
+  parent re-ran: **1746/0 exact match**. The −7 is fully accounted
+  for: the two-copy loops each lose 5 tests, partly offset by +1 in
+  2.13 and +1 in the noscript pin. No test weakened — every removed
+  test asserted the deleted copy or the removed header.
+- Parent diff vs the fixpass3 backup = exactly the expected full-pass
+  set (A1 7 + A3 2 + A4 5 + A5A 4 + A5B 9 paths, ledger, and
+  `frontend/functions/` present ONLY in the backup). Parent-verified:
+  functions/seo-head.js diff is comment updates + A4 + the two
+  diagnostic removals only; grep `x-seo-head`/`x-seo-src` = 0 in the
+  surviving copy and in frontend/; `frontend/functions/` absent
+  locally.
+- DEPLOY DESIGN (coordinator, verified against the 020031be workflow
+  template): the local deletion alone will NOT remove the copy from
+  main (the push workflow's `cp -a` never deletes). Add ONE line to
+  the one-time push workflow's squash step, after the workflow-file
+  removal and before the first `git add -A`:
+  `rm -rf frontend/functions`. The squash step's first `git add -A`
+  stages the deletion; `git reset --soft HEAD~2` moves HEAD without
+  touching index or working tree, so the staged deletion survives;
+  the second `git add -A` + commit + force-push lands the deletion in
+  the same single squashed commit as the code change. Web-UI deletion
+  (5 files, 5 operations) is the alternative — NOT recommended.
+  Commit message for this push: set on the workflow's `git commit -m`
+  line as usual.
+- FALSIFICATION (read before deploying): if, after this deploy, NO
+  page rewrites at all (generic heads everywhere — no canonical, no
+  JSON-LD, no noscript on any of article 1/12/25, division, or tool),
+  the Step A verdict was wrong and the frontend copy was live after
+  all. Then restore `frontend/functions/` from the fixpass3 backup and
+  redeploy immediately. The mere absence of `x-seo-head`/`x-seo-src`
+  is NOT falsification (removed by design); falsification is the
+  absence of the REWRITES themselves. Rollback for any other problem:
+  restore `functions/seo-head.js`, `functions/pages/*.js`,
+  `frontend/functions/`, and the 6 test files from the fixpass3 backup
+  and redeploy without the `rm` step. No D1 change in Step B.
+
 - Step B deployed commit:
 - Raw live evidence:
 - Rollback:
 
-## A6. READ-ONLY CHECKS — PENDING
+## A6. READ-ONLY CHECKS — (b) + (c) DONE; (a) NOT YET AVAILABLE
 
 Only if the data exists; otherwise NOT YET AVAILABLE with the time to
 re-check.
@@ -307,6 +444,12 @@ re-check.
   skippedFresh) for #28/#31/#29, new seo_checks rows for #33 and #30,
   the health report's check 14 (serverSideHeads) and the first daily
   health report overall. (Run is 24 Nov 06:00 Dhaka; re-check after that.)
+  ALSO the A3 factCheckRun effect (skippedFresh + genuinely stale
+  drafts reached) — and watch #34 specifically: it was created
+  2026-11-23T00:03:27Z, after the cutoff, and is the only
+  auto-publish-eligible draft; its gate refusal at 00:04:24 was "No
+  fact-check on record / No SEO check on record", i.e. the daily run's
+  check steps had not covered it yet at publish time.
 - b) csp_reports: counts per directive and blocked URL for the rows
   received so far, and a reading of whether any violation is real.
   Do NOT enforce anything.
@@ -315,8 +458,41 @@ re-check.
   the next refresh, canonical/title/og, JSON-LD, counts). If none
   exists yet, say so.
 
-- Status:
-- Findings:
+- Status: PARTIAL — (b) and (c) done 2026-11-23 ~20:10 Dhaka (read-only
+  D1); (a) NOT YET AVAILABLE — the 24 Nov 00:00 UTC daily run has not
+  happened yet. Re-check after 24 Nov 06:00 Dhaka.
+- Findings (b): **9 rows total** (ids 2–10; id 1 was the parent's own
+  test row, deleted during Fix Pass 2 item 4 verification). ALL 9 are
+  the SAME directive — `connect-src` — and ALL blocked URIs are Google
+  Analytics beacons: `https://www.google.com/g/collect?...tid=
+  G-JVSCJT2DHJ...` (GA4 page_view / scroll events). Document URIs:
+  article 9 (ids 2–4, 06:38–06:39 Dhaka), article 14 (ids 5–8,
+  10:13–10:14), homepage via the Instagram link-in-bio (id 9, 11:37,
+  `utm_source=ig`, `fbclid`, referrer l.instagram.com), homepage
+  (id 10, 12:59). All 9 are from the owner's own Motorola moto g54 5G
+  (uam=moto g54 5G, sr=432x960) — his own browsing generated them.
+  READING: **none of these is a real violation.** The Report-Only
+  CSP's `connect-src` lists `https://www.google-analytics.com` but NOT
+  `https://www.google.com` — GA4's gtag.js sends its beacons to
+  `www.google.com/g/collect`, so every GA4 event reports a connect-src
+  violation. The policy is Report-Only, so nothing is actually
+  blocked — the beacons still reach Google (each report proves the
+  beacon fired). No other directive appears, no other blocked URL, no
+  script-src / style-src / img-src violation — the site's own resources
+  are all clean. For the close-out A4 enforcement rule (14 consecutive
+  clean days + no new directive + every report explained + owner
+  approval): these 9 are EXPLAINED (expected GA4 noise), but the
+  underlying mismatch remains — when enforcement is ever considered,
+  `https://www.google.com` would need adding to connect-src first (or
+  the GA4 beacons would genuinely break). NOT enforced; nothing
+  changed.
+- Findings (c): **still NO auto-published article.** Published 25,
+  drafts 8, no articles with id > 34, `publication_logs` still exactly
+  1 row (article 34, auto-publish-refused, 2026-11-23 00:04:24 — gate
+  Blocked: no fact-check, no SEO check on record). Latest agent_runs
+  are ids 193/194/195 from the 23 Nov 00:00 UTC daily run (done /
+  no-op / done). The first-real-auto-publish proof checklist therefore
+  does not apply yet — say so in the final report, do not run it.
 
 ## B1. SEARCH CONSOLE SITEMAP RESUBMIT (once) — DONE
 

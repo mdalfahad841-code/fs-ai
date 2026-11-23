@@ -1,8 +1,8 @@
 // FS AI — Fix Pass 2, item 2: server-side article/division/tool heads
 // for crawlers (2026-11-23).
 //
-// Covers the Pages Function rewrite (frontend/functions/seo-head.js, the three
-// thin route files in frontend/functions/pages/) against the SHIPPED pages and
+// Covers the Pages Function rewrite (functions/seo-head.js, the three
+// thin route files in functions/pages/) against the SHIPPED pages and
 // the SHIPPED static bundle (frontend/scripts/app.js), plus the daily
 // health-report check 14 (serverSideHeads) in
 // backend/services/daily-health-report.js:
@@ -40,8 +40,9 @@
 //        FAILs; fetch error FAILs; no D1 sample rows -> NOT TESTED)
 //   2.12 _routes.json + the three route files exist and export onRequest;
 //        dashboard.js has the serverSideHeads label + line
-//   2.13 two Function copies (functions/ and frontend/functions/) are
-//        byte-identical, both carrying the x-seo-head diagnostic
+//   2.13 one Function copy: frontend/functions/ was deleted in
+//        Fix Pass 3 A5 Step B (the repo-root copy proved live); the
+//        surviving functions/seo-head.js carries no diagnostic header
 //   2.14 parseJsLiteral: the pure recursive-descent parser (strings,
 //        numbers, booleans, null, arrays, objects, bindings) and its
 //        fail-closed rejections (interpolation, unbound identifiers,
@@ -63,7 +64,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const seo = require('../frontend/functions/seo-head.js');
+const seo = require('../functions/seo-head.js');
 const {
   buildDailyHealthReport,
   HEALTH_REPORT_CHECK_KEYS,
@@ -613,11 +614,12 @@ describe('2.9 cache headers', () => {
     const cl = res.headers.get('content-length');
     assert.ok(cl === null || Number(cl) === Buffer.byteLength(body, 'utf8'),
       'no stale Content-Length (absent, or the rewritten body length), got ' + cl);
-    assert.equal(res.headers.get('x-seo-head'), 'rewritten', 'live diagnostic: Function ran and rewrote');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: diagnostic removed — no x-seo-head on rewritten responses');
+    assert.equal(res.headers.get('x-seo-src'), null, 'A5 Step B: no marker either');
     assert.ok(body.includes('<title>EV Charging at Home'), 'and it really is rewritten');
   });
 
-  it('a fallback response keeps the original headers, plus the x-seo-head: fallback diagnostic', async () => {
+  it('a fallback response keeps the original headers, with no diagnostic header', async () => {
     const { res, body } = await handle(PAGES_BASE + '/pages/article?id=999', ARTICLE_HTML, {
       kind: 'article',
       fetchLiveArticles: async () => [],
@@ -626,7 +628,7 @@ describe('2.9 cache headers', () => {
     assert.equal(res.headers.get('etag'), '"static-etag-1"');
     assert.equal(res.headers.get('last-modified'), 'Mon, 23 Nov 2026 00:00:00 GMT');
     assert.equal(res.headers.get('content-length'), String(Buffer.byteLength(body, 'utf8')));
-    assert.equal(res.headers.get('x-seo-head'), 'fallback', 'live diagnostic: Function ran but fell back');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: diagnostic removed — no x-seo-head on fallback responses');
   });
 
   it('seoHeaders sets the exact Cache-Control and strips ETag/Last-Modified/Content-Length', () => {
@@ -642,7 +644,8 @@ describe('2.9 cache headers', () => {
     assert.equal(h.get('last-modified'), null);
     assert.equal(h.get('content-length'), null);
     assert.equal(h.get('content-type'), 'text/html', 'other headers kept');
-    assert.equal(h.get('x-seo-head'), 'rewritten', 'live diagnostic set on rewritten responses');
+    assert.equal(h.get('x-seo-head'), null, 'A5 Step B: diagnostic removed from seoHeaders');
+    assert.equal(h.get('x-seo-src'), null, 'A5 Step B: no marker either');
   });
 
   it('no Vary header is set on rewritten responses (the URL is the cache key)', async () => {
@@ -789,15 +792,15 @@ describe('2.12 wiring: _routes.json, route files, dashboard', () => {
 
   it('the three route files exist and export onRequest', () => {
     for (const name of ['article', 'division', 'tools']) {
-      const mod = require(`../frontend/functions/pages/${name}.js`);
-      assert.equal(typeof mod.onRequest, 'function', `frontend/functions/pages/${name}.js exports onRequest`);
+      const mod = require(`../functions/pages/${name}.js`);
+      assert.equal(typeof mod.onRequest, 'function', `functions/pages/${name}.js exports onRequest`);
     }
   });
 
   it('the route files are thin: they only delegate to handleSeoRequest', () => {
     const kinds = { article: 'article', division: 'division', tools: 'tool' };
     for (const name of ['article', 'division', 'tools']) {
-      const src = read(`frontend/functions/pages/${name}.js`);
+      const src = read(`functions/pages/${name}.js`);
       assert.ok(src.includes("handleSeoRequest(context, '" + kinds[name] + "')"), name + ' delegates with its kind');
       assert.ok(!src.includes('seoHeaders') && !src.includes('rewriteArticleHtml'), name + ' carries no rewrite logic');
     }
@@ -811,7 +814,7 @@ describe('2.12 wiring: _routes.json, route files, dashboard', () => {
   });
 
   it('seo-head.js documents the mechanism, the cache decision and the root-directory assumption', () => {
-    const src = read('frontend/functions/seo-head.js');
+    const src = read('functions/seo-head.js');
     assert.ok(src.includes('WHY A PAGES FUNCTION, NOT BUILD-TIME GENERATION'), 'mechanism decision documented');
     assert.ok(src.includes('Root directory'), 'root-directory assumption recorded');
     assert.ok(src.includes('SEO_CACHE_CONTROL'), 'cache constant documented');
@@ -819,63 +822,40 @@ describe('2.12 wiring: _routes.json, route files, dashboard', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 2.13 — two Function copies: identical EXCEPT the A5 Step A marker. */
+/* 2.13 — ONE Function copy (Fix Pass 3, A5 Step B, 2026-11-23).       */
 /*                                                                     */
-/* The first two live deploys (runs #55, #56) showed generic heads    */
-/* everywhere, so the Pages project's root directory is unproven: the   */
-/* Function is shipped in BOTH candidate locations, so whichever       */
-/* location the project uses, the live Function is the current code    */
-/* (including the x-seo-head diagnostic). A5 Step A (Fix Pass 3,      */
-/* 2026-11-23) TEMPORARILY breaks the byte-identity: the               */
-/* frontend/functions/ copy alone emits `x-seo-src: frontend` (one    */
-/* marker line in seoHeaders() + one in passthrough(), so the header   */
-/* is present on rewritten AND fallback responses), which proves live  */
-/* which copy serves. The copies must differ ONLY by those marker     */
-/* lines — pinned below. Step B removes the marker (with the           */
-/* x-seo-head diagnostic) and deletes the non-live copy, restoring    */
-/* a single copy.                                                      */
+/* The Function used to ship in TWO copies (repo-root functions/ and  */
+/* frontend/functions/). A5 Step A proved live, with the temporary    */
+/* `x-seo-src: frontend` marker, that the repo-root copy is the live  */
+/* one; Step B deleted frontend/functions/ and removed the             */
+/* x-seo-head diagnostic (and the marker with it) from the surviving  */
+/* copy. There is exactly one Function copy now, and it emits no      */
+/* diagnostic header. If frontend/functions/ ever reappears, or a     */
+/* diagnostic header returns, this suite fails on purpose.            */
 /* ------------------------------------------------------------------ */
-describe('2.13 two Function copies are identical except the A5 marker', () => {
-  const COPIES = [
+describe('2.13 one Function copy, no diagnostic header', () => {
+  const FUNCTION_FILES = [
+    'seo-head.js',
     'package.json',
     'pages/article.js',
     'pages/division.js',
     'pages/tools.js',
   ];
 
-  // The exact lines the A5 Step A marker adds to the frontend copy
-  // (same 4-line block in seoHeaders() and in passthrough()).
-  // tests/fixpass3-a5a.test.js pins the same lines behaviourally
-  // (the header on live responses from each copy).
-  const MARKER_LINES = [
-    '  // A5 Step A (Fix Pass 3, 2026-11-23): TEMPORARY live-copy marker.',
-    '  // A5 Step A: ONLY in this frontend/functions/ copy — the repo-root',
-    '  // A5 Step A: copy must NOT emit it. Removed in Step B with x-seo-head.',
-    "  h.set('x-seo-src', 'frontend');",
-  ];
+  it('frontend/functions/ does not exist in the tree', () => {
+    assert.equal(fs.existsSync(path.join(ROOT, 'frontend', 'functions')), false, 'the deleted copy must stay deleted');
+  });
 
-  for (const rel of COPIES) {
-    it(rel + ' is identical in functions/ and frontend/functions/', () => {
-      assert.equal(read('functions/' + rel), read('frontend/functions/' + rel), rel + ' differs between the two copies');
+  for (const rel of FUNCTION_FILES) {
+    it('functions/' + rel + ' exists (the single surviving copy)', () => {
+      assert.ok(fs.existsSync(path.join(ROOT, 'functions', rel)), 'functions/' + rel + ' must exist');
     });
   }
 
-  it('seo-head.js differs ONLY by the A5 Step A marker lines', () => {
-    const root = read('functions/seo-head.js');
-    const front = read('frontend/functions/seo-head.js');
-    const stripped = front.split('\n').filter((l) => !MARKER_LINES.includes(l));
-    assert.deepEqual(stripped, root.split('\n'), 'frontend seo-head.js must equal root seo-head.js + marker lines only');
-    assert.equal(front.split('\n').length - root.split('\n').length, MARKER_LINES.length * 2, 'exactly 8 added lines (4 marker lines x 2 sites)');
-    assert.equal(front.split("h.set('x-seo-src', 'frontend');").length - 1, 2, 'marker set twice in the frontend copy (rewritten + fallback)');
-    assert.equal(root.split("h.set('x-seo-src', 'frontend');").length - 1, 0, 'marker never set in the repo-root copy');
-  });
-
-  it('both copies carry the x-seo-head diagnostic', () => {
-    for (const base of ['functions', 'frontend/functions']) {
-      const src = read(base + '/seo-head.js');
-      assert.ok(src.includes("h.set('x-seo-head', 'rewritten')"), base + ' sets rewritten');
-      assert.ok(src.includes("h.set('x-seo-head', 'fallback')"), base + ' sets fallback');
-    }
+  it('functions/seo-head.js contains no diagnostic header string', () => {
+    const src = read('functions/seo-head.js');
+    assert.equal(src.split('x-seo-head').length - 1, 0, 'no x-seo-head anywhere in the surviving copy');
+    assert.equal(src.split('x-seo-src').length - 1, 0, 'no x-seo-src anywhere in the surviving copy');
   });
 });
 
@@ -982,7 +962,7 @@ describe('2.15 no code generation in the shipped Function files', () => {
   // call spellings count.)
   const FORBIDDEN = ['new Function', 'eval(', 'WebAssembly.compile', 'WebAssembly.instantiate'];
 
-  for (const base of ['functions', 'frontend/functions']) {
+  for (const base of ['functions']) {
     for (const rel of FUNCTION_FILES) {
       it(base + '/' + rel + ' contains no code-generation call', () => {
         const src = read(base + '/' + rel);
@@ -1011,7 +991,7 @@ describe('2.15 no code generation in the shipped Function files', () => {
     ].join('\n');
     const out = execFileSync(process.execPath,
       ['--disallow-code-generation-from-strings', '-e', script,
-        path.join(ROOT, 'frontend/functions/seo-head.js'),
+        path.join(ROOT, 'functions/seo-head.js'),
         path.join(ROOT, 'frontend/scripts/app.js')],
       { encoding: 'utf8', timeout: 30000 });
     assert.ok(out.includes('PARSED UNDER FLAG'), 'child must parse 25/8/20 with code generation disallowed, got: ' + out);

@@ -33,7 +33,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const seo = require('../frontend/functions/seo-head.js');
+const seo = require('../functions/seo-head.js');
 
 const ROOT = path.join(__dirname, '..');
 const FRONTEND = path.join(ROOT, 'frontend');

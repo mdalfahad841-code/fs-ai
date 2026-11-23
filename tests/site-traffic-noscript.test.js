@@ -32,13 +32,13 @@
 //      the related list; live-only id 34 rewrites with static
 //      related articles and no draft leak; the live fetch still never
 //      runs for a static id.
-//   6. No code generation: all 10 shipped Function files (both
-//      copies x seo-head.js, package.json, pages/article.js,
+//   6. No code generation: all 5 shipped Function files (functions/
+//      seo-head.js, package.json, pages/article.js,
 //      pages/division.js, pages/tools.js) contain no `new Function`,
-//      `eval(`, `WebAssembly.compile` or `WebAssembly.instantiate`,
-//      and the two seo-head.js copies differ ONLY by the A5 Step A
-//      marker lines (Fix Pass 3, 2026-11-23 — the frontend copy alone
-//      emits `x-seo-src: frontend`).
+//      `eval(`, `WebAssembly.compile` or `WebAssembly.instantiate`.
+//      (A5 Step B, Fix Pass 3, 2026-11-23: the duplicate
+//      frontend/functions/ copy was deleted after Step A proved the
+//      repo-root copy live, so there is exactly one copy now.)
 // Run: node --test tests/site-traffic-noscript.test.js (or: npm test)
 'use strict';
 
@@ -48,7 +48,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const seo = require('../frontend/functions/seo-head.js');
+const seo = require('../functions/seo-head.js');
 
 const ROOT = path.join(__dirname, '..');
 const FRONTEND = path.join(ROOT, 'frontend');
@@ -294,9 +294,9 @@ describe('handleSeoRequest end to end (related list)', () => {
     { id: 28, title: 'DRAFT TITLE MUST NEVER APPEAR', slug: 'draft-28', division: 'automotive', division_name: 'Automotive', excerpt: 'Draft excerpt.', body: '<p>Draft body text.</p>', published_at: '2026-11-10', publishedAt: '2026-11-10', status: 'draft' },
   ];
 
-  it('static article 1 rewrites with the related list and the rewritten diagnostic', async () => {
+  it('static article 1 rewrites with the related list and no diagnostic header', async () => {
     const { res, body } = await handle(PAGES_BASE + '/pages/article?id=1', ARTICLE_HTML, { kind: 'article' });
-    assert.equal(res.headers.get('x-seo-head'), 'rewritten');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: no diagnostic header');
     assert.deepEqual(noscriptRelatedIds(body), [12, 11, 10]);
   });
 
@@ -305,7 +305,7 @@ describe('handleSeoRequest end to end (related list)', () => {
       kind: 'article',
       fetchLiveArticles: async () => liveRows,
     });
-    assert.equal(res.headers.get('x-seo-head'), 'rewritten');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: no diagnostic header');
     assert.ok(body.includes('<title>A Newly Published Guide — FS AI</title>'), 'live title');
     // 34 is Automotive (newest, 2026-11-23): same-division first.
     assert.deepEqual(noscriptRelatedIds(body), [12, 11, 10]);
@@ -318,7 +318,7 @@ describe('handleSeoRequest end to end (related list)', () => {
       kind: 'article',
       fetchLiveArticles: async () => { throw new Error('live fetch must not run for a static id'); },
     });
-    assert.equal(res.headers.get('x-seo-head'), 'rewritten');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: no diagnostic header');
     assert.deepEqual(noscriptRelatedIds(body), [12, 11, 10]);
   });
 });
@@ -333,7 +333,7 @@ describe('no code generation in the shipped Function files', () => {
   ];
   const FORBIDDEN = ['new Function', 'eval(', 'WebAssembly.compile', 'WebAssembly.instantiate'];
 
-  for (const base of ['functions', 'frontend/functions']) {
+  for (const base of ['functions']) {
     for (const rel of FUNCTION_FILES) {
       it(base + '/' + rel + ' contains no code-generation call', () => {
         const src = fs.readFileSync(path.join(ROOT, base, rel), 'utf8');
@@ -344,26 +344,20 @@ describe('no code generation in the shipped Function files', () => {
     }
   }
 
-  // A5 Step A (Fix Pass 3, 2026-11-23): the copies are NO LONGER
-  // byte-identical on purpose — the frontend copy alone carries the
-  // `x-seo-src: frontend` live-copy marker (same 4-line block in
-  // seoHeaders() and in passthrough()). They must differ ONLY by
-  // those marker lines; tests/fixpass3-a5a.test.js pins the same
-  // lines behaviourally (the header on responses from each copy).
-  const MARKER_LINES = [
-    '  // A5 Step A (Fix Pass 3, 2026-11-23): TEMPORARY live-copy marker.',
-    '  // A5 Step A: ONLY in this frontend/functions/ copy — the repo-root',
-    '  // A5 Step A: copy must NOT emit it. Removed in Step B with x-seo-head.',
-    "  h.set('x-seo-src', 'frontend');",
-  ];
+  // A5 Step B (Fix Pass 3, 2026-11-23): there is exactly ONE Function
+  // copy now — frontend/functions/ was deleted after Step A proved the
+  // repo-root copy is live, and the x-seo-head diagnostic (with the
+  // Step A marker) was removed from the surviving copy. The
+  // marker-only-diff pin that used to live here is gone with it; the
+  // single-copy state is pinned in tests/fixpass2-item2.test.js
+  // (suite 2.13) and behaviourally in tests/fixpass3-a5b.test.js.
+  it('frontend/functions/ does not exist (the deleted copy stays deleted)', () => {
+    assert.equal(fs.existsSync(path.join(ROOT, 'frontend', 'functions')), false, 'frontend/functions/ must not exist');
+  });
 
-  it('the two seo-head.js copies differ ONLY by the A5 marker lines', () => {
-    const a = fs.readFileSync(path.join(ROOT, 'functions', 'seo-head.js'), 'utf8');
-    const b = fs.readFileSync(path.join(ROOT, 'frontend', 'functions', 'seo-head.js'), 'utf8');
-    const stripped = b.split('\n').filter((l) => !MARKER_LINES.includes(l));
-    assert.deepEqual(stripped, a.split('\n'), 'frontend seo-head.js must equal root seo-head.js + marker lines only');
-    assert.equal(b.split('\n').length - a.split('\n').length, MARKER_LINES.length * 2, 'exactly 8 added lines (4 marker lines x 2 sites)');
-    assert.equal(b.split("h.set('x-seo-src', 'frontend');").length - 1, 2, 'marker set twice in the frontend copy (rewritten + fallback)');
-    assert.equal(a.split("h.set('x-seo-src', 'frontend');").length - 1, 0, 'marker never set in the repo-root copy');
+  it('functions/seo-head.js contains no diagnostic header string', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'functions', 'seo-head.js'), 'utf8');
+    assert.equal(src.split('x-seo-head').length - 1, 0, 'no x-seo-head in the surviving copy');
+    assert.equal(src.split('x-seo-src').length - 1, 0, 'no x-seo-src in the surviving copy');
   });
 });

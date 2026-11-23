@@ -38,7 +38,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const seo = require('../frontend/functions/seo-head.js');
+const seo = require('../functions/seo-head.js');
 
 const ROOT = path.join(__dirname, '..');
 const FRONTEND = path.join(ROOT, 'frontend');
@@ -98,7 +98,7 @@ describe('A4: one "Related guides" heading in the served source', () => {
 
   it('article 1: exactly one heading, related links 12/11/10 once each', async () => {
     const { res, body } = await handle(PAGES_BASE + '/pages/article?id=1', ARTICLE_HTML, { kind: 'article' });
-    assert.equal(res.headers.get('x-seo-head'), 'rewritten');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: no diagnostic header');
     assert.equal(countOccurrences(body, 'Related guides'), 1, 'one heading only');
     assert.deepEqual(noscriptRelatedIds(body), [12, 11, 10]);
     for (const id of [12, 11, 10]) {
@@ -111,7 +111,7 @@ describe('A4: one "Related guides" heading in the served source', () => {
 
   it('article 12: exactly one heading, related links 11/10/9 once each', async () => {
     const { res, body } = await handle(PAGES_BASE + '/pages/article?id=12', ARTICLE_HTML, { kind: 'article' });
-    assert.equal(res.headers.get('x-seo-head'), 'rewritten');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: no diagnostic header');
     assert.equal(countOccurrences(body, 'Related guides'), 1, 'one heading only');
     assert.deepEqual(noscriptRelatedIds(body), [11, 10, 9]);
     for (const id of [11, 10, 9]) {
@@ -121,7 +121,7 @@ describe('A4: one "Related guides" heading in the served source', () => {
 
   it('article 25: exactly one heading, related links 19/24/23 once each', async () => {
     const { res, body } = await handle(PAGES_BASE + '/pages/article?id=25', ARTICLE_HTML, { kind: 'article' });
-    assert.equal(res.headers.get('x-seo-head'), 'rewritten');
+    assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: no diagnostic header');
     assert.equal(countOccurrences(body, 'Related guides'), 1, 'one heading only');
     assert.deepEqual(noscriptRelatedIds(body), [19, 24, 23]);
     for (const id of [19, 24, 23]) {

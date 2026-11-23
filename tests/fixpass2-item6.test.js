@@ -24,7 +24,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const seo = require('../frontend/functions/seo-head.js');
+const seo = require('../functions/seo-head.js');
 
 const ROOT = path.join(__dirname, '..');
 
