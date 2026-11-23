@@ -43,7 +43,7 @@
       <p class="muted">Loading article…</p>
     </div>
     <div class="wrap">
-      <h2>More from this division</h2>
+      <h2>Related guides</h2>
       <div class="grid" id="relatedGrid"></div>
       <p class="muted"><a href="../">← Back to home</a> · <a href="division">All divisions</a></p>
     </div>
@@ -157,14 +157,14 @@ document.addEventListener('DOMContentLoaded', function () {
     (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
     (a.body ? '<div class="article-full">' + window.FSAI.stripDraftBanner(a.body) + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
-    '<p>Found this useful? Explore the <a href="tools">free tools</a> — including the calculators that go with this topic — or browse the other articles in ' + window.FSAI.esc(a.division) + ' below.</p>';
-  var related = window.FSAI.articlesByDivision(a.division).filter(function (x) { return x.id !== a.id; }).slice(0, 3);
+    '<p>Found this useful? Explore the <a href="tools">free tools</a> — including the calculators that go with this topic — or explore the related guides below.</p>';
+  var related = window.FSAI.relatedArticles(a);
   var grid = document.getElementById('relatedGrid');
   grid.innerHTML = related.map(function (x) {
-    return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(x.category) + '</div>' +
+    return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(x.division) + ' · ' + window.FSAI.esc(x.category) + '</div>' +
       '<h3><a href="article?id=' + x.id + '">' + window.FSAI.esc(x.title) + '</a></h3>' +
       '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time> <span class="article-no">' + window.FSAI.articleNo(x.id) + '</span></article>';
-  }).join('') || '<p>No other articles in this division yet.</p>';
+  }).join('') || '<p>No related guides yet.</p>';
   });
 });
 </script>

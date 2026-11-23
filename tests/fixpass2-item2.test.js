@@ -377,9 +377,9 @@ describe('2.3 rewriteArticleHtml for ids 1, 12, 25', () => {
         .filter((l) => !perArticleLines.has(l) && !isInserted(l) && !l.includes('<noscript>'));
       assert.deepEqual(newKept, origKept, 'every other line must be identical and in order');
       // Everything a real browser renders is untouched: GA, styles,
-      // scripts, footer, the "More from this division" heading.
+      // scripts, footer, the "Related guides" heading.
       assert.ok(html.includes('gtag/js?id=G-JVSCJT2DHJ'), 'GA script kept');
-      assert.ok(html.includes('More from this division'), 'division heading kept');
+      assert.ok(html.includes('Related guides'), 'related heading kept');
       assert.ok(html.includes('<div id="siteFooter"></div>'), 'footer mount point kept (the footer itself is JS-rendered)');
       for (const src of ['../scripts/app.js', '../scripts/navigation.js', '../scripts/animations.js']) {
         assert.ok(html.includes('src="' + src + '"'), src + ' kept');

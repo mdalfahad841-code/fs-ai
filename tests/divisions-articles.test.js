@@ -12,7 +12,8 @@
 //      divisionPageState, articleById, renderArticles renders ALL 25
 //      at once (there is no pagination / load-more anywhere), and the
 //      single-article divisions (Digital Tools, Education & Learning)
-//      genuinely have no related articles.
+//      have only one article each in their own division — the related
+//      block fills from other divisions (site-traffic-related.test.js).
 //   3. Search (frontend/scripts/search.js, index-only feature): finds
 //      and misses honestly.
 //   4. Static SEO tags in the served HTML shells
@@ -225,7 +226,7 @@ describe('Frontend data: frontend/scripts/app.js', () => {
     assert.equal(FSAI.divisionPageState('').status, 'all');
   });
 
-  it('articleById finds 1-25 and misses 99; single-article divisions have no related', () => {
+  it('articleById finds 1-25 and misses 99; single-article divisions have one article each', () => {
     const FSAI = loadFrontend();
     for (let id = 1; id <= 25; id++) assert.ok(FSAI.articleById(id), `id ${id}`);
     assert.equal(FSAI.articleById(99), null);

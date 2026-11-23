@@ -190,6 +190,21 @@ async function runArticlePage(search) {
     formatDate: (d) => d,
     articleNo: (id) => 'No. ' + String(id).padStart(2, '0'),
     articlesByDivision: (name) => Object.values(ARTICLE_FIXTURES).filter((a) => a.division === name),
+    /* Same contract as window.FSAI.relatedArticles (app.js): same
+       division first (newest first), then other divisions to fill
+       to 3, never the current article — over the fixture articles. */
+    relatedArticles: (current) => {
+      const same = [];
+      const other = [];
+      for (const a of Object.values(ARTICLE_FIXTURES)) {
+        if (!a || a.id === current.id) continue;
+        if (a.division === current.division) same.push(a); else other.push(a);
+      }
+      const byNewest = (x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : y.id - x.id);
+      same.sort(byNewest);
+      other.sort(byNewest);
+      return same.concat(other).slice(0, 3);
+    },
     DISCLAIMER: 'Fixture disclaimer.',
     stripDraftBanner: (b) => b,
   };

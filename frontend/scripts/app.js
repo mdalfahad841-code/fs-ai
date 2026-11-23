@@ -191,6 +191,27 @@
     return { status: 'division', division: div, slug: id };
   }
   function articlesByDivision(name) { return ARTICLES.filter(function (a) { return a.division === name; }); }
+  /* Related guides (site traffic, 2026-11-23): 3 articles for the
+     article page — same division first (newest first), then other
+     divisions to fill to 3. Never the current article. `list` is the
+     merged ARTICLES array (published only — drafts never enter it,
+     static-wins), so the picker can never surface a draft. Pure: takes
+     the list, returns a new array, changes nothing. */
+  function relatedArticles(current, list) {
+    var items = Array.isArray(list) ? list : ARTICLES;
+    var currentId = current ? current.id : null;
+    var same = [];
+    var other = [];
+    var i;
+    for (i = 0; i < items.length; i += 1) {
+      var a = items[i];
+      if (!a || a.id === currentId) continue;
+      if (current && a.division === current.division) same.push(a); else other.push(a);
+    }
+    same.sort(sortLatestFirst);
+    other.sort(sortLatestFirst);
+    return same.concat(other).slice(0, 3);
+  }
   function articleById(id) { return ARTICLES.find(function (a) { return a.id === Number(id); }) || null; }
   function countsByDivision() {
     return DIVISIONS.map(function (d) {
@@ -365,6 +386,7 @@
     SITE: SITE, DIVISIONS: DIVISIONS, ARTICLES: ARTICLES, TOOLS: TOOLS, AGENTS: AGENTS, ACCOUNTS: ACCOUNTS,
     DISCLAIMER: GENERAL_DISCLAIMER,
     divisionById: divisionById, divisionPageState: divisionPageState, articlesByDivision: articlesByDivision, articleById: articleById,
+    relatedArticles: relatedArticles,
     countsByDivision: countsByDivision, formatDate: formatDate, esc: esc, stripDraftBanner: stripDraftBanner,
     liveReady: liveReady, mapLiveArticle: mapLiveArticle, mergeLiveArticles: mergeLiveArticles, applyLiveArticles: applyLiveArticles
   };
