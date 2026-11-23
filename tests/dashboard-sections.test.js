@@ -67,7 +67,7 @@ describe('dashboard.html has all 14 sections', () => {
       'adminAgentList', 'emergencyStopBtn', 'emergencyStopState', 'agentLogs',
       'socialAccountList', 'subscriberList',
       'seoChecks', 'analyticsGrid', 'monetizationGrid',
-      'securityPanel', 'systemLogs',
+      'securityPanel', 'cspReportList', 'cspReportStatus', 'systemLogs',
       'backupDownloadBtn', 'backupCounts',
     ]) {
       assert.ok(DASHBOARD_HTML.includes('id="' + id + '"'), 'missing element: ' + id);
@@ -101,7 +101,7 @@ describe('dashboard.js loads live data only after a verified session', () => {
       '/api/admin/articles', '/api/admin/divisions',
       '/api/tools', '/api/agents',
       '/api/admin/emergency-stop', '/api/admin/subscribers',
-      '/api/admin/backup',
+      '/api/admin/backup', '/api/csp-report/stats',
     ]) {
       assert.ok(DASHBOARD_JS.includes("'" + endpoint + "'") || DASHBOARD_JS.includes('"' + endpoint + '"') || DASHBOARD_JS.includes(endpoint),
         'must fetch ' + endpoint);

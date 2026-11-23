@@ -13,6 +13,7 @@
 import { handleArticles } from './routes/articles.js';
 import { handleDivisions, handleAdminDivisions } from './routes/divisions.js';
 import { handleTools } from './routes/tools.js';
+import { handleCspReport, handleCspReportStats } from './routes/csp-report.js';
 import { handleAgents } from './routes/agents.js';
 import { handleAccounts } from './routes/accounts.js';
 import { handleAnalytics } from './routes/analytics.js';
@@ -107,6 +108,19 @@ async function route(request, env, ctx) {
   if (path === '/api/tools' || path.startsWith('/api/tools/')) return handleTools(request, env, ctx);
   if (path.startsWith('/api/accounts') && method === 'GET') return handleAccounts(request, env, ctx);
   if (path === '/api/analytics' && method === 'GET') return handleAnalytics(request, env, ctx);
+
+  // CSP violation reports (close-out A4): browsers POST violation
+  // reports here (Report-Only policy, frontend/_headers). Public —
+  // a browser has no session — but the body is capped, the type is
+  // checked, only four fields are stored, and the global rate limiter
+  // in fetch() caps POSTs at 30/min per IP. The 7-day counts are
+  // owner-only (below).
+  if (path === '/api/csp-report' && method === 'POST') return handleCspReport(request, env);
+  if (path === '/api/csp-report/stats' && method === 'GET') {
+    const auth = await requireOwner(request, env);
+    if (!auth.ok) return auth.response;
+    return handleCspReportStats(request, env);
+  }
 
   // Public newsletter routes (subscribe / unsubscribe). Rate limiting is
   // applied to every request in fetch() below (30/min for POSTs), so no

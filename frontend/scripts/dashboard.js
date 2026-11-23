@@ -737,6 +737,30 @@
     items.push('<strong>Passwords:</strong> PBKDF2, 100,000 iterations, SHA-256. No password, hash or token is stored in frontend code.');
     box.innerHTML = items.map(function (i) { return '<li>' + i + '</li>'; }).join('');
     setText('securityStatus', 'Session and security facts for this browser tab.');
+    loadCspReports();
+  }
+
+  /* --- CSP violation reports, last 7 days (close-out A4) --- */
+  function loadCspReports() {
+    var list = el('cspReportList');
+    if (!list) return;
+    if (typeof fetch !== 'function') { setText('cspReportStatus', 'CSP report counts need a browser fetch — unavailable here.'); return; }
+    setText('cspReportStatus', 'Loading CSP violation reports…');
+    api('/api/csp-report/stats').then(function (r) {
+      if (!r.ok) { setText('cspReportStatus', apiError(r)); return; }
+      var d = r.data || {};
+      var rows = d.by_directive || [];
+      if (!rows.length) {
+        list.innerHTML = '<li>No CSP violations reported in the last 7 days.</li>';
+      } else {
+        list.innerHTML = rows.map(function (row) {
+          return '<li><strong>' + esc(row.directive) + '</strong> — ' + esc(String(row.count)) + ' report(s)</li>';
+        }).join('');
+      }
+      setText('cspReportStatus', 'CSP is Report-Only (nothing enforced). ' + (d.total || 0) + ' violation report(s) in the last 7 days. Enforcement rule: docs/CLOSEOUT-A4-CSP-ENFORCEMENT-RULE-2026-11-23.md — Report-Only stays until 14 clean days + owner approval.');
+    }).catch(function () {
+      setText('cspReportStatus', 'Could not reach the FS AI server.');
+    });
   }
 
   /* --- 13. System Logs --- */
