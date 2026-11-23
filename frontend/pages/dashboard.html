@@ -180,6 +180,19 @@
             <button class="btn btn-outline" type="button" id="articleFormCancel">Cancel edit</button></div>
           </form>
           <p id="articleFormStatus" aria-live="polite"></p>
+          <!-- Fix Pass 2 item 1 (2026-11-23): the publish gate can block a
+               Publish click. The override block below stays hidden until
+               the API answers 422 with a gate report; it is the only
+               place the override phrase is typed, and the API records
+               every override in article_publish_overrides before it
+               publishes. The phrase is shown here so the owner can type
+               it — the API, not this page, enforces it. -->
+          <div id="articlePublishOverride" hidden>
+            <p class="muted">The publish gate blocked this article (see the reasons above). Publishing anyway needs the owner to type the exact confirmation phrase — the override is recorded in the audit log with the full gate result.</p>
+            <div class="field"><label for="articlePublishOverrideInput">Confirmation phrase</label><input id="articlePublishOverrideInput" type="text" autocomplete="off" placeholder="PUBLISH DESPITE GATE"></div>
+            <button class="btn btn-danger" type="button" id="articlePublishOverrideConfirm">Publish despite gate</button>
+            <button class="btn btn-outline" type="button" id="articlePublishOverrideCancel">Cancel</button>
+          </div>
           <h3>Revisions</h3>
           <p class="muted">Select “Revisions” on an article above to see its earlier versions.</p>
           <ul class="clean" id="articleRevisions"></ul>

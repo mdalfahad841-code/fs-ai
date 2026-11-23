@@ -48,6 +48,7 @@ const vm = require('node:vm');
 const {
   stripDraftBanner, hasDraftBanner, stripAllDraftBannerLines, isDraftBannerLine,
 } = require('../backend/utils/draftBanner.js');
+const { bodyHash } = require('../backend/utils/bodyHash.js');
 const { handleAdminArticles, publishDueArticles } = require('../backend/routes/admin-articles.js');
 const { handleArticles } = require('../backend/routes/articles.js');
 const { freshEnv, insertArticle, loadArticle } = require('./phase2-harness.js');
@@ -97,6 +98,52 @@ const LEGIT_MENTION_BODY =
 
 function publishReq(id) {
   return new Request(`http://localhost/api/admin/articles/${id}/publish`, { method: 'POST' });
+}
+
+// Fix Pass 2 item 1 (2026-11-23): POST /publish now runs the publish
+// gate, so the banner-strip publish tests below must be gate-passing.
+// freshEnv() has no body-hash / claim-key columns and no override
+// audit table — apply migrations 017/019/023/032 onto the test db
+// first, then seed a fresh PASS fact-check (body hash recorded),
+// evidenced VERIFIED claims, a source with a URL and a fresh PASS SEO
+// run. Only the fixtures grew; every assertion below is unchanged.
+// The malformed-banner test needs none of this: the banner refusal
+// runs before the gate, so it still answers with the banner error.
+const GATE_MIGRATIONS = [
+  'database/migrations/017_correction_claim_key.sql',
+  'database/migrations/019_factcheck_body_hash.sql',
+  'database/migrations/023_seo_body_hash.sql',
+  'database/migrations/032_article_publish_overrides.sql',
+];
+
+function applyGateMigrations(db) {
+  for (const file of GATE_MIGRATIONS) {
+    db.exec(fs.readFileSync(path.join(ROOT, file), 'utf8'));
+  }
+}
+
+async function seedGatePass(db, articleId) {
+  const article = loadArticle(db, articleId);
+  const hash = await bodyHash(article.body);
+  const fc = db.prepare(
+    'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, body_hash) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(articleId, 'pass', 2, 2, 0, hash);
+  const fcId = Number(fc.lastInsertRowid);
+  for (const claim of ['Gate claim one.', 'Gate claim two.']) {
+    db.prepare(
+      "INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation) VALUES (?, ?, ?, 'https://example.com/source-1', 'evidence', 'test')",
+    ).run(fcId, claim, 'VERIFIED');
+  }
+  db.prepare(
+    "INSERT INTO article_sources (article_id, source_title, source_url, source_type, accessed_at) VALUES (?, 'Test source', 'https://example.com/source-1', 'other', '2026-11-19T12:00:00Z')",
+  ).run(articleId);
+  const checksJson = JSON.stringify([
+    { name: 'seo-title', ok: true },
+    { name: 'duplicate', ok: true, detail: 'Highest 5-word shingle overlap: 0%.' },
+  ]);
+  db.prepare(
+    'INSERT INTO seo_checks (article_id, verdict, checks_json, body_hash) VALUES (?, ?, ?, ?)',
+  ).run(articleId, 'pass', checksJson, hash);
 }
 
 function putReq(id, body) {
@@ -191,6 +238,8 @@ describe('publish handler — manual publish', () => {
   it('strips a standard banner and publishes the cleaned body', async () => {
     const { db, env } = freshEnv();
     const id = insertArticle(db, STANDARD_BANNER_BODY, { id: 901, status: 'draft' });
+    applyGateMigrations(db);
+    await seedGatePass(db, id);
     const res = await handleAdminArticles(publishReq(id), env, {}, AUTH);
     assert.equal(res.status, 200);
     const data = await res.json();
@@ -220,6 +269,8 @@ describe('publish handler — manual publish', () => {
   it('publishes a banner-free body unchanged', async () => {
     const { db, env } = freshEnv();
     const id = insertArticle(db, 'Plain body, no banner.', { id: 903, status: 'draft' });
+    applyGateMigrations(db);
+    await seedGatePass(db, id);
     const res = await handleAdminArticles(publishReq(id), env, {}, AUTH);
     assert.equal(res.status, 200);
     assert.equal(loadArticle(db, id).body, 'Plain body, no banner.');

@@ -62,6 +62,8 @@ describe('dashboard.html has all 14 sections', () => {
   it('has the controls each section needs', () => {
     for (const id of [
       'adminArticleList', 'articleForm', 'articleRevisions',
+      'articlePublishOverride', 'articlePublishOverrideInput',
+      'articlePublishOverrideConfirm', 'articlePublishOverrideCancel',
       'adminDivisionList', 'divisionForm',
       'adminToolList',
       'adminAgentList', 'emergencyStopBtn', 'emergencyStopState', 'agentLogs',

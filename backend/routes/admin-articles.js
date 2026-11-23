@@ -6,7 +6,16 @@
  *   GET    /api/admin/articles/:id              one article, any status
  *   PUT    /api/admin/articles/:id              edit (stores a revision first)
  *   DELETE /api/admin/articles/:id              delete (revisions remain)
- *   POST   /api/admin/articles/:id/publish      status=published, published_at=now
+ *   POST   /api/admin/articles/:id/publish      manual publish — runs
+ *          the publish gate (Fix Pass 2 item 1, 2026-11-23): a Blocked
+ *          gate refuses with the failed-check reason list (422); an
+ *          explicit owner override needs the typed phrase
+ *          "PUBLISH DESPITE GATE" in the JSON body and is recorded in
+ *          article_publish_overrides (migration 032) before anything
+ *          publishes. The Emergency Stop can never be overridden.
+ *          Protected articles #26/#27 (assertNotProtected) refuse 403
+ *          always; legacy drafts #28–#31/#33 publish only via the
+ *          audited override. Unpublish is ungated (it only hides).
  *   POST   /api/admin/articles/:id/unpublish    status=draft, published_at cleared
  *   GET    /api/admin/articles/:id/revisions    prior versions of the article
  *
@@ -23,7 +32,11 @@ import {
 import { getEmergencyStop } from './admin.js';
 import { stripDraftBanner, hasDraftBanner } from '../utils/draftBanner.js';
 import { assertNotProtected } from '../publishing/protection.js';
-import { countPublishedTodayDhaka } from '../publishing/gate.js';
+import {
+  countPublishedTodayDhaka, evaluateManualPublishGate,
+  MANUAL_PUBLISH_OVERRIDE_PHRASE,
+} from '../publishing/gate.js';
+import { isSpecialReviewDivision } from '../publishing/divisions.js';
 
 const ARTICLE_COLUMNS = 'a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt';
 
@@ -343,38 +356,143 @@ function preparePublishBody(body) {
   return { ok: true, body: cleaned };
 }
 
-async function setPublishState(env, id, publish) {
+/**
+ * Manual publish gate — the single verdict the publish path reports
+ * and audits (Fix Pass 2 item 1). `reasons` is the exact list the
+ * owner sees on a refusal: the gate's failed-check details, plus the
+ * legacy-draft reason when it applies (the gate itself does not know
+ * about the legacy list). `checks` is the gate's full check array so
+ * the dashboard can name the failed checks, not just their text.
+ */
+function manualGateReport(manual, current) {
+  const reasons = [...manual.blockedBy];
+  if (manual.legacyProtected) {
+    reasons.push(`Article #${manual.articleId} is a protected legacy draft — it needs separate owner authorization (publish with the override phrase).`);
+  }
+  return {
+    contentReady: manual.contentReady,
+    blockedBy: reasons,
+    failedChecks: manual.failedChecks,
+    checks: manual.checks.map((c) => ({ name: c.name, ok: c.ok, detail: c.detail })),
+    legacyProtected: manual.legacyProtected,
+    emergencyStopOn: manual.emergencyStopOn,
+    division: current.division || null,
+  };
+}
+
+async function setPublishState(request, env, id, publish, auth) {
   if (!env.DB) return jsonError('CMS writes require the D1 database', 503);
   // WS-E finding H1 (Workstream A fix, 2026-11-21): a protected
   // article must never be published/unpublished through a manual
   // endpoint either — same ID-level guard as edit/delete (before the
-  // 404 check, so #26/#27 refuse 403 even with no row).
+  // 404 check, so #26/#27 refuse 403 even with no row). Fix Pass 2
+  // item 1: this guard is ABSOLUTE — the override phrase below does
+  // not bypass it. Only the legacy drafts #28–#31/#33 (see the manual
+  // gate) may publish via an audited override; #26/#27 never publish
+  // through this endpoint at all.
   const guard = await assertNotProtected(env, id);
   if (!guard.ok) return jsonError(guard.reason, 403);
   const current = await fetchArticle(env, id);
   if (!current) return jsonError('Article not found', 404);
-  if (publish) {
-    // Banner protection (2026-11-20): an AI draft's internal AI-DRAFT
-    // warning block must never reach the public. Strip the standard
-    // leading block; if ANY banner line survives the strip, refuse to
-    // publish — the article stays exactly as it was (still a draft, body
-    // untouched) and the owner must remove the banner by hand. A failed
-    // strip never silently publishes anything.
-    const prep = preparePublishBody(current.body || '');
-    if (!prep.ok) return jsonError(prep.error, 422);
-    if (prep.body !== (current.body || '')) {
-      await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, body = ?, updated_at = ? WHERE id = ?',
-        ['published', nowIso(), prep.body, nowIso(), id]);
-    } else {
-      await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, updated_at = ? WHERE id = ?',
-        ['published', nowIso(), nowIso(), id]);
-    }
-  } else {
+  if (!publish) {
     await d1Run(env, 'UPDATE articles SET status = ?, published_at = NULL, updated_at = ? WHERE id = ?',
       ['draft', nowIso(), id]);
+    const article = await fetchArticle(env, id);
+    return jsonOk({ article: await withTags(env, article) });
+  }
+  // --- Manual publish (publish=true) — Fix Pass 2 item 1 ---
+  // Banner protection (2026-11-20) runs FIRST, before the gate: an
+  // AI draft's internal AI-DRAFT warning block must never reach the
+  // public, and a banner that survives the strip is refused with the
+  // banner error (not a gate error) — the article stays exactly as it
+  // was (still a draft, body untouched) and the owner must remove the
+  // banner by hand. preparePublishBody is pure: a successful strip
+  // writes nothing, so a later gate refusal leaves no trace.
+  const prep = preparePublishBody(current.body || '');
+  if (!prep.ok) return jsonError(prep.error, 422);
+  // The optional override phrase arrives ONLY as JSON in the request
+  // body ({ "override": "PUBLISH DESPITE GATE" }) — never as a query
+  // param, never as a header. A POST with no body (the dashboard's
+  // plain Publish click and every pre-existing client) carries no
+  // override; a present-but-unparseable body is a 400.
+  let override = null;
+  const rawBody = await request.text();
+  if (rawBody && rawBody.trim()) {
+    let parsed;
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch {
+      return jsonError('Invalid JSON body.', 400);
+    }
+    if (parsed && typeof parsed === 'object') override = parsed.override;
+  }
+  const overrideGiven = typeof override === 'string' && override.length > 0;
+  const overrideExact = override === MANUAL_PUBLISH_OVERRIDE_PHRASE;
+  // A phrase was typed but it is not the exact phrase: refuse without
+  // guessing the intent — a wrong phrase is never treated as "no
+  // override" and never as an override.
+  if (overrideGiven && !overrideExact) {
+    return jsonError(`Override phrase is incorrect — type ${MANUAL_PUBLISH_OVERRIDE_PHRASE} exactly to publish despite the gate.`, 422);
+  }
+  // The gate itself. If it cannot be evaluated at all (missing tables
+  // on an old database, a store error), refuse 503 — fail closed. A
+  // publish must never proceed past an unverifiable gate.
+  let manual;
+  try {
+    manual = await evaluateManualPublishGate(env, id);
+  } catch (e) {
+    const message = e && e.message ? e.message : String(e);
+    return jsonError(`Could not evaluate the publish gate (${message}) — the publish was refused.`, 503);
+  }
+  // The Emergency Stop is a safety control, not a gate check the owner
+  // can type past: the override phrase NEVER bypasses it. The owner
+  // turns the Stop off first, as a separate deliberate act. No audit
+  // row is written for this refusal — nothing was overridden.
+  if (manual.emergencyStopOn) {
+    return jsonError('Emergency Stop is ON — turn it off before publishing. The override phrase cannot bypass the Emergency Stop.', 422,
+      { gate: manualGateReport(manual, current) });
+  }
+  // Normal path: the gate must allow the publish AND the article must
+  // not be a protected legacy draft. A refusal names every failed
+  // check (and the legacy reason when it applies) in the response so
+  // the dashboard can show the reason list.
+  if (!overrideExact && !manual.allowed) {
+    const report = manualGateReport(manual, current);
+    return jsonError(`Publish gate is Blocked: ${report.blockedBy.join(' ')}`, 422, { gate: report });
+  }
+  // Override path (exact phrase only): record the audit row BEFORE
+  // anything publishes. The row carries who overrode, when, which
+  // article, the FULL gate result that was overridden, and whether
+  // human review applied (typing the phrase IS the human review for
+  // Health/Finance divisions). If the audit table is missing (code
+  // deployed before migration 032) the INSERT throws and the publish
+  // is refused with 503 — an unaudited override must never happen.
+  // An override on a gate-passing article is audited the same way:
+  // the phrase was invoked, so the row records that it was.
+  if (overrideExact) {
+    const gateResult = JSON.stringify({
+      ...manualGateReport(manual, current),
+      overriddenAt: nowIso(),
+    });
+    try {
+      await d1Run(env,
+        'INSERT INTO article_publish_overrides (article_id, title, slug, division, published_by, gate_result, human_review_applied) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [Number(id), current.title || '', current.slug || '', current.division || '',
+         (auth && auth.owner) || null, gateResult,
+         isSpecialReviewDivision(current.division) ? 1 : 0]);
+    } catch (e) {
+      return jsonError('Could not record the publish-override audit — the publish was refused so no unaudited override can happen.', 503);
+    }
+  }
+  if (prep.body !== (current.body || '')) {
+    await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, body = ?, updated_at = ? WHERE id = ?',
+      ['published', nowIso(), prep.body, nowIso(), id]);
+  } else {
+    await d1Run(env, 'UPDATE articles SET status = ?, published_at = ?, updated_at = ? WHERE id = ?',
+      ['published', nowIso(), nowIso(), id]);
   }
   const article = await fetchArticle(env, id);
-  return jsonOk({ article: await withTags(env, article) });
+  return jsonOk({ article: await withTags(env, article), ...(overrideExact ? { overridden: true } : {}) });
 }
 
 async function listRevisions(env, id) {
@@ -398,8 +516,8 @@ export async function handleAdminArticles(request, env, ctx, auth) {
   }
   if (method === 'PUT' && parts.length === 4) return updateArticle(request, env, auth, parts[3]);
   if (method === 'DELETE' && parts.length === 4) return deleteArticle(env, parts[3], auth);
-  if (method === 'POST' && parts.length === 5 && parts[4] === 'publish') return setPublishState(env, parts[3], true);
-  if (method === 'POST' && parts.length === 5 && parts[4] === 'unpublish') return setPublishState(env, parts[3], false);
+  if (method === 'POST' && parts.length === 5 && parts[4] === 'publish') return setPublishState(request, env, parts[3], true, auth);
+  if (method === 'POST' && parts.length === 5 && parts[4] === 'unpublish') return setPublishState(request, env, parts[3], false, auth);
   if (method === 'GET' && parts.length === 5 && parts[4] === 'revisions') return listRevisions(env, parts[3]);
   return jsonError('Method not allowed', 405);
 }

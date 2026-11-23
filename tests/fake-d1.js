@@ -48,6 +48,19 @@ function makeFakeD1() {
     articles: [],
     article_revisions: [],
     article_tags: [],
+    // Fix Pass 2 item 1 (2026-11-23): the manual publish path now
+    // evaluates the publish gate, which reads these five tables. The
+    // fake D1 models them as plain arrays; the SELECT handlers below
+    // implement the gate's exact queries (latest fact-check / SEO run,
+    // sources, claim evidence, open corrections). article_publish_overrides
+    // is the override audit table (migration 032); the generic INSERT
+    // handler stores rows in it once registered here.
+    fact_checks: [],
+    claim_checks: [],
+    article_sources: [],
+    article_corrections: [],
+    seo_checks: [],
+    article_publish_overrides: [],
     business_divisions: DIVISIONS.map((d) => ({ ...d, created_at: now, updated_at: now })),
     categories: [],
     ai_agents: AGENTS.map((a) => ({ ...a, status: 'active', created_at: now, updated_at: now })),
@@ -76,7 +89,7 @@ function makeFakeD1() {
       { key: 'max_articles_per_day', value: '1' },
     ],
   };
-  const nextId = { articles: 1, article_revisions: 1, article_tags: 1, business_divisions: 9, ai_agents: 17, agent_activity_logs: 1, automation_jobs: 1, newsletter_subscribers: 1, website_settings: 3, digital_tools: 3, monetization_accounts: 3, website_analytics: 2, categories: 1, autonomy_settings: 1 };
+  const nextId = { articles: 1, article_revisions: 1, article_tags: 1, business_divisions: 9, ai_agents: 17, agent_activity_logs: 1, automation_jobs: 1, newsletter_subscribers: 1, website_settings: 3, digital_tools: 3, monetization_accounts: 3, website_analytics: 2, categories: 1, autonomy_settings: 1, fact_checks: 1, claim_checks: 1, article_sources: 1, article_corrections: 1, seo_checks: 1, article_publish_overrides: 1 };
 
   function insertRow(table, row) {
     const id = nextId[table]++;
@@ -377,6 +390,58 @@ function makeFakeD1() {
     if (q.startsWith('SELECT * FROM website_analytics ORDER BY recorded_date DESC LIMIT 1')) {
       const rows = [...tables.website_analytics].sort((a, b) => (a.recorded_date < b.recorded_date ? 1 : -1));
       return { results: rows.length ? [{ ...rows[0] }] : [] };
+    }
+    // Fix Pass 2 item 1 (2026-11-23): the publish gate's reads, in the
+    // order evaluatePublishGate() issues them. Latest-row lookups sort
+    // created_at DESC, id DESC, like the real queries; claim evidence
+    // counts VERIFIED claims with no evidence URL; the corrections
+    // subquery reproduces countOpenCorrections()' latest-row-per-claim
+    // rule in JS (the fake D1 cannot run the subquery's GROUP BY).
+    // Seeded rows arrive through the generic INSERT handler once the
+    // tables above are registered.
+    if (q.startsWith('SELECT is_protected FROM articles WHERE id = ?')) {
+      const row = tables.articles.find((a) => a.id === Number(params[0]));
+      return { results: row ? [{ is_protected: Number(row.is_protected || 0) }] : [] };
+    }
+    if (q.startsWith('SELECT * FROM fact_checks WHERE article_id = ?')) {
+      const rows = tables.fact_checks.filter((r) => r.article_id === Number(params[0]))
+        .sort((a, b) => (a.created_at !== b.created_at ? (a.created_at < b.created_at ? 1 : -1) : b.id - a.id));
+      return { results: rows.length ? [{ ...rows[0] }] : [] };
+    }
+    if (q.startsWith('SELECT * FROM article_sources WHERE article_id = ?')) {
+      return { results: tables.article_sources.filter((r) => r.article_id === Number(params[0])).map((r) => ({ ...r })) };
+    }
+    if (q.startsWith("SELECT COUNT(*) AS n FROM claim_checks WHERE fact_check_id = ? AND verdict = 'VERIFIED'")) {
+      const n = tables.claim_checks.filter((r) => r.fact_check_id === Number(params[0])
+        && r.verdict === 'VERIFIED' && (r.evidence_url === null || r.evidence_url === undefined || r.evidence_url === '')).length;
+      return { results: [{ n }] };
+    }
+    if (q.startsWith('SELECT claim_text, verdict FROM claim_checks WHERE fact_check_id = ?')) {
+      return { results: tables.claim_checks.filter((r) => r.fact_check_id === Number(params[0]))
+        .map((r) => ({ claim_text: r.claim_text, verdict: r.verdict })) };
+    }
+    if (q.startsWith('SELECT * FROM seo_checks WHERE article_id = ?')) {
+      const rows = tables.seo_checks.filter((r) => r.article_id === Number(params[0]))
+        .sort((a, b) => (a.created_at !== b.created_at ? (a.created_at < b.created_at ? 1 : -1) : b.id - a.id));
+      return { results: rows.length ? [{ ...rows[0] }] : [] };
+    }
+    if (q.startsWith('SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = ?')) {
+      const n = tables.article_corrections.filter((r) => r.article_id === Number(params[0])
+        && (r.status === 'pending' || r.status === 'failed')).length;
+      return { results: [{ n }] };
+    }
+    if (q.includes('FROM article_corrections')) {
+      // countOpenCorrections(): latest row per claim (key = claim_key
+      // or original_text), kept only when still pending/failed.
+      const byKey = new Map();
+      for (const r of tables.article_corrections.filter((x) => x.article_id === Number(params[0]))) {
+        const key = r.claim_key || r.original_text || '';
+        if (!byKey.has(key) || r.id > byKey.get(key).id) byKey.set(key, r);
+      }
+      const open = [...byKey.values()]
+        .filter((r) => r.status === 'pending' || r.status === 'failed')
+        .map((r) => ({ id: r.id, claim_key: r.claim_key || null, original_text: r.original_text }));
+      return { results: open };
     }
     // Backup export: ORDER BY id DESC (all id tables) or ORDER BY rowid
     // DESC (autonomy_settings has no id column — its PK is `key`).

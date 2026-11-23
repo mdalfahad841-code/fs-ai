@@ -20,6 +20,7 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { handleRequest, publishDueArticles } = require('../src/index.js');
 const { hashPassword } = require('../backend/security/crypto.js');
+const { bodyHash } = require('../backend/utils/bodyHash.js');
 
 const ROOT = path.join(__dirname, '..');
 const WORKER_URL = 'http://localhost';
@@ -108,11 +109,15 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
     // Protected drafts #26/#27 exist in production (live: #26 division 2,
     // #27 division 1, both draft) and protection is ID-level — a fresh
     // article created here must not reuse id 26/27, or the H1 guard
-    // would rightly refuse its publish. Seed them as drafts so the CMS
-    // test's new article lands on id 28. Drafts never appear in the
-    // published-only public/division counts below.
+    // would rightly refuse its publish. The same holds for the manual
+    // publish legacy list (Fix Pass 2 item 1): #28–#31 and #33 publish
+    // only via the audited override phrase, so a fresh article landing
+    // on one of those ids would be refused on the normal path. Seed
+    // them all as drafts so the CMS test's new article lands on id 34.
+    // Drafts never appear in the published-only public/division counts
+    // below.
     db.prepare(
-      "INSERT INTO articles (id, division_id, title, slug, excerpt, body, author, status, fact_checked) VALUES (26, 2, 'How Artificial Intelligence Is Changing Everyday Life', 'how-artificial-intelligence-is-changing-everyday-life', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0), (27, 1, 'Tesla Cybercab Factory at Giga Berlin', 'tesla-cybercab-factory-at-giga-berlin', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0)",
+      "INSERT INTO articles (id, division_id, title, slug, excerpt, body, author, status, fact_checked) VALUES (26, 2, 'How Artificial Intelligence Is Changing Everyday Life', 'how-artificial-intelligence-is-changing-everyday-life', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0), (27, 1, 'Tesla Cybercab Factory at Giga Berlin', 'tesla-cybercab-factory-at-giga-berlin', 'Protected draft.', 'Protected draft body.', 'FS AI', 'draft', 0), (28, 1, 'Legacy Draft 28', 'legacy-draft-28', 'Legacy draft.', 'Legacy draft body.', 'FS AI', 'draft', 0), (29, 1, 'Legacy Draft 29', 'legacy-draft-29', 'Legacy draft.', 'Legacy draft body.', 'FS AI', 'draft', 0), (30, 1, 'Legacy Draft 30', 'legacy-draft-30', 'Legacy draft.', 'Legacy draft body.', 'FS AI', 'draft', 0), (31, 1, 'Legacy Draft 31', 'legacy-draft-31', 'Legacy draft.', 'Legacy draft body.', 'FS AI', 'draft', 0), (33, 1, 'Legacy Draft 33', 'legacy-draft-33', 'Legacy draft.', 'Legacy draft body.', 'FS AI', 'draft', 0)",
     ).run();
     env = { DB: makeRealD1(db), SESSION_SECRET: 'test-session-secret-real-db' };
     env.OWNER_PASSWORD_HASH = await hashPassword(CORRECT_PASSWORD);
@@ -268,6 +273,39 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
     const article = (await created.json()).article;
     const hidden = await handleRequest(req('GET', `/api/articles/${article.slug}`), env);
     assert.equal(hidden.status, 404, 'draft is hidden from the public');
+    // Fix Pass 2 item 1 (2026-11-23): POST /publish now runs the
+    // publish gate, and this schema+seed db has no gate tables — apply
+    // migrations 009/017/019/023/032, then seed a gate-passing article
+    // (fresh PASS fact-check with the recorded body hash, evidenced
+    // VERIFIED claims, a source with a URL, a fresh PASS SEO run).
+    // Only the fixture grew; the assertions below are unchanged.
+    for (const file of [
+      'database/migrations/009_factcheck.sql',
+      'database/migrations/017_correction_claim_key.sql',
+      'database/migrations/019_factcheck_body_hash.sql',
+      'database/migrations/023_seo_body_hash.sql',
+      'database/migrations/032_article_publish_overrides.sql',
+    ]) {
+      db.exec(fs.readFileSync(path.join(ROOT, file), 'utf8'));
+    }
+    const hash = await bodyHash('Real body.');
+    const fc = db.prepare(
+      'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, body_hash) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(article.id, 'pass', 1, 1, 0, hash);
+    const fcId = Number(fc.lastInsertRowid);
+    db.prepare(
+      "INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation) VALUES (?, ?, ?, 'https://example.com/source-1', 'evidence', 'test')",
+    ).run(fcId, 'Real body claim.', 'VERIFIED');
+    db.prepare(
+      "INSERT INTO article_sources (article_id, source_title, source_url, source_type, accessed_at) VALUES (?, 'Test source', 'https://example.com/source-1', 'other', '2026-11-19T12:00:00Z')",
+    ).run(article.id);
+    const checksJson = JSON.stringify([
+      { name: 'seo-title', ok: true },
+      { name: 'duplicate', ok: true, detail: 'Highest 5-word shingle overlap: 0%.' },
+    ]);
+    db.prepare(
+      'INSERT INTO seo_checks (article_id, verdict, checks_json, body_hash) VALUES (?, ?, ?, ?)',
+    ).run(article.id, 'pass', checksJson, hash);
     const published = await handleRequest(req('POST', `/api/admin/articles/${article.id}/publish`, token), env);
     assert.equal(published.status, 200);
     const visible = await handleRequest(req('GET', `/api/articles/${article.slug}`), env);

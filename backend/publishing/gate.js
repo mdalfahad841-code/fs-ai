@@ -56,6 +56,79 @@ export const AUTO_PUBLISH_CUTOFF_SETTING = 'auto_publish_eligible_since';
  */
 export const NEVER_WAIVABLE_SEO_CHECKS = ['internal-links', 'duplicate'];
 
+/**
+ * FIX PASS 2 item 1 (2026-11-23) — manual publish gate.
+ *
+ * The dashboard Publish button (POST /api/admin/articles/:id/publish)
+ * used to publish immediately, even when the quality gate was Blocked.
+ * Manual publish now runs the SAME gate — evaluatePublishGate() — with
+ * the verdict adapted for a human publisher:
+ *
+ *   - content checks 1–7 (fact-check, no unresolved errors, sources,
+ *     corrections, SEO, duplicate, special-review) must ALL pass:
+ *     they are what "ready for owner approval" means, and the owner
+ *     clicking Publish IS the approval.
+ *   - check 8 (Emergency Stop off) must pass. The Stop is a safety
+ *     control: the override phrase below does NOT bypass it — the
+ *     owner turns the Stop off first, as a separate deliberate act.
+ *   - check 9 (daily limit, Dhaka day) must pass on the normal path.
+ *     The override phrase may pass it, audited.
+ *   - check 10 (publishing-rules: mode != 'approved_only' AND
+ *     auto_publishing on) is EXCLUDED: it governs whether the SYSTEM
+ *     may publish without a human. With the live default
+ *     (approved_only) it always fails — requiring it here would make
+ *     the Publish button permanently dead, which is the opposite of
+ *     approved_only (articles wait for OWNER approval, then the owner
+ *     publishes). Manual publish never consults check 10.
+ *   - an already-published article is refused ("Article is already
+ *     published."): the gate's early return carries that check, and
+ *     the manual verdict includes it — re-stamping published_at
+ *     through the button is no longer a silent no-op.
+ *
+ * evaluateManualPublishGate() is the ONLY manual-publish verdict: the
+ * route must not re-derive it from the raw gate. It returns the gate
+ * result alongside the manual verdict so the route can report the
+ * exact failed checks and record them in the override audit row.
+ */
+export const MANUAL_PUBLISH_OVERRIDE_PHRASE = 'PUBLISH DESPITE GATE';
+/**
+ * Legacy drafts that need separate owner authorization for MANUAL
+ * publish too (owner pack §3): #28–#31 are refused by id for
+ * auto-publish (LEGACY_AUTO_PUBLISH_REFUSED_IDS above); #33 is
+ * protected for auto-publish by its pre-cutoff creation timestamp.
+ * For manual publish the owner pack names all five explicitly, so
+ * they are listed by id here — the timestamp rule alone would lose
+ * them if auto_publish_eligible_since were ever unset. The typed
+ * override phrase is the only path for these five, and it is audited.
+ * Articles #26/#27 (and any is_protected=1 row) are NOT in this list:
+ * assertNotProtected() refuses them absolutely, override or not.
+ */
+export const MANUAL_PUBLISH_PROTECTED_IDS = [28, 29, 30, 31, 33];
+
+export async function evaluateManualPublishGate(env, articleId) {
+  const gate = await evaluatePublishGate(env, articleId);
+  const id = Number(articleId);
+  // Every failed check except publishing-rules (see the comment above).
+  // An empty checks array (invalid id / article not found) is a
+  // refusal, not a vacuous pass — the route 404s first, but the
+  // verdict must never read "allowed" with no checks behind it.
+  const manualBlockers = gate.checks.filter((c) => !c.ok && c.name !== 'publishing-rules');
+  const blockedBy = gate.checks.length === 0 ? [...gate.blockedBy] : manualBlockers.map((c) => c.detail);
+  const emergencyStopOn = gate.checks.some((c) => c.name === 'emergency-stop-off' && !c.ok);
+  const legacyProtected = MANUAL_PUBLISH_PROTECTED_IDS.includes(id);
+  return {
+    articleId: id,
+    allowed: gate.checks.length > 0 && manualBlockers.length === 0 && !legacyProtected,
+    contentReady: gate.contentReady,
+    blockedBy,
+    failedChecks: manualBlockers.map((c) => c.name),
+    checks: gate.checks,
+    emergencyStopOn,
+    legacyProtected,
+    gate,
+  };
+}
+
 async function setting(env, key, fallback) {
   try {
     const row = await d1First(env, 'SELECT value FROM autonomy_settings WHERE key = ? LIMIT 1', [key]);

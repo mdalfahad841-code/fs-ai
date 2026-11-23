@@ -16,6 +16,7 @@ const assert = require('node:assert/strict');
 
 const { handleRequest, publishDueArticles } = require('../src/index.js');
 const { makeOwnerEnv, loginOk, authedRequest } = require('./fake-d1.js');
+const { bodyHash } = require('../backend/utils/bodyHash.js');
 
 const WORKER_URL = 'http://localhost';
 
@@ -23,6 +24,34 @@ async function createArticle(env, token, body) {
   const res = await handleRequest(authedRequest('POST', '/api/admin/articles', token, body), env);
   const data = await res.json();
   return { res, data };
+}
+
+// Fix Pass 2 item 1 (2026-11-23): POST /publish now runs the publish
+// gate, so a publish-flow fixture must be gate-passing — a fresh PASS
+// fact-check (body hash recorded) with evidenced VERIFIED claims, a
+// source with a URL, and a fresh PASS SEO run whose duplicate check
+// passes. Only the fixture grew; the assertions below are unchanged.
+async function seedGatePass(env, articleId, body) {
+  const hash = await bodyHash(body);
+  const fc = await env.DB.prepare(
+    'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, body_hash) VALUES (?, ?, ?, ?, ?, ?)',
+  ).bind(articleId, 'pass', 2, 2, 0, hash).run();
+  const fcId = fc.meta.last_row_id;
+  for (const claim of ['Publish body claim one.', 'Publish body claim two.']) {
+    await env.DB.prepare(
+      "INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation) VALUES (?, ?, ?, 'https://example.com/source-1', 'evidence', 'test')",
+    ).bind(fcId, claim, 'VERIFIED').run();
+  }
+  await env.DB.prepare(
+    "INSERT INTO article_sources (article_id, source_title, source_url, source_type, accessed_at) VALUES (?, 'Test source', 'https://example.com/source-1', 'other', '2026-11-19T12:00:00Z')",
+  ).bind(articleId).run();
+  const checksJson = JSON.stringify([
+    { name: 'seo-title', ok: true },
+    { name: 'duplicate', ok: true, detail: 'Highest 5-word shingle overlap: 0%.' },
+  ]);
+  await env.DB.prepare(
+    'INSERT INTO seo_checks (article_id, verdict, checks_json) VALUES (?, ?, ?)',
+  ).bind(articleId, 'pass', checksJson).run();
 }
 
 describe('CMS admin articles (/api/admin/articles)', () => {
@@ -93,6 +122,7 @@ describe('CMS admin articles (/api/admin/articles)', () => {
     const created = await createArticle(env, token, { title: 'Publish Flow Article', body: 'Publish body.', division: 'automotive' });
     const id = created.data.article.id;
     const slug = created.data.article.slug;
+    await seedGatePass(env, id, 'Publish body.');
     const pubRes = await handleRequest(authedRequest('POST', `/api/admin/articles/${id}/publish`, token), env);
     assert.equal(pubRes.status, 200);
     const published = await pubRes.json();

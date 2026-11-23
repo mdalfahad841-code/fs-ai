@@ -235,7 +235,89 @@
     }).catch(function () { setText('articleFormStatus', 'Could not reach the FS AI server.'); });
   }
 
+  // Fix Pass 2 item 1 (2026-11-23): manual publish runs the gate.
+  // A plain Publish click sends no body. When the API answers 422
+  // with a gate report, the reason list is shown and the override
+  // block (dashboard.html #articlePublishOverride) is revealed for
+  // this article only. The owner types the exact phrase
+  // PUBLISH DESPITE GATE and confirms; the API records the override
+  // in article_publish_overrides before it publishes. A wrong phrase
+  // is refused by the API (422) and publishes nothing. The Emergency
+  // Stop refusal is also a 422 — the phrase cannot bypass it, and the
+  // block is NOT revealed for it (turn the Stop off first).
+  var pendingOverrideArticleId = null;
+  var overrideButtonsBound = false;
+
+  function hidePublishOverride() {
+    pendingOverrideArticleId = null;
+    var box = el('articlePublishOverride');
+    if (box) box.hidden = true;
+    var input = el('articlePublishOverrideInput');
+    if (input) input.value = '';
+  }
+
+  function publishArticle(id) {
+    api('/api/admin/articles/' + id + '/publish', { method: 'POST' }).then(function (r) {
+      if (r.ok) {
+        hidePublishOverride();
+        setText('articleFormStatus', r.data && r.data.overridden ? 'Article published (gate overridden — audit recorded).' : 'Article published.');
+        loadArticles();
+        return;
+      }
+      if (r.status === 422 && r.data && r.data.gate) {
+        var gate = r.data.gate;
+        if (gate.emergencyStopOn) {
+          setText('articleFormStatus', apiError(r) + ' Turn the Emergency Stop off before publishing — the override phrase cannot bypass it.');
+          return;
+        }
+        var reasons = (gate.blockedBy || []).slice();
+        if (gate.legacyProtected) reasons.push('This is a protected legacy draft — it needs separate owner authorization.');
+        pendingOverrideArticleId = id;
+        var box = el('articlePublishOverride');
+        if (box) box.hidden = false;
+        var input = el('articlePublishOverrideInput');
+        if (input) input.value = '';
+        setText('articleFormStatus', 'Publish gate is Blocked: ' + reasons.join(' ') + ' Type PUBLISH DESPITE GATE below to publish anyway (the override is recorded in the audit log).');
+        return;
+      }
+      setText('articleFormStatus', apiError(r));
+    }).catch(function () { setText('articleFormStatus', 'Could not reach the FS AI server.'); });
+  }
+
   function bindContent() {
+    // Override confirm/cancel (Fix Pass 2 item 1): bound once — the
+    // flag guards against double-binding if bindContent ever runs
+    // again. (A plain var, not element.dataset: the fake-DOM test
+    // doubles have no dataset.) Confirm re-sends the publish with the
+    // typed phrase in the JSON body; cancel hides the block and
+    // publishes nothing.
+    var ovConfirm = el('articlePublishOverrideConfirm');
+    var ovCancel = el('articlePublishOverrideCancel');
+    if (!overrideButtonsBound && (ovConfirm || ovCancel)) {
+      overrideButtonsBound = true;
+      if (ovConfirm) {
+        ovConfirm.addEventListener('click', function () {
+          if (!pendingOverrideArticleId) return;
+          var input = el('articlePublishOverrideInput');
+          var phrase = input ? input.value : '';
+          api('/api/admin/articles/' + pendingOverrideArticleId + '/publish', { method: 'POST', body: { override: phrase } }).then(function (r) {
+            if (r.ok) {
+              hidePublishOverride();
+              setText('articleFormStatus', 'Article published (gate overridden — audit recorded).');
+              loadArticles();
+            } else {
+              setText('articleFormStatus', apiError(r));
+            }
+          }).catch(function () { setText('articleFormStatus', 'Could not reach the FS AI server.'); });
+        });
+      }
+      if (ovCancel) {
+        ovCancel.addEventListener('click', function () {
+          hidePublishOverride();
+          setText('articleFormStatus', 'Override cancelled — the article was not published.');
+        });
+      }
+    }
     var list = el('adminArticleList');
     if (list) {
       list.addEventListener('click', function (e) {
@@ -308,9 +390,10 @@
           });
           return;
         }
-        if (action === 'publish' || action === 'unpublish') {
-          api('/api/admin/articles/' + id + '/' + action, { method: 'POST' }).then(function (r) {
-            setText('articleFormStatus', r.ok ? 'Article ' + (action === 'publish' ? 'published.' : 'unpublished.') : apiError(r));
+        if (action === 'publish') { publishArticle(id); return; }
+        if (action === 'unpublish') {
+          api('/api/admin/articles/' + id + '/unpublish', { method: 'POST' }).then(function (r) {
+            setText('articleFormStatus', r.ok ? 'Article unpublished.' : apiError(r));
             if (r.ok) loadArticles();
           }).catch(function () { setText('articleFormStatus', 'Could not reach the FS AI server.'); });
           return;

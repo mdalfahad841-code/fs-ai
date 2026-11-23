@@ -874,7 +874,7 @@ describe('migration 029 — applies cleanly after 001–028', () => {
       .filter((f) => /^\d{3}_.*\.sql$/.test(f))
       .sort()
       .map((f) => 'database/migrations/' + f);
-    assert.equal(migrationFiles.length, 31, 'migrations 001–031 all present');
+    assert.equal(migrationFiles.length, 32, 'migrations 001–032 all present');
     files.push(...migrationFiles);
     const db = buildDb(files);
     const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'article_fetch_runs'").get();

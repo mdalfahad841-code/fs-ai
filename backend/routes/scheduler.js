@@ -21,6 +21,7 @@ import { runSeo } from '../agents/autonomy/seo.js';
 import { evaluatePublishGate, publishGatePassed } from '../publishing/gate.js';
 import { runAutoPublish } from '../agents/autonomy/publishing.js';
 import { PROTECTED_TEST_ARTICLES, protectedExclusion, assertTaskNotProtected } from '../publishing/protection.js';
+import { bodyHash } from '../utils/bodyHash.js';
 
 // Re-exported so existing callers/tests keep reading the list from this
 // module; the definition lives in backend/publishing/protection.js.
@@ -1229,6 +1230,33 @@ async function step(env, agent, label, fn) {
  * upserted, so a forced re-run never creates a duplicate row.
  * All dates are UTC; 00:00 UTC is 06:00 Asia/Dhaka.
  */
+
+/**
+ * Fix Pass 2 item 4 (2026-11-23): true only when the latest seo_checks
+ * row for the article covers the article's CURRENT body — the same
+ * body_hash (the bodyHash helper, exactly as insertSeoCheck stores it)
+ * AND the same body_length. A row with a NULL hash or length
+ * (pre-migration-023) is never fresh. Any read failure (missing
+ * columns on a DB without migration 023, missing table, ...) is NOT
+ * fresh: the safe direction is to re-check, never to skip on
+ * unproven freshness — a failed lookup costs one SEO check, a wrong
+ * skip would starve the article again.
+ */
+async function isSeoFreshForCurrentBody(env, articleId) {
+  try {
+    const article = await d1First(env, 'SELECT body FROM articles WHERE id = ? LIMIT 1', [articleId]);
+    if (!article) return false;
+    const body = String(article.body || '');
+    const latest = await d1First(env,
+      'SELECT body_hash, body_length FROM seo_checks WHERE article_id = ? ORDER BY created_at DESC LIMIT 1',
+      [articleId]);
+    if (!latest || !latest.body_hash || latest.body_length == null) return false;
+    return (await bodyHash(body)) === latest.body_hash && body.length === Number(latest.body_length);
+  } catch {
+    return false;
+  }
+}
+
 export async function runDailyWorkflow(env, { force = false } = {}) {
   if (!env || !env.DB) return { ok: false, error: 'D1 database is not bound.' };
   const date = todayStr();
@@ -1388,13 +1416,27 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
   steps.seoRun = await step(env, 'seo', 'seo-run', async () => {
     // Protected test articles #26/#27 are never auto-repaired (owner order).
     const guard = protectedExclusion('id');
-    const rows = await d1All(env, "SELECT id FROM articles WHERE status IN ('draft', 'pending_approval') AND " + guard.clause + ' ORDER BY updated_at ASC LIMIT 3', guard.params) || [];
+    // Fix Pass 2 item 4 (2026-11-23): fetch more candidates than the
+    // daily budget so the loop can reach past drafts whose latest SEO
+    // check is already fresh for their current body. The old LIMIT 3
+    // starved #33/#30 behind unchanged #28/#31/#29 (oldest updated_at
+    // first, re-checked every day). The budget stays 3 REAL checks.
+    const rows = await d1All(env, "SELECT id FROM articles WHERE status IN ('draft', 'pending_approval') AND " + guard.clause + ' ORDER BY updated_at ASC LIMIT 10', guard.params) || [];
     const results = [];
+    let checked = 0;
+    let skippedFresh = 0;
     for (const r of rows) {
+      if (checked >= 3) break;
+      if (await isSeoFreshForCurrentBody(env, r.id)) {
+        skippedFresh += 1;
+        results.push({ articleId: r.id, outcome: 'skipped-fresh' });
+        continue;
+      }
       const res = await runSeo({ agent: 'seo', kind: 'seo-pass', payload: { article_id: r.id } }, env);
       results.push({ articleId: r.id, outcome: res.outcome, verdict: res.verdict || null });
+      checked += 1;
     }
-    return { outcome: 'done', checked: results.length, results };
+    return { outcome: 'done', checked, skippedFresh, results };
   });
 
   steps.seoPass = await step(env, 'seo', 'seo-pass', async () => {
