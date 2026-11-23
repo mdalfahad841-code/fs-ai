@@ -14,6 +14,7 @@ import { publishDueArticles } from './admin-articles.js';
 import { runAutonomyTask, DIVISION_RESEARCH_REGISTRY, registryIdForTask, QUEUE_AGENTS } from '../agents/autonomy-runner.js';
 import { convertScaffoldToDraft } from '../agents/autonomy/content.js';
 import { runHealthCheck } from '../services/healthcheck.js';
+import { buildDailyHealthReport } from '../services/daily-health-report.js';
 import { runResearch } from '../agents/autonomy/research.js';
 import { runFactChecking } from '../agents/autonomy/factcheck.js';
 import { runSeo } from '../agents/autonomy/seo.js';
@@ -1160,7 +1161,9 @@ async function step(env, agent, label, fn) {
  * with the live default 'approved_only' nothing auto-publishes);
  * (10) publish due articles; (11) enqueue social packs for articles
  * published in the last 24h (max 5); (12) analytics snapshot;
- * (13) error scan; (14) write the daily_reports row.
+ * (13) error scan; (15) Daily Autonomy Health Report (A5 — reuses the
+ * queue drain's runHealthCheck result, stored in summary.healthReport);
+ * (14) write the daily_reports row.
  *
  * One run per UTC date unless { force: true }. The report row is
  * upserted, so a forced re-run never creates a duplicate row.
@@ -1209,6 +1212,13 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
       processed: drain.processed, done: drain.done, failed: drain.failed, skipped: drain.skipped,
       stoppedReason: drain.stoppedReason,
       healthOverall: drain.health ? drain.health.overall : null,
+      // A5: the health-report step reads this — drainTaskQueue already
+      // computed runHealthCheck, so the report reuses it instead of
+      // calling runHealthCheck a second time (which would double-write
+      // system_health_checks rows). The blocked branch already carried
+      // it; the done branch dropped it, which would have left the
+      // report's workerHealth/queue checks NOT TESTED on every run.
+      health: drain.health,
       results: drain.results,
     };
   });
@@ -1408,9 +1418,29 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
     };
   });
 
+  // (15) Daily Autonomy Health Report (close-out A5, 2026-11-23):
+  // owner-only, produced by this existing daily run — no new cron.
+  // The report reuses the runHealthCheck result the queue drain
+  // already computed (steps.queueDrain.result.health) — it never calls
+  // runHealthCheck again (that writes rows). The step wrapper isolates
+  // failures, so a builder throw can never abort the run; the builder
+  // itself also never throws (every check is individually try/caught).
+  // The report lands in summary.healthReport, which upsertReport
+  // stores in the daily_reports row — that is the report's home; no
+  // new table. Read-only: it never publishes, edits or fixes anything.
+  steps.healthReport = await step(env, 'scheduler', 'health-report', async () => {
+    const report = await buildDailyHealthReport(env, {
+      health: steps.queueDrain.result?.health || null,
+      fetchImpl: fetch,
+      nowMs: Date.now(),
+    });
+    return { outcome: 'done', ...report };
+  });
+
   const summary = {
     date,
     kind: 'daily',
+    healthReport: steps.healthReport.result || null,
     steps: Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, { outcome: v.outcome, ...(v.error ? { error: v.error } : {}) }])),
     counts: {
       queueDrained: steps.queueDrain.result?.processed ?? 0,

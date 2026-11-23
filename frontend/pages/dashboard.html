@@ -130,6 +130,11 @@
           <ul class="clean" id="ccReportsList"></ul>
           <p id="ccReportsStatus" class="muted" aria-live="polite"></p>
 
+          <h3>Daily Autonomy Health Report</h3>
+          <p class="muted">Produced by the daily run at 00:00 UTC, from <code>GET /api/autonomy/reports?kind=daily&amp;limit=1</code>. Statuses: OK / WARN / FAIL / NOT TESTED. Read-only — it never publishes, edits or fixes anything.</p>
+          <ul class="clean" id="ccHealthReportList"></ul>
+          <p id="ccHealthReportStatus" class="muted" aria-live="polite"></p>
+
           <h3>Recent activity</h3>
           <p class="muted">Latest agent runs, from <code>GET /api/analytics/detail?section=activity</code>.</p>
           <ul class="clean" id="ccActivityList"></ul>

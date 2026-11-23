@@ -1285,6 +1285,131 @@
     });
   }
 
+  /* Daily Autonomy Health Report (close-out A5): one line per check
+     from the latest daily report's summary.healthReport, plus the
+     overall. The report is produced by the daily run at 00:00 UTC and
+     is read-only — this block never publishes, edits or fixes
+     anything. A missing report or a missing healthReport is an honest
+     empty state, never an invented status. */
+  var HEALTH_REPORT_LABELS = {
+    workerHealth: 'Worker health',
+    pages: 'Pages (home)',
+    sitemap: 'Sitemap',
+    recentArticles: 'Recent articles (last 24 h)',
+    queue: 'Queue',
+    lastRuns: 'Last daily / weekly runs',
+    sitemapRefresh: 'Sitemap-refresh workflow',
+    protectedDrafts: 'Protected drafts',
+    settings: 'Settings',
+    shortsCron: 'Daily Shorts cron',
+    lastVideo: 'Last video',
+    cspViolations: 'CSP violations (last 7 days)',
+    autoPublishProof: 'Auto-publish proof',
+  };
+
+  function healthReportLine(key, check) {
+    var d = (check && check.detail) || {};
+    var reason = d.reason || d.error || '';
+    var arr = function (v) { return Array.isArray(v) ? v : []; };
+    switch (key) {
+      case 'workerHealth':
+        if (d.overall) {
+          var c = d.counts || {};
+          return 'overall ' + d.overall + ' — ' + (c.healthy || 0) + ' healthy, ' + (c.degraded || 0) + ' degraded, ' + (c.blocked || 0) + ' blocked';
+        }
+        return reason || 'no health-check result';
+      case 'pages':
+        return d.status ? 'home returned HTTP ' + d.status : (reason || 'home fetch failed');
+      case 'sitemap':
+        if (typeof d.urlCount === 'number') {
+          return d.urlCount + ' URLs, ' + d.publishedCount + ' published, ' + arr(d.missingIds).length + ' missing, ' + arr(d.extraIds).length + ' extra';
+        }
+        return reason || 'sitemap fetch failed';
+      case 'recentArticles':
+        if (Array.isArray(d.published)) {
+          return d.published.length + ' published in the last 24 h, ' + arr(d.reachable).length + ' reachable'
+            + (arr(d.unreachable).length ? ', unreachable: ' + arr(d.unreachable).join(', ') : '');
+        }
+        return reason || 'could not read recent articles';
+      case 'queue':
+        if (typeof d.queued === 'number') {
+          return d.queued + ' queued, ' + d.running + ' running, ' + d.stale + ' stale' + (d.reason ? ' — ' + d.reason : '');
+        }
+        return reason || 'no queue check result';
+      case 'lastRuns': {
+        var dl = d.daily ? ('daily ' + d.daily.date + (typeof d.daily.ageHours === 'number' ? ' (' + d.daily.ageHours + ' h ago)' : '')) : 'daily: none yet';
+        var wl = d.weekly ? ('weekly ' + d.weekly.date + (typeof d.weekly.ageHours === 'number' ? ' (' + d.weekly.ageHours + ' h ago)' : '')) : 'weekly: none yet';
+        return dl + '; ' + wl + (reason ? ' — ' + reason : '');
+      }
+      case 'sitemapRefresh':
+        if (d.conclusion) {
+          return d.conclusion + (d.createdAt ? ', ' + fmtDhaka(d.createdAt) : '')
+            + (typeof d.ageHours === 'number' ? ' (' + d.ageHours + ' h ago)' : '');
+        }
+        return reason || 'GitHub API unavailable';
+      case 'protectedDrafts':
+        if (Array.isArray(d.drafts)) {
+          if (arr(d.missing).length) return 'missing from D1: ' + arr(d.missing).join(', ');
+          if (arr(d.changed).length) return 'changed: ' + arr(d.changed).map(function (c) { return '#' + c.id; }).join(', ');
+          return d.drafts.length + ' drafts unchanged';
+        }
+        return reason || 'no baseline yet';
+      case 'settings':
+        if (Array.isArray(d.changed)) {
+          return d.changed.length
+            ? 'changed: ' + d.changed.map(function (c) { return c.key; }).join(', ')
+            : 'unchanged (' + d.autonomyKeys + ' autonomy + ' + d.websiteKeys + ' website keys)';
+        }
+        return reason || 'no baseline yet';
+      case 'shortsCron':
+        return reason || 'state lives outside the Worker';
+      case 'lastVideo':
+        if (d.video) {
+          return d.video.title + ' (' + d.video.kind + ')'
+            + ((d.latestPerformance && d.latestPerformance.views != null) ? ' — ' + d.latestPerformance.views + ' views' : '');
+        }
+        return reason || 'no video row in D1';
+      case 'cspViolations':
+        if (typeof d.total === 'number') {
+          return d.total === 0 ? '0 reports in the last 7 days'
+            : d.total + ' report(s): ' + arr(d.byDirective).map(function (x) { return x.directive + ' ×' + x.count; }).join(', ');
+        }
+        return reason || 'could not read CSP reports';
+      case 'autoPublishProof':
+        if (d.articleId != null) {
+          return 'article #' + d.articleId + ' verified' + (d.verifiedAt ? ' ' + fmtDhaka(d.verifiedAt) : '') + ' — verdict ' + d.verdict;
+        }
+        return reason || 'no auto-published article verified yet';
+      default:
+        return reason;
+    }
+  }
+
+  function loadCcHealthReport() {
+    api('/api/autonomy/reports?kind=daily&limit=1').then(function (r) {
+      var list = el('ccHealthReportList');
+      var report = (r.ok && r.data && r.data.reports && r.data.reports[0] && r.data.reports[0].summary && r.data.reports[0].summary.healthReport) || null;
+      if (!report || !report.checks) {
+        if (list) list.innerHTML = '<li class="muted">No health report recorded yet — the next daily run produces one.</li>';
+        setText('ccHealthReportStatus', 'No health report recorded yet — the next daily run produces one. ' + ccAsOf());
+        ccMarkLoaded();
+        return;
+      }
+      if (list) {
+        list.innerHTML = Object.keys(HEALTH_REPORT_LABELS).map(function (key) {
+          var check = report.checks[key];
+          if (!check) return '';
+          return '<li><strong>' + esc(HEALTH_REPORT_LABELS[key]) + ':</strong> ' + esc(check.status) + ' <span class="muted">— ' + esc(healthReportLine(key, check)) + '</span></li>';
+        }).join('');
+      }
+      setText('ccHealthReportStatus', 'Overall: ' + (report.overall || 'unknown') + ' — daily report for ' + (report.date || 'unknown date') + '. ' + ccAsOf(report.generatedAt));
+      ccMarkLoaded();
+    }).catch(function () {
+      setText('ccHealthReportStatus', 'Could not reach the FS AI server. ' + ccAsOf());
+      ccMarkLoaded();
+    });
+  }
+
   /* YouTube session panel: a stored note, not a live check. The button
      only reveals the manual steps — it never asks for, sends, or stores
      a password, and there is no password field anywhere in this panel. */
@@ -1314,6 +1439,7 @@
     loadCcAiUsage();
     loadCcHealth();
     loadCcReports();
+    loadCcHealthReport();
     // Recent activity is rendered by autonomy.js (loadControlCenterActivity)
     // from the same detail endpoint — it shares this section's list.
     setText('ccStatus', 'System status loaded. Any block the API could not supply says “Data unavailable” instead of showing an invented number.');
