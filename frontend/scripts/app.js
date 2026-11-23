@@ -162,6 +162,7 @@
     { name: 'GitHub', handle: 'mdalfahad841-code/fs-ai', url: 'https://github.com/mdalfahad841-code/fs-ai', status: 'Exists', detail: 'Public repository fs-ai exists.' },
     { name: 'YouTube', handle: '@FSAI-e5f', url: 'https://www.youtube.com/@FSAI-e5f', status: 'Exists', detail: 'Channel handle @FSAI-e5f.' },
     { name: 'Pinterest', handle: 'watchwithf', url: 'https://www.pinterest.com/watchwithf/', status: 'Exists', detail: 'Profile watchwithf.' },
+    { name: 'Instagram', handle: '@fsai.406', url: 'https://www.instagram.com/fsai.406', status: 'Exists', detail: 'Profile @fsai.406.' },
     { name: 'Facebook', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },
     { name: 'WhatsApp Business', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },
     { name: 'Business Email', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },

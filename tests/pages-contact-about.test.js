@@ -35,6 +35,7 @@ describe('Contact / About / 404 pages', () => {
     assert.ok(html.includes('https://github.com/mdalfahad841-code/fs-ai'));
     assert.ok(html.includes('https://www.youtube.com/@FSAI-e5f'));
     assert.ok(html.includes('https://www.pinterest.com/watchwithf/'));
+    assert.ok(html.includes('https://www.instagram.com/fsai.406'));
     assert.ok(!html.includes('<form'), 'no contact form (no backend for one — mailto only)');
   });
 
@@ -52,6 +53,13 @@ describe('Contact / About / 404 pages', () => {
     assert.ok(appJs.includes('pages/contact'));
     assert.ok(!appJs.includes('pages/about.html'), 'clean route — no .html');
     assert.ok(!appJs.includes('pages/contact.html'), 'clean route — no .html');
+  });
+
+  it('footer Accounts column links Instagram @fsai.406', () => {
+    const appJs = read('frontend/scripts/app.js');
+    // renderFooter() renders every ACCOUNTS entry with status 'Exists' as
+    // "Name (handle)" links, so this entry is the footer Instagram link.
+    assert.ok(appJs.includes("name: 'Instagram', handle: '@fsai.406', url: 'https://www.instagram.com/fsai.406', status: 'Exists'"), 'Instagram Exists entry in ACCOUNTS');
   });
 
   it('sitemap lists the About and Contact pages (60 URLs total)', () => {
