@@ -61,26 +61,85 @@ sitemap resubmit + one Article 1 indexing request + phone checks NOT TESTED).
   `tests/closeout-a5.test.js` (only that one test). Re-run: A5.7 file
   39/0; full suite 1714/0.
 
-## A1. GATE EVERY PUBLISH PATH — PENDING
+## A1. GATE EVERY PUBLISH PATH — DONE (deployed + live-verified)
 
 Owner decision: YES. POST /publish is gated (Fix Pass 2 item 1); create
 with status:'published' and PUT draft->published are not.
 
-- Status: PENDING
-- Files:
-- Tests before/after:
-- Deployed commit:
-- Raw live evidence:
-- Rollback:
+- Status: DONE
+- Files (diff vs the fixpass3 backup — exactly 7 paths):
+  `backend/routes/admin-articles.js` (refusal constants + 2 checks;
+  banner-prep blocks removed from create/PUT only — POST /publish and
+  scheduled/auto banner protection unchanged), `frontend/pages/dashboard.html`
+  (Published option disabled in the status select + comment),
+  `tests/fixpass3-a1.test.js` (new, 13 tests), `tests/draft-banner-publish.test.js`
+  (4 transition tests rewritten to the refusal — spec-driven, the old
+  strip-then-publish expectation is what the owner decision removed),
+  `tests/cms.test.js` (4 visibility tests rewritten through POST /publish),
+  `tests/real-db.test.js` (2 tests rewritten through POST /publish),
+  `tests/backup-restore.test.js` (live published row seeded directly, as
+  its #26/#27 rows are; public total 27→26).
+- Behaviour: create with status 'published' → 422 before INSERT, no row
+  (`Articles cannot be created already published. Create the article as a
+  draft, then publish it through POST /api/admin/articles/:id/publish — the
+  publish gate applies there.`); PUT draft→published → 422 before the
+  revision INSERT, status/body unchanged, no revision
+  (`An article cannot be moved to published here. Publish it through POST
+  /api/admin/articles/:id/publish — the publish gate applies there.`).
+  Keep-published PUT, unpublish, draft edits, draft creates all still
+  work. Protected #26 PUT→published still 403 (guard runs before the
+  refusal); legacy #28 PUT→published gets the 422 refusal and stays draft.
+  Dashboard: form sends `status: el('articleStatus').value` on create and
+  edit (dashboard.js:432) — the Published option was a live bypass; now
+  disabled. No import/restore path exists in the dashboard (grep-verified).
+  Deliberately NOT gated (not routes, authorised autonomous machinery with
+  their own gates): publishDueArticles, the auto-publish agent,
+  publishGatePassed (sets 'approved', not 'published'),
+  convertScaffoldToDraft (always 'draft'), dead code publishApproved
+  (zero callers — left untouched), scripts/restore-backup.js (local restore
+  script, not a route), seed.sql, content.js workflow status.
+- Tests before/after: 1714/0 (439 suites) → **1727/0 (444 suites)** (+13,
+  +5 suites — exactly the new file). Parent re-ran: 1727/0 exact match.
+  Negative control (coordinator): 13 new tests against pre-change code
+  give 8 pass / 5 fail — the 5 failures are exactly the fix-dependent
+  tests.
+- Deployed commit: **2b4d75b** (run #67 GREEN, 14 s, parent 909ef9d;
+  run https://github.com/mdalfahad841-code/fs-ai/actions/runs/45183515199).
+- Raw live evidence (parent curl, 2026-11-23 ~19:25 Dhaka): home 200;
+  Worker health 200 ok:true db connected; served dashboard.html contains
+  `published" disabled` ×1; deployed admin-articles.js at commit 2b4d75b
+  AND on main contains PUBLISH_REFUSAL ×4; live D1 protected #26–#33 all
+  draft, lengths exactly at baselines (4895/245/2157/601/4088/549/3478).
+- Worker deploy path (verified by reasoning + precedent, not assumed):
+  the repo has no workflow that deploys the Worker — only
+  sitemap-refresh.yml; the Worker deploys from main pushes (Cloudflare
+  Git integration). Precedent: close-out B3's login lockout (code written
+  23 Nov morning, deployed run #52) was verified LIVE on the Worker the
+  same day (attempts 1–5 → 401, attempt 6 → 429 retryAfterSeconds 899) —
+  the live Worker ran the new code after a main push.
+- NOT TESTED live: the 422 endpoint against the live Worker (needs owner
+  auth; fixtures only, by design — same as Fix Pass 2 item 1).
+- Rollback: restore `backend/routes/admin-articles.js` +
+  `frontend/pages/dashboard.html` from the fixpass3 backup and redeploy;
+  no D1 change was made by A1, so no D1 rollback is needed.
 
-## A2. LLM PROVIDER ORDER CLEANUP — PENDING
+## A2. LLM PROVIDER ORDER CLEANUP — DONE
 
 Live D1 `llm_provider_order` is `workers-ai,groq,gemini`; change ONLY
 that one settings row to `workers-ai`.
 
-- Status: PENDING
-- Statement / before / after / rollback:
-- Verification:
+- Status: DONE (2026-11-23 ~19:27 Dhaka; the only live D1 write in this
+  pass so far)
+- Statement: `UPDATE autonomy_settings SET value='workers-ai' WHERE key='llm_provider_order';`
+  (D1 API: changes 1, rows_written 1)
+- Before: `workers-ai,groq,gemini` (updated_at 2026-11-14 05:13:29)
+- After (read-back): `workers-ai` (updated_at unchanged — the statement
+  sets only `value`)
+- Rollback (one statement):
+  `UPDATE autonomy_settings SET value='workers-ai,groq,gemini' WHERE key='llm_provider_order';`
+- Verification: Worker health 200 ok:true db connected (13:27:22Z);
+  allowlist test `tests/autonomy-llm.test.js` 7/0 (3 suites). No other
+  setting touched; no code changed; no deploy needed for A2.
 
 ## A3. factCheckRun STARVATION — PENDING
 

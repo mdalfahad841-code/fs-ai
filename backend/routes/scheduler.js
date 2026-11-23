@@ -1257,6 +1257,46 @@ async function isSeoFreshForCurrentBody(env, articleId) {
   }
 }
 
+/**
+ * Fix Pass 3 A3 (2026-11-23): the fact-check twin of
+ * isSeoFreshForCurrentBody — true only when the latest fact_checks
+ * row for the article covers the article's CURRENT body.
+ *
+ * ONE HONEST DIFFERENCE from the SEO helper: fact_checks has NO
+ * body_length column (migration 009 creates the table without one;
+ * migration 019 adds body_hash ONLY — verified from the migration
+ * files, no column was invented and no migration was added here).
+ * Freshness is therefore the body_hash match alone — which is also
+ * exactly the staleness rule evaluatePublishGate() already applies
+ * to fact_checks (migration 019 header). A row with a NULL hash
+ * (pre-migration-019) is never fresh. Any read failure (missing
+ * column on a DB without migration 019, missing table, ...) is NOT
+ * fresh: the safe direction is to re-check, never to skip on
+ * unproven freshness — a failed lookup costs one fact-check, a wrong
+ * skip would starve the article again.
+ *
+ * Any verdict counts as fresh: a body already judged (pass,
+ * needs-review or failed) needs no fresh judgment until it changes;
+ * needs-review/failed rows are the correctionRun step's job, not
+ * this step's. The latest row is picked by created_at DESC, id DESC
+ * (same as checkArticle's own previous-check lookup) so two rows
+ * written in the same second resolve deterministically.
+ */
+async function isFactCheckFreshForCurrentBody(env, articleId) {
+  try {
+    const article = await d1First(env, 'SELECT body FROM articles WHERE id = ? LIMIT 1', [articleId]);
+    if (!article) return false;
+    const body = String(article.body || '');
+    const latest = await d1First(env,
+      'SELECT body_hash FROM fact_checks WHERE article_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+      [articleId]);
+    if (!latest || !latest.body_hash) return false;
+    return (await bodyHash(body)) === latest.body_hash;
+  } catch {
+    return false;
+  }
+}
+
 export async function runDailyWorkflow(env, { force = false } = {}) {
   if (!env || !env.DB) return { ok: false, error: 'D1 database is not bound.' };
   const date = todayStr();
@@ -1387,13 +1427,32 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
 
   steps.factCheckRun = await step(env, 'fact-checking', 'fact-check-run', async () => {
     if (flags.auto_factcheck !== 'on') return { outcome: 'no-op', reason: 'auto_factcheck is off.' };
-    const rows = await d1All(env, "SELECT id FROM articles WHERE status IN ('draft', 'pending_approval') ORDER BY updated_at ASC LIMIT 3") || [];
+    // Fix Pass 3 A3 (2026-11-23): same starvation fix as seoRun in
+    // Fix Pass 2 item 4 — fetch more candidates than the daily budget
+    // so the loop can reach past drafts whose latest fact-check is
+    // already fresh for their current body. The old LIMIT 3 re-checked
+    // the same oldest drafts every day while newer drafts starved.
+    // The budget stays 3 REAL checks. NOTE: this step deliberately
+    // keeps its original selection (no protectedExclusion guard):
+    // fact-checking is advisory/read-only — it never modifies an
+    // article — so #26/#27 need no exclusion here, unlike seoRun and
+    // correctionRun. That behaviour is unchanged.
+    const rows = await d1All(env, "SELECT id FROM articles WHERE status IN ('draft', 'pending_approval') ORDER BY updated_at ASC LIMIT 10") || [];
     const results = [];
+    let checked = 0;
+    let skippedFresh = 0;
     for (const r of rows) {
+      if (checked >= 3) break;
+      if (await isFactCheckFreshForCurrentBody(env, r.id)) {
+        skippedFresh += 1;
+        results.push({ articleId: r.id, outcome: 'skipped-fresh' });
+        continue;
+      }
       const res = await runFactChecking({ agent: 'fact-checking', kind: 'fact-check', payload: { article_id: r.id } }, env);
       results.push({ articleId: r.id, outcome: res.outcome, verdict: res.verdict || null });
+      checked += 1;
     }
-    return { outcome: 'done', checked: results.length, results };
+    return { outcome: 'done', checked, skippedFresh, results };
   });
 
   steps.correctionRun = await step(env, 'fact-checking', 'correction-run', async () => {
