@@ -9,8 +9,7 @@
    main/responsive/animations/themes, so it never edits those files.
    Rules that change layout are desktop-only (min-width: 901px). Nothing in
    this file adds width at phone sizes, and no JavaScript, backend, database
-   or API behaviour is touched. Honest labels ($0.00, "Data unavailable")
-   are text, not CSS, and are untouched. */
+   or API behaviour is touched. */
 
 /* ============ 1. BENTO GRID — home grids + dashboard KPI tiles ============
    Tiles of different sizes on one neat board. Desktop only; at phone and

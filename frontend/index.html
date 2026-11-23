@@ -1,24 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!-- Google tag (gtag.js) - GA4 G-JVSCJT2DHJ -->
+  <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-JVSCJT2DHJ"></script>
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","G-JVSCJT2DHJ");</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FS AI — One Platform. Multiple Possibilities.</title>
-<meta name="description" content="FS AI (FAHAD SOMRAT AI) by Fahad Somrat: 8 divisions, 25 free articles and 20 free tools. Explore more. Know more. Do more.">
+<meta name="description" content="FS AI (FAHAD SOMRAT AI) by Fahad Somrat: free articles and free tools across every division. Explore more. Know more. Do more.">
 <meta name="p:domain_verify" content="8809cf58fdce34599cf8a76611cf5e1c"/>
 <link rel="canonical" href="https://fs-ai-5w5.pages.dev/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="FS AI">
 <meta property="og:title" content="FS AI — One Platform. Multiple Possibilities.">
-<meta property="og:description" content="FS AI (FAHAD SOMRAT AI) by Fahad Somrat: 8 divisions, 25 free articles and 20 free tools. Explore more. Know more. Do more.">
+<meta property="og:description" content="FS AI (FAHAD SOMRAT AI) by Fahad Somrat: free articles and free tools across every division. Explore more. Know more. Do more.">
 <meta property="og:url" content="https://fs-ai-5w5.pages.dev/">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://fs-ai-5w5.pages.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="FS AI — One Platform. Multiple Possibilities.">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="FS AI — One Platform. Multiple Possibilities.">
-<meta name="twitter:description" content="8 divisions, 25 free articles and 20 free tools. Explore more. Know more. Do more.">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"FS AI","alternateName":"FAHAD SOMRAT AI","url":"https://fs-ai-5w5.pages.dev/","description":"Zero-cost multi-niche platform: 8 divisions, 25 free articles and 20 free tools.","inLanguage":"en"}</script>
+<meta name="twitter:description" content="Free articles and free tools across every division. Explore more. Know more. Do more.">
+<meta name="twitter:image" content="https://fs-ai-5w5.pages.dev/og-image.png">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"FS AI","alternateName":"FAHAD SOMRAT AI","url":"https://fs-ai-5w5.pages.dev/","description":"Zero-cost multi-niche platform: free articles and free tools across every division.","inLanguage":"en"}</script>
+<noscript><style>.grid-loading{display:none}</style></noscript>
 <link rel="stylesheet" href="styles/main.css">
 <link rel="stylesheet" href="styles/responsive.css">
 <link rel="stylesheet" href="styles/animations.css">
@@ -34,18 +40,18 @@
     <div class="wrap hero-inner">
       <div>
         <h1>Explore more.<br>Know more.<br>Do more.</h1>
-        <p class="lead">One Platform. Multiple Possibilities. Eight divisions, free articles and free tools — cars, AI, gadgets, money, travel, health and learning, all in one place.</p>
+        <p class="lead">One Platform. Multiple Possibilities. Free articles and free tools — cars, AI, gadgets, money, travel, health and learning, all in one place.</p>
         <form class="search-box" role="search" action="#search" onsubmit="return false;">
           <label for="siteSearch" class="skip-link">Search articles</label>
           <input id="siteSearch" type="search" placeholder="Search articles" autocomplete="off">
           <button class="btn btn-primary" type="submit">Search</button>
         </form>
-        <p id="searchCount" class="muted" aria-live="polite"></p>
+        <p id="searchCount" class="muted" aria-live="polite">Type to search the articles.</p>
         <div class="hero-ctas">
           <a class="btn btn-primary" href="#divisions">Explore divisions</a>
           <a class="btn btn-outline" href="pages/tools">Use free tools</a>
         </div>
-        <p class="hero-stats"><strong>8</strong> divisions · <strong>25</strong> articles · <strong>20</strong> free tools</p>
+        <p class="hero-stats" id="heroStats">Divisions · articles · free tools</p>
       </div>
       <div class="hero-preview-wrap">
         <p class="hero-preview-label">Latest guide</p>
@@ -56,28 +62,54 @@
 
   <section class="section" id="search" aria-label="Search results">
     <div class="wrap">
-      <div id="searchResults" aria-live="polite"><p class="muted">Type to search all 25 articles.</p></div>
+      <div id="searchResults" aria-live="polite"></div>
     </div>
   </section>
 
   <section class="section" id="divisions" aria-label="Divisions">
     <div class="wrap">
-      <div class="section-head"><h2>Eight divisions, one platform</h2><a href="pages/division">Browse all divisions →</a></div>
-      <div class="grid" id="divisionGrid"></div>
+      <div class="section-head"><h2>All divisions, one platform</h2><a href="pages/division">Browse all divisions →</a></div>
+      <div class="grid" id="divisionGrid"><p class="muted grid-loading">Loading divisions…</p><noscript><ul class="clean"><li><a href="pages/division?division=automotive">Automotive</a></li><li><a href="pages/division?division=ai-technology">AI &amp; Technology</a></li><li><a href="pages/division?division=gadgets-electronics">Gadgets &amp; Electronics</a></li><li><a href="pages/division?division=finance-money">Finance &amp; Money</a></li><li><a href="pages/division?division=travel-lifestyle">Travel &amp; Lifestyle</a></li><li><a href="pages/division?division=digital-tools">Digital Tools</a></li><li><a href="pages/division?division=health-wellness">Health &amp; Wellness</a></li><li><a href="pages/division?division=education-learning">Education &amp; Learning</a></li></ul></noscript></div>
     </div>
   </section>
 
   <section class="section" aria-label="Latest articles">
     <div class="wrap">
-      <div class="section-head"><h2>Latest articles</h2><p class="muted">25 articles across 8 divisions</p></div>
-      <div class="grid" id="articleGrid"></div>
+      <div class="section-head"><h2>Latest articles</h2><p class="muted" id="latestSubhead">Free articles across every division</p></div>
+      <div class="grid" id="articleGrid"><p class="muted grid-loading">Loading articles…</p><noscript><ul class="clean" id="noscriptArticleList">
+<li><a href="pages/article?id=1">EV Charging at Home: A Complete Beginner's Guide</a></li>
+<li><a href="pages/article?id=2">Car Maintenance Checklist: 12 Things to Check Every Month</a></li>
+<li><a href="pages/article?id=3">Hybrid vs Petrol: Which Saves You More in 2026?</a></li>
+<li><a href="pages/article?id=4">Motorcycle Buying Guide: How to Choose Your First Bike</a></li>
+<li><a href="pages/article?id=5">How to Read Your Car's Warning Lights</a></li>
+<li><a href="pages/article?id=6">Fuel Economy: 15 Proven Ways to Save Fuel</a></li>
+<li><a href="pages/article?id=7">ADAS Explained: How Driver Assistance Really Works</a></li>
+<li><a href="pages/article?id=8">Electric Vehicle Range: What the Numbers Really Mean</a></li>
+<li><a href="pages/article?id=9">How to Diagnose Common Engine Noises</a></li>
+<li><a href="pages/article?id=10">New vs Used Cars: A Practical Buying Guide</a></li>
+<li><a href="pages/article?id=11">Car Safety Ratings Explained</a></li>
+<li><a href="pages/article?id=12">Best Family Cars Compared: Space, Safety and Running Costs</a></li>
+<li><a href="pages/article?id=13">What Is AI? A Plain-English Guide for Beginners</a></li>
+<li><a href="pages/article?id=14">7 Free AI Tools That Actually Save Time</a></li>
+<li><a href="pages/article?id=15">Smartphone Buying Guide 2026: What Matters Most</a></li>
+<li><a href="pages/article?id=16">Laptop vs Tablet: Which One Should You Buy?</a></li>
+<li><a href="pages/article?id=17">Monthly Budgeting: The 50/30/20 Rule Explained</a></li>
+<li><a href="pages/article?id=18">How to Start Saving With a Small Income</a></li>
+<li><a href="pages/article?id=19">Travel on a Budget: Plan a Trip Without Overspending</a></li>
+<li><a href="pages/article?id=20">Free Digital Tools: Converters and Calculators You Can Use Today</a></li>
+<li><a href="pages/article?id=21">Walking for Health: A Beginner's Fitness Guide</a></li>
+<li><a href="pages/article?id=22">How to Learn a New Digital Skill in 30 Days</a></li>
+<li><a href="pages/article?id=23">Home Workout Basics: No Equipment Needed</a></li>
+<li><a href="pages/article?id=24">Understanding Interest: Loans Explained Simply</a></li>
+<li><a href="pages/article?id=25">How to Plan a Road Trip: Checklist and Costs</a></li>
+      </ul></noscript></div>
     </div>
   </section>
 
   <section class="section" aria-label="Tools showcase">
     <div class="wrap">
-      <div class="section-head"><h2>Free tools, ready to use</h2><a href="pages/tools">All 20 tools →</a></div>
-      <div class="grid" id="toolGridHome"></div>
+      <div class="section-head"><h2>Free tools, ready to use</h2><a href="pages/tools" id="allToolsLink">All tools →</a></div>
+      <div class="grid" id="toolGridHome"><noscript><p><a href="pages/tools">Browse all free tools →</a></p></noscript></div>
       <p class="muted">No sign-up, no download, no cost. Currency conversion uses a rate you enter yourself — this site never invents live rates.</p>
     </div>
   </section>
@@ -94,30 +126,8 @@
     <div class="wrap">
       <div class="newsletter">
         <h2>Stay in the loop</h2>
-        <p>Subscribe and your address is stored as <strong>pending confirmation</strong>. Confirmation emails cannot be sent yet: no free email sender is connected. This is not double opt-in — no confirmation email will arrive until a free sender is set up.</p>
-        <form id="newsletterForm">
-          <label for="newsletterName" class="skip-link">Your name (optional)</label>
-          <input id="newsletterName" type="text" placeholder="Your name (optional)" autocomplete="name">
-          <label for="newsletterEmail" class="skip-link">Your email address</label>
-          <input id="newsletterEmail" type="email" required placeholder="you@example.com" autocomplete="email">
-          <label class="consent"><input id="newsletterConsent" type="checkbox" required> I agree to receive the FS AI newsletter at this address.</label>
-          <button class="btn btn-primary" type="submit">Subscribe</button>
-        </form>
-        <p id="newsletterNote" class="muted" aria-live="polite"></p>
-        <form id="unsubscribeForm" class="unsubscribe-form">
-          <label for="unsubscribeEmail" class="skip-link">Email address to unsubscribe</label>
-          <input id="unsubscribeEmail" type="email" required placeholder="you@example.com to unsubscribe">
-          <button class="btn btn-outline" type="submit">Unsubscribe</button>
-        </form>
-        <p id="unsubscribeNote" class="muted" aria-live="polite"></p>
-      </div>
-    </div>
-  </section>
-
-  <section class="section" aria-label="Honest numbers">
-    <div class="wrap">
-      <div class="note-box">
-        <strong>Honest numbers:</strong> Revenue $0.00. Traffic: Data unavailable — GA4 tag G-JVSCJT2DHJ is live (Tracking Connected — Reporting API Not Connected), so no traffic, clicks or earnings are claimed anywhere on this site.
+        <p>Addresses already subscribed are stored as <strong>pending confirmation</strong>. Confirmation emails cannot be sent yet: no free email sender is connected. This is not double opt-in — no confirmation email will arrive until a free sender is set up.</p>
+        <div id="newsletterForms"></div>
       </div>
     </div>
   </section>

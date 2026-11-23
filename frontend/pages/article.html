@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!-- Google tag (gtag.js) - GA4 G-JVSCJT2DHJ -->
+  <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-JVSCJT2DHJ"></script>
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","G-JVSCJT2DHJ");</script>
 <meta charset="UTF-8">
@@ -12,13 +12,18 @@
 <meta property="og:site_name" content="FS AI">
 <meta property="og:title" content="Article — FS AI">
 <meta property="og:description" content="Read a free FS AI article.">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://fs-ai-5w5.pages.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="FS AI — One Platform. Multiple Possibilities.">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Article — FS AI">
 <meta name="twitter:description" content="Read a free FS AI article.">
+<meta name="twitter:image" content="https://fs-ai-5w5.pages.dev/og-image.png">
 <!-- Per-article title, description, canonical and JSON-LD are injected by
      JavaScript from the loaded article (see the script at the end of this
      page). No static canonical or og:url is shipped: one shared URL would
-     be wrong for all 25 articles, and a wrong canonical is worse than
+     be wrong for every article, and a wrong canonical is worse than
      none. Crawlers that do not run JavaScript will see only these generic
      tags — static Pages hosting has no server rendering. -->
 <link rel="stylesheet" href="../styles/main.css">
@@ -59,7 +64,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var body = document.getElementById('articleBody');
   if (!a) {
     document.title = 'Article not found — FS AI';
-    body.innerHTML = '<h1>Article not found</h1><p>That article does not exist. <a href="../">Browse all 25 articles on the home page</a>.</p>';
+    body.innerHTML = '<h1>Article not found</h1><p>That article does not exist. <a href="../">Browse all articles on the home page</a>.</p>';
     return;
   }
   document.title = a.title + ' — FS AI';
@@ -84,7 +89,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var el = document.querySelector('link[rel="' + rel + '"]');
     if (!el) {
       /* No static canonical is shipped (one shared URL would be wrong
-         for all 25 articles) — create the link so the per-article
+         for every article) — create the link so the per-article
          canonical still lands. */
       el = document.createElement('link');
       el.setAttribute('rel', rel);
@@ -96,8 +101,11 @@ document.addEventListener('DOMContentLoaded', function () {
   setMeta('og:title', a.title + ' — FS AI', 'property');
   setMeta('og:description', a.excerpt, 'property');
   setMeta('og:url', canonical, 'property');
+  setMeta('og:image', 'https://fs-ai-5w5.pages.dev/og-image.png', 'property');
   setMeta('twitter:title', a.title + ' — FS AI', 'name');
   setMeta('twitter:description', a.excerpt, 'name');
+  setMeta('twitter:image', 'https://fs-ai-5w5.pages.dev/og-image.png', 'name');
+  setMeta('twitter:card', 'summary_large_image', 'name');
   setLink('canonical', canonical);
   var ld = {
     '@context': 'https://schema.org', '@type': 'Article',

@@ -20,8 +20,13 @@ describe('Contact / About / 404 pages', () => {
     assert.ok(html.includes('G-JVSCJT2DHJ'), 'GA4 tag present');
     assert.ok(html.includes('<link rel="canonical" href="https://fs-ai-5w5.pages.dev/pages/about">'));
     assert.ok(html.includes('FAHAD SOMRAT AI'));
-    assert.ok(html.includes('25 articles'));
-    assert.ok(html.includes('20 free tools'));
+    // A1.5 (2026-11-23): static copy is generic — no fixed article/tool/
+    // division counts (those come from the merged list at runtime).
+    assert.ok(!html.includes('25 articles'), 'no hard-coded article count');
+    assert.ok(!html.includes('20 free tools'), 'no hard-coded tool count');
+    assert.ok(!html.includes('8 divisions'), 'no hard-coded division count');
+    assert.ok(html.includes('Automotive'), 'division names still listed');
+    assert.ok(html.includes('free articles'), 'generic articles wording');
   });
 
   it('contact.html exists with the owner email and real social links only', () => {

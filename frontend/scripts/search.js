@@ -28,6 +28,25 @@
   window.FSAI.searchDivisions = searchDivisions;
   window.FSAI.searchTools = searchTools;
 
+  /* A1.5/A1.6a (2026-11-23): the "Type to search all N articles."
+     hint lives directly under the search box (#searchCount), derived
+     from the merged list at runtime — never from hard-coded copy.
+     refreshSearchHint only rewrites the hint while the box is empty,
+     so it never clobbers a live "N results for …" count; app.js
+     calls it from renderDerivedCounts after the live merge. */
+  function searchHint() {
+    return 'Type to search all ' + window.FSAI.ARTICLES.length + ' articles.';
+  }
+  function refreshSearchHint() {
+    var input = document.getElementById('siteSearch');
+    var count = document.getElementById('searchCount');
+    if (!count) return;
+    if (input && input.value && input.value.trim()) return;
+    count.textContent = searchHint();
+  }
+  window.FSAI.refreshSearchHint = refreshSearchHint;
+  window.FSAI.searchHint = searchHint;
+
   document.addEventListener('DOMContentLoaded', function () {
     var input = document.getElementById('siteSearch');
     var results = document.getElementById('searchResults');
@@ -37,8 +56,8 @@
       var q = input.value;
       var hits = searchArticles(q);
       if (!q.trim()) {
-        results.innerHTML = '<p class="muted">Type to search all ' + window.FSAI.ARTICLES.length + ' articles.</p>';
-        if (count) count.textContent = '';
+        if (count) count.textContent = searchHint();
+        results.innerHTML = '';
         return;
       }
       if (count) count.textContent = hits.length + ' result' + (hits.length === 1 ? '' : 's') + ' for "' + q.trim() + '"';
@@ -61,6 +80,8 @@
     input.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); run(); results.scrollIntoView({ behavior: 'smooth' }); }
     });
+    /* Show the derived hint under the box on load, before any typing. */
+    run();
     /* Pre-fill from ?q= when arriving from another page's search box.
        Phase 2: wait for the live merge so a preset query can match a
        newly published article too. */

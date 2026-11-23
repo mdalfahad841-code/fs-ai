@@ -396,22 +396,22 @@
     var inPages = window.location.pathname.indexOf('/pages/') !== -1;
     var prefix = inPages ? '../' : '';
     var existing = ACCOUNTS.filter(function (a) { return a.status === 'Exists'; });
-    var verified = ACCOUNTS.filter(function (a) { return a.status === 'Verified' || a.status === 'Connected' || a.status.indexOf('Tracking Connected') === 0; });
-    var paused = ACCOUNTS.filter(function (a) { return a.status === 'Paused'; });
-    var pending = ACCOUNTS.filter(function (a) { return a.status === 'Pending'; });
     var links = existing.map(function (a) {
       return '<a href="' + a.url + '" target="_blank" rel="noopener">' + esc(a.name) + ' (' + esc(a.handle) + ')</a>';
     }).join(' · ');
+    /* A1.2 (2026-11-23): the public footer carries no owner-internal
+       wording — no revenue, traffic, analytics-status or account-status
+       lines. Those stay in the owner dashboard (dashboard.js reads
+       SITE/ACCOUNTS/AGENTS for that). What is public here: the account
+       links, and the article/division/tool counts, derived from the
+       merged list at render time. */
     return '<footer class="site-footer"><div class="wrap footer-grid">' +
       '<div><h3>FS AI</h3><p>Fahad Somrat AI — One Platform. Multiple Possibilities.</p>' +
-      '<p>Founded by Fahad Somrat. Zero-cost platform: no paid services, no fake numbers.</p></div>' +
+      '<p>Founded by Fahad Somrat. Zero-cost platform: no paid services.</p></div>' +
       '<div><h3>Divisions</h3><p>' + DIVISIONS.map(function (d) { return '<a href="' + prefix + 'pages/division?division=' + d.id + '">' + esc(d.name) + '</a>'; }).join(' · ') + '</p>' +
       '<p><a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div>' +
-      '<div><h3>Accounts</h3><p>' + links + '</p>' +
-      '<p>Verified / connected: ' + verified.map(function (a) { return esc(a.name) + (a.handle ? ' (' + esc(a.handle) + ')' : ''); }).join(', ') + '.</p>' +
-      '<p>Paused by owner — not created yet: ' + paused.map(function (a) { return esc(a.name); }).join(', ') + '.</p>' +
-      '<p>Pending: ' + pending.map(function (a) { return esc(a.name); }).join(', ') + '.</p></div>' +
-      '<div><h3>Honest numbers</h3><p>Revenue: $0.00<br>Traffic: Data unavailable<br>Articles: ' + ARTICLES.length + ' · Divisions: ' + DIVISIONS.length + ' · Tools: ' + TOOLS.length + '</p></div>' +
+      '<div><h3>Accounts</h3><p>' + links + '</p></div>' +
+      '<div><h3>On this site</h3><p>Articles: ' + ARTICLES.length + ' · Divisions: ' + DIVISIONS.length + ' · Tools: ' + TOOLS.length + '</p></div>' +
       '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. No personal or family content is used on this platform. <a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div></footer>';
   }
 
@@ -428,6 +428,16 @@
     root.querySelectorAll('a[href^="pages/"]').forEach(function (a) { a.setAttribute('href', a.getAttribute('href').replace(/^pages\//, '')); });
   }
 
+  /* A1.6c (2026-11-23): "latest" = max date, with a deterministic
+     tie-break of HIGHEST id (date desc, then id desc). The old
+     date-only sort was stable-sort arbitrary between equal dates
+     (id 1 vs id 13, both 2026-11-11); after the A2 date fix the tie
+     will be ids 21–25 at 2026-11-11 and the same rule picks id 25. */
+  function sortLatestFirst(a, b) {
+    var d = b.date.localeCompare(a.date);
+    return d !== 0 ? d : b.id - a.id;
+  }
+
   function renderDivisions(root) {
     if (!root) return;
     root.innerHTML = DIVISIONS.map(function (d) {
@@ -438,13 +448,15 @@
         '<a class="btn btn-outline" href="pages/division?division=' + d.id + '">Explore ' + esc(d.short) + ' →</a></div></article>';
     }).join('');
     fixArticleLinks(root);
+    refreshReveal();
   }
 
   function renderArticles(root, list) {
     if (!root) return;
-    var items = list || ARTICLES.slice().sort(function (a, b) { return b.date.localeCompare(a.date); });
+    var items = list || ARTICLES.slice().sort(sortLatestFirst);
     root.innerHTML = items.map(articleCard).join('') || '<p>No articles found.</p>';
     fixArticleLinks(root);
+    refreshReveal();
   }
 
   function renderTools(root) {
@@ -454,6 +466,7 @@
         '<a class="btn btn-outline" href="pages/tools?tool=' + t.id + '">Open tool →</a></article>';
     }).join('');
     fixArticleLinks(root);
+    refreshReveal();
   }
 
   /* Hero moment (unslop run 2026-11-20, cover plate added in round 2): the
@@ -461,7 +474,7 @@
      the article's division scene, large, with its "No. NN" on the plate. */
   function renderHeroPreview(root) {
     if (!root) return;
-    var latest = ARTICLES.slice().sort(function (a, b) { return b.date.localeCompare(a.date); })[0];
+    var latest = ARTICLES.slice().sort(sortLatestFirst)[0];
     if (!latest) return;
     var div = DIVISIONS.find(function (x) { return x.name === latest.division; });
     var plate = div ? divisionPlate(div, articleNo(latest.id)) : '';
@@ -487,6 +500,33 @@
     return d ? svgIcon(d.icon) : '';
   };
   window.FSAI.renderHeroPreview = renderHeroPreview;
+  window.FSAI.sortLatestFirst = sortLatestFirst;
+
+  /* A1.1: re-observe .reveal elements after a render. animations.js
+     (loaded after app.js) exposes window.FSAI.refreshReveal; if it
+     has not loaded yet this is a harmless no-op — its own
+     MutationObserver catches the same nodes. */
+  function refreshReveal() {
+    if (window.FSAI && typeof window.FSAI.refreshReveal === 'function') window.FSAI.refreshReveal();
+  }
+
+  /* A1.5: hero stats, Latest-articles subhead and the tools link are
+     derived from the merged list at runtime, never from hard-coded
+     copy. Called immediately on DOMContentLoaded (static bundle) and
+     again in renderShared (after the live merge), so a newly published
+     article updates every count without a deploy. */
+  function renderDerivedCounts() {
+    var stats = document.getElementById('heroStats');
+    if (stats) {
+      stats.innerHTML = '<strong>' + DIVISIONS.length + '</strong> divisions · <strong>' + ARTICLES.length + '</strong> articles · <strong>' + TOOLS.length + '</strong> free tools';
+    }
+    var sub = document.getElementById('latestSubhead');
+    if (sub) sub.textContent = ARTICLES.length + ' articles across ' + DIVISIONS.length + ' divisions';
+    var toolsLink = document.getElementById('allToolsLink');
+    if (toolsLink) toolsLink.textContent = 'All ' + TOOLS.length + ' tools →';
+    if (window.FSAI && typeof window.FSAI.refreshSearchHint === 'function') window.FSAI.refreshSearchHint();
+  }
+  window.FSAI.renderDerivedCounts = renderDerivedCounts;
 
   /* Shared rendering waits for the live merge (Phase 2): the grids, hero
      and footer must see the merged list, not the static-only one. The wait
@@ -507,8 +547,11 @@
     if (tg) renderTools(tg);
     var y = document.getElementById('year');
     if (y) y.textContent = '2026';
+    renderDerivedCounts();
+    refreshReveal();
   }
   document.addEventListener('DOMContentLoaded', function () {
+    renderDerivedCounts();
     liveReady.then(renderShared);
   });
 })();

@@ -176,6 +176,13 @@ ul.clean li { padding: 12px 0; border-bottom: 1px solid var(--border); }
 .hero-preview { padding: 0; overflow: hidden; }
 .hero-preview .div-plate { height: 180px; }
 .hero-preview .div-plate-no { font-size: 16px; top: 16px; left: 20px; }
+/* A1.6b (2026-11-23): gap between the "No. NN" badge and the plate
+   art's circle ornament on the Latest-guide card — the scene art is
+   pushed 16px right of the badge so the nearest circle no longer
+   crowds it. The big icon still fits: its right edge keeps 20px+
+   of margin at desktop and phone widths. Visual confirmation NOT
+   TESTED (no browser in this environment). */
+.hero-preview .div-plate-art { transform: translateX(16px); }
 .hero-preview-body { padding: 24px; }
 .div-plate--banner { border-radius: var(--radius); margin-bottom: 24px; height: 160px; }
 
