@@ -140,16 +140,21 @@ export function safeJsonLd(obj) {
    literals — with ONE exception: ARTICLES references the string
    constant GENERAL_DISCLAIMER (app.js line 7; used by the Finance
    articles' `disclaimer:` field). parseStaticData extracts that
-   constant and binds it when evaluating the literal, so the parse
-   stays exact; the disclaimer itself is not head data and is never
-   emitted. They are extracted with a string-aware scanner and
-   evaluated with `new Function` — the input is the site's OWN deployed
-   file (same deploy, first-party code, never user input) and the
-   result is shape-validated below; any failure returns null
-   (fail-closed). There is no ${} interpolation anywhere in the file
-   (grep count 0, pinned by tests/fixpass2-item2.test.js), so template
-   literals evaluate to plain strings; the scanner still handles ${}
-   for future safety. */
+   constant and binds it when parsing the literal, so the parse stays
+   exact; the disclaimer itself is not head data and is never emitted.
+   They are extracted with a string-aware scanner and decoded with the
+   pure recursive-descent parser below — the input is the site's OWN
+   deployed file (same deploy, first-party code, never user input) and
+   the result is shape-validated below; any failure returns null
+   (fail-closed). The parser generates no code at runtime: that is a
+   hard requirement, because the Workers runtime forbids compiling
+   code from strings (the previous implementation evaluated the
+   literals that way and fell back to the static page on every live
+   request — see the Fix Pass 2 ledger, item 2). There is no ${}
+   interpolation anywhere in the file (grep count 0, pinned by
+   tests/fixpass2-item2.test.js), so template literals decode to plain
+   strings; an interpolation inside a template literal fails the
+   parse instead of being evaluated. */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -251,16 +256,239 @@ export function extractArrayLiteral(source, varName) {
   return null;
 }
 
-function evalArrayLiteral(literal, bindings = {}) {
+/* Pure JS-literal parser — decodes data, generates no code.
+ *
+ * Decodes the JS data literals extractArrayLiteral returns: strings
+ * (single, double, backtick), numbers, true/false/null, arrays,
+ * objects with identifier or quoted keys, and identifier references
+ * resolved ONLY from the given bindings (GENERAL_DISCLAIMER is the
+ * one real case). Anything else — an interpolation, an unbound
+ * identifier, a function call, malformed syntax — throws, and the
+ * caller turns that into null (fail-closed). The parser only walks
+ * characters; it never compiles or executes the input. */
+
+function isIdentChar(ch) {
+  return typeof ch === 'string' && /[A-Za-z0-9_$]/.test(ch);
+}
+
+// Sticky (y) regexes, anchored at the parser cursor via lastIndex —
+// no substring copies of the (up to ~130 KB) literal per token.
+const IDENT_RE = /[A-Za-z_$][A-Za-z0-9_$]*/y;
+const NUMBER_RE = /-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
+
+class LiteralParser {
+  constructor(text, bindings) {
+    this.s = text;
+    this.i = 0;
+    this.bindings = bindings || {};
+  }
+
+  parse() {
+    const value = this.value();
+    this.ws();
+    if (this.i !== this.s.length) throw new Error('trailing input after literal');
+    return value;
+  }
+
+  ws() {
+    for (;;) {
+      while (this.i < this.s.length && /\s/.test(this.s[this.i])) this.i += 1;
+      if (this.s[this.i] === '/' && this.s[this.i + 1] === '/') {
+        const nl = this.s.indexOf('\n', this.i + 2);
+        this.i = nl === -1 ? this.s.length : nl + 1;
+        continue;
+      }
+      if (this.s[this.i] === '/' && this.s[this.i + 1] === '*') {
+        const end = this.s.indexOf('*/', this.i + 2);
+        if (end === -1) throw new Error('unterminated block comment');
+        this.i = end + 2;
+        continue;
+      }
+      return;
+    }
+  }
+
+  value() {
+    this.ws();
+    const ch = this.s[this.i];
+    if (ch === '[') return this.array();
+    if (ch === '{') return this.object();
+    if (ch === "'" || ch === '"' || ch === '`') return this.string();
+    if (ch === '-' || (ch >= '0' && ch <= '9') || ch === '.') return this.number();
+    if (this.s.startsWith('true', this.i) && !isIdentChar(this.s[this.i + 4])) { this.i += 4; return true; }
+    if (this.s.startsWith('false', this.i) && !isIdentChar(this.s[this.i + 5])) { this.i += 5; return false; }
+    if (this.s.startsWith('null', this.i) && !isIdentChar(this.s[this.i + 4])) { this.i += 4; return null; }
+    IDENT_RE.lastIndex = this.i;
+    const m = IDENT_RE.exec(this.s);
+    if (m) {
+      const name = m[0];
+      if (Object.prototype.hasOwnProperty.call(this.bindings, name)) {
+        this.i += name.length;
+        return this.bindings[name];
+      }
+      throw new Error('unbound identifier: ' + name);
+    }
+    throw new Error('unexpected character: ' + JSON.stringify(ch));
+  }
+
+  string() {
+    const quote = this.s[this.i];
+    this.i += 1;
+    let out = '';
+    for (;;) {
+      if (this.i >= this.s.length) throw new Error('unterminated string');
+      const ch = this.s[this.i];
+      if (ch === quote) { this.i += 1; return out; }
+      if (quote === '`' && ch === '$' && this.s[this.i + 1] === '{') {
+        throw new Error('template interpolation is not a literal');
+      }
+      if (ch === '\\') {
+        this.i += 1;
+        if (this.i >= this.s.length) throw new Error('unterminated escape');
+        const e = this.s[this.i];
+        this.i += 1;
+        switch (e) {
+          case 'n': out += '\n'; break;
+          case 'r': out += '\r'; break;
+          case 't': out += '\t'; break;
+          case 'b': out += '\b'; break;
+          case 'f': out += '\f'; break;
+          case 'v': out += '\v'; break;
+          case '0':
+            if (/[0-9]/.test(this.s[this.i])) throw new Error('octal escape is not a literal');
+            out += '\0';
+            break;
+          case 'x': {
+            const hex = this.s.slice(this.i, this.i + 2);
+            if (!/^[0-9A-Fa-f]{2}$/.test(hex)) throw new Error('bad hex escape');
+            out += String.fromCharCode(parseInt(hex, 16));
+            this.i += 2;
+            break;
+          }
+          case 'u': {
+            if (this.s[this.i] === '{') {
+              const end = this.s.indexOf('}', this.i + 1);
+              if (end === -1) throw new Error('bad unicode escape');
+              const hex = this.s.slice(this.i + 1, end);
+              if (!/^[0-9A-Fa-f]+$/.test(hex)) throw new Error('bad unicode escape');
+              const cp = parseInt(hex, 16);
+              if (cp > 0x10FFFF) throw new Error('unicode escape out of range');
+              out += String.fromCodePoint(cp);
+              this.i = end + 1;
+            } else {
+              const hex = this.s.slice(this.i, this.i + 4);
+              if (!/^[0-9A-Fa-f]{4}$/.test(hex)) throw new Error('bad unicode escape');
+              out += String.fromCharCode(parseInt(hex, 16));
+              this.i += 4;
+            }
+            break;
+          }
+          case '\n': break; // line continuation: nothing
+          case '\r':
+            if (this.s[this.i] === '\n') this.i += 1;
+            break;
+          case '\u2028':
+          case '\u2029': break; // line continuation
+          default: out += e; // \' \" \` \\ \/ and any other escaped char: the char itself
+        }
+        continue;
+      }
+      if (quote !== '`' && (ch === '\n' || ch === '\r')) throw new Error('newline in string literal');
+      out += ch;
+      this.i += 1;
+    }
+  }
+
+  number() {
+    NUMBER_RE.lastIndex = this.i;
+    const m = NUMBER_RE.exec(this.s);
+    if (!m) throw new Error('malformed number');
+    const next = this.s[this.i + m[0].length];
+    if (isIdentChar(next) || next === '.') throw new Error('malformed number');
+    this.i += m[0].length;
+    const value = Number(m[0]);
+    if (!Number.isFinite(value)) throw new Error('number out of range');
+    return value;
+  }
+
+  array() {
+    this.i += 1; // consume '['
+    const out = [];
+    this.ws();
+    if (this.s[this.i] === ']') { this.i += 1; return out; }
+    for (;;) {
+      out.push(this.value());
+      this.ws();
+      const ch = this.s[this.i];
+      if (ch === ',') {
+        this.i += 1;
+        this.ws();
+        if (this.s[this.i] === ']') { this.i += 1; return out; } // trailing comma
+        continue;
+      }
+      if (ch === ']') { this.i += 1; return out; }
+      throw new Error('expected , or ] in array');
+    }
+  }
+
+  object() {
+    this.i += 1; // consume '{'
+    const out = {};
+    this.ws();
+    if (this.s[this.i] === '}') { this.i += 1; return out; }
+    for (;;) {
+      this.ws();
+      const ch = this.s[this.i];
+      let key;
+      if (ch === "'" || ch === '"' || ch === '`') {
+        key = this.string();
+      } else {
+        IDENT_RE.lastIndex = this.i;
+        const m = IDENT_RE.exec(this.s);
+        if (!m) throw new Error('expected object key');
+        key = m[0];
+        this.i += key.length;
+      }
+      this.ws();
+      if (this.s[this.i] !== ':') throw new Error('expected : after object key');
+      this.i += 1;
+      const value = this.value();
+      if (key === '__proto__') {
+        // Plain assignment would set the prototype instead of a property.
+        Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+      } else {
+        out[key] = value;
+      }
+      this.ws();
+      const after = this.s[this.i];
+      if (after === ',') {
+        this.i += 1;
+        this.ws();
+        if (this.s[this.i] === '}') { this.i += 1; return out; } // trailing comma
+        continue;
+      }
+      if (after === '}') { this.i += 1; return out; }
+      throw new Error('expected , or } in object');
+    }
+  }
+}
+
+/**
+ * Decode one JS data literal (see the parser above). Returns the value.
+ * Throws on anything that is not a plain data literal — the caller
+ * turns that into null (fail-closed).
+ */
+export function parseJsLiteral(text, bindings = {}) {
+  if (typeof text !== 'string' || !text) throw new Error('empty literal');
+  return new LiteralParser(text, bindings).parse();
+}
+
+/** Decode one JS array literal into an array, or null when it is not
+ * a well-formed array literal. The shape check lives in the caller. */
+function parseArrayLiteral(literal, bindings = {}) {
   if (typeof literal !== 'string' || !literal) return null;
   try {
-    // The literal is a data array from the site's own deployed
-    // app.js (see header). `new Function` evaluates it in a clean
-    // scope with only the given bindings in scope; the result is
-    // shape-validated by the caller.
-    const names = Object.keys(bindings);
-    const values = names.map((name) => bindings[name]);
-    const value = new Function(...names, 'return (' + literal + ');')(...values); // eslint-disable-line no-new-func
+    const value = parseJsLiteral(literal, bindings);
     return Array.isArray(value) ? value : null;
   } catch {
     return null;
@@ -277,7 +505,7 @@ function extractStringConstant(source, varName) {
   const m = re.exec(source);
   if (!m) return '';
   try {
-    const value = new Function('return (' + m[1] + ');')(); // eslint-disable-line no-new-func
+    const value = parseJsLiteral(m[1]);
     return typeof value === 'string' ? value : '';
   } catch {
     return '';
@@ -304,11 +532,11 @@ export function parseStaticData(appJsText) {
   const divisionsLiteral = extractArrayLiteral(appJsText, 'DIVISIONS');
   const toolsLiteral = extractArrayLiteral(appJsText, 'TOOLS');
   if (!articlesLiteral || !divisionsLiteral || !toolsLiteral) return null;
-  const articles = evalArrayLiteral(articlesLiteral, {
+  const articles = parseArrayLiteral(articlesLiteral, {
     GENERAL_DISCLAIMER: extractStringConstant(appJsText, 'GENERAL_DISCLAIMER'),
   });
-  const divisions = evalArrayLiteral(divisionsLiteral);
-  const tools = evalArrayLiteral(toolsLiteral);
+  const divisions = parseArrayLiteral(divisionsLiteral);
+  const tools = parseArrayLiteral(toolsLiteral);
   if (!articles || !divisions || !tools) return null;
   for (const a of articles) {
     if (!a || typeof a !== 'object') return null;

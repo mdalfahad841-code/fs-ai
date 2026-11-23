@@ -40,6 +40,17 @@
 //        FAILs; fetch error FAILs; no D1 sample rows -> NOT TESTED)
 //   2.12 _routes.json + the three route files exist and export onRequest;
 //        dashboard.js has the serverSideHeads label + line
+//   2.13 two Function copies (functions/ and frontend/functions/) are
+//        byte-identical, both carrying the x-seo-head diagnostic
+//   2.14 parseJsLiteral: the pure recursive-descent parser (strings,
+//        numbers, booleans, null, arrays, objects, bindings) and its
+//        fail-closed rejections (interpolation, unbound identifiers,
+//        malformed input)
+//   2.15 no code generation: the shipped Function files contain no
+//        code-generation call, and parseStaticData still parses the
+//        real bundle in a Node process run with
+//        --disallow-code-generation-from-strings (the flag that
+//        reproduces the Workers runtime's EvalError)
 //
 // Run: node --test tests/fixpass2-item2.test.js (or: npm test)
 // The tests never touch the network or live D1: the handler's data
@@ -48,6 +59,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -837,5 +849,144 @@ describe('2.13 two Function copies are byte-identical', () => {
       assert.ok(src.includes("h.set('x-seo-head', 'rewritten')"), base + ' sets rewritten');
       assert.ok(src.includes("h.set('x-seo-head', 'fallback')"), base + ' sets fallback');
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 2.14 — parseJsLiteral: the pure recursive-descent parser.           */
+/*                                                                     */
+/* The parser decodes data only — no code generation (see 2.15).       */
+/* ------------------------------------------------------------------ */
+describe('2.14 parseJsLiteral (pure parser)', () => {
+  const parse = (text, bindings) => seo.parseJsLiteral(text, bindings);
+
+  it('decodes strings in all three quote styles, with escapes', () => {
+    assert.equal(parse("'it\\'s'"), "it's");
+    assert.equal(parse('"say \\"hi\\""'), 'say "hi"');
+    assert.equal(parse('`back\\`tick`'), 'back`tick');
+    assert.equal(parse("'a\\nb\\tc\\\\d\\/e'"), 'a\nb\tc\\d/e');
+    assert.equal(parse("'\\x41\\u00e9\\u{1F600}'"), 'Aé\u{1F600}');
+    assert.equal(parse("'\\d'"), 'd', 'an unknown escape decodes to the char itself (JS semantics)');
+    assert.equal(parse('`line one\nline two`'), 'line one\nline two', 'template literals span lines');
+    assert.equal(parse("'a\\\nB'"), 'aB', 'line continuation joins the lines');
+  });
+
+  it('decodes numbers, booleans and null', () => {
+    assert.equal(parse('42'), 42);
+    assert.equal(parse('-7'), -7);
+    assert.equal(parse('3.14'), 3.14);
+    assert.equal(parse('1e3'), 1000);
+    assert.equal(parse('.5'), 0.5);
+    assert.equal(parse('0'), 0);
+    assert.equal(parse('true'), true);
+    assert.equal(parse('false'), false);
+    assert.equal(parse('null'), null);
+  });
+
+  it('decodes arrays and objects, nested, with trailing commas', () => {
+    assert.deepEqual(parse('[1, "a", true, null, [2, 3], { x: 4 }]'), [1, 'a', true, null, [2, 3], { x: 4 }]);
+    assert.deepEqual(parse('[]'), []);
+    assert.deepEqual(parse('{}'), {});
+    assert.deepEqual(parse('[1, 2,]'), [1, 2]);
+    assert.deepEqual(parse('{ a: 1, b: 2, }'), { a: 1, b: 2 });
+    assert.deepEqual(parse("{ 'q key': 1, \"d key\": 2 }"), { 'q key': 1, 'd key': 2 });
+    assert.deepEqual(parse('[{ id: 1, tags: ["x", "y"] }]'), [{ id: 1, tags: ['x', 'y'] }]);
+  });
+
+  it('resolves identifiers only from the given bindings', () => {
+    assert.equal(parse('GENERAL_DISCLAIMER', { GENERAL_DISCLAIMER: 'D' }), 'D');
+    assert.deepEqual(parse('[{ disclaimer: GENERAL_DISCLAIMER }]', { GENERAL_DISCLAIMER: 'D' }), [{ disclaimer: 'D' }]);
+    assert.throws(() => parse('SOME_OTHER_NAME', {}), /unbound identifier/);
+    assert.throws(() => parse('SOME_OTHER_NAME', { GENERAL_DISCLAIMER: 'D' }), /unbound identifier/);
+  });
+
+  it('rejects anything that is not a plain data literal', () => {
+    assert.throws(() => parse('`a${x}b`'), /interpolation/);
+    assert.throws(() => parse('foo()'), /unbound identifier/);
+    assert.throws(() => parse('[1, 2] extra'), /trailing input/);
+    assert.throws(() => parse("'unterminated"), /unterminated string/);
+    assert.throws(() => parse("'line one\nline two'"), /newline in string/);
+    assert.throws(() => parse('[1,,2]'), /unexpected character/);
+    assert.throws(() => parse('1abc'), /malformed number/);
+    assert.throws(() => parse('{ a: }'), /unexpected character/);
+    assert.throws(() => parse("'\\08'"), /octal/);
+    assert.throws(() => parse(''), /empty literal/);
+  });
+
+  it('does not pollute Object.prototype via a __proto__ key', () => {
+    const out = parse('{ "__proto__": { "polluted": true } }');
+    assert.deepEqual(out, JSON.parse('{"__proto__":{"polluted":true}}'));
+    assert.equal({}.polluted, undefined, 'Object.prototype must stay clean');
+    assert.equal(Object.getPrototypeOf(out), Object.prototype);
+  });
+
+  it('parses the extracted ARTICLES literal exactly like the old evaluator did', () => {
+    const literal = seo.extractArrayLiteral(APP_JS, 'ARTICLES');
+    const articles = parse(literal, { GENERAL_DISCLAIMER: 'D' });
+    assert.equal(articles.length, 25);
+    assert.equal(articles[0].title, "EV Charging at Home: A Complete Beginner's Guide");
+    assert.equal(articles[16].disclaimer, 'D', 'article 17 binds the disclaimer');
+    assert.ok(articles[0].body.startsWith('<p>Charging an electric car'));
+    assert.ok(articles[0].body.includes('</p>'), 'backtick body text survives intact');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 2.15 — no code generation in the shipped Function files.            */
+/*                                                                     */
+/* The Workers runtime forbids compiling code from strings: the        */
+/* previous implementation evaluated the bundle literals that way    */
+/* and fell back to the static page on every live request (the          */
+/* x-seo-head: fallback the parent saw on runs #55–#57). These tests  */
+/* pin the fix two ways: the shipped files contain no code-generation */
+/* call at all, and the real bundle still parses in a Node process     */
+/* run with --disallow-code-generation-from-strings, the flag that     */
+/* reproduces the runtime's EvalError.                                 */
+/* ------------------------------------------------------------------ */
+describe('2.15 no code generation in the shipped Function files', () => {
+  const FUNCTION_FILES = [
+    'seo-head.js',
+    'pages/article.js',
+    'pages/division.js',
+    'pages/tools.js',
+  ];
+  // Substrings that compile code from strings. (The words "evaluate"
+  // / "revalidate" in comments are NOT matches: only these exact
+  // call spellings count.)
+  const FORBIDDEN = ['new Function', 'eval(', 'WebAssembly.compile', 'WebAssembly.instantiate'];
+
+  for (const base of ['functions', 'frontend/functions']) {
+    for (const rel of FUNCTION_FILES) {
+      it(base + '/' + rel + ' contains no code-generation call', () => {
+        const src = read(base + '/' + rel);
+        for (const bad of FORBIDDEN) {
+          assert.ok(!src.includes(bad), base + '/' + rel + ' must not contain ' + JSON.stringify(bad));
+        }
+      });
+    }
+  }
+
+  it('parseStaticData parses the real bundle with code generation disallowed', () => {
+    // Self-validating child process: it first proves the flag is
+    // actually enforced (a code-generation call throws EvalError),
+    // then parses the shipped bundle through the real module.
+    const script = [
+      'let blocked = false;',
+      'try { new Function("return 1"); } catch (e) { blocked = e instanceof EvalError; }',
+      'if (!blocked) { console.error("FLAG NOT ENFORCED"); process.exit(2); }',
+      'const seo = require(process.argv[1]);',
+      'const fs = require("node:fs");',
+      'const d = seo.parseStaticData(fs.readFileSync(process.argv[2], "utf8"));',
+      'if (!d || d.articles.length !== 25 || d.divisions.length !== 8 || d.tools.length !== 20) {',
+      '  console.error("PARSE FAILED UNDER FLAG"); process.exit(1);',
+      '}',
+      'console.log("PARSED UNDER FLAG");',
+    ].join('\n');
+    const out = execFileSync(process.execPath,
+      ['--disallow-code-generation-from-strings', '-e', script,
+        path.join(ROOT, 'frontend/functions/seo-head.js'),
+        path.join(ROOT, 'frontend/scripts/app.js')],
+      { encoding: 'utf8', timeout: 30000 });
+    assert.ok(out.includes('PARSED UNDER FLAG'), 'child must parse 25/8/20 with code generation disallowed, got: ' + out);
   });
 });
