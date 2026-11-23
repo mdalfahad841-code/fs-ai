@@ -421,7 +421,7 @@ describe('A1.4 local 1200x630 og image', () => {
 describe('A1.5 static copy is generic, counts come from the list', () => {
   const FIXED = [
     '25 articles', '25 free articles', '20 free tools', '20 tools',
-    '8 divisions', 'Eight divisions', 'All 20 tools', '20 converters',
+    '8 divisions', 'All 8', 'All 20 tools', '20 converters',
   ];
   for (const page of PUBLIC_PAGES) {
     it(page + ' has no hard-coded count in static copy', () => {
@@ -432,10 +432,16 @@ describe('A1.5 static copy is generic, counts come from the list', () => {
     });
   }
 
-  it('the home hero keeps its wording, minus the fixed number', () => {
+  it('the home hero keeps its wording (A1.6: hero wording unchanged)', () => {
     assert.ok(INDEX_HTML.includes('Explore more.<br>Know more.<br>Do more.'), 'hero headline unchanged');
     assert.ok(INDEX_HTML.includes('One Platform. Multiple Possibilities.'), 'hero tagline unchanged');
-    assert.ok(!INDEX_HTML.includes('Eight divisions'), 'no fixed division word in the lead');
+    assert.ok(INDEX_HTML.includes('Eight divisions, free articles and free tools'), 'hero lead keeps "Eight divisions"');
+    assert.ok(INDEX_HTML.includes('<h2>Eight divisions, one platform</h2>'), 'divisions heading keeps "Eight divisions"');
+  });
+
+  it('the division page lead keeps its wording', () => {
+    const html = read('frontend/pages/division.html');
+    assert.ok(html.includes('Eight divisions, one platform. Choose a division to see its articles.'), 'division lead unchanged');
   });
 });
 
