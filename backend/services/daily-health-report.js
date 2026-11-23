@@ -606,7 +606,7 @@ export const SERVER_SIDE_HEAD_SAMPLES = [
 ];
 
 /** Escape for matching a value inside the served head (same rules as
- * functions/seo-head.js escHtml — duplicated here because the Worker
+ * frontend/functions/seo-head.js escHtml — duplicated here because the Worker
  * must not import the Pages Function module). */
 function escHead(value) {
   return String(value == null ? '' : value)

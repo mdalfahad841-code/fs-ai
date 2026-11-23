@@ -1,8 +1,8 @@
 // FS AI — Fix Pass 2, item 2: server-side article/division/tool heads
 // for crawlers (2026-11-23).
 //
-// Covers the Pages Function rewrite (functions/seo-head.js, the three
-// thin route files in functions/pages/) against the SHIPPED pages and
+// Covers the Pages Function rewrite (frontend/functions/seo-head.js, the three
+// thin route files in frontend/functions/pages/) against the SHIPPED pages and
 // the SHIPPED static bundle (frontend/scripts/app.js), plus the daily
 // health-report check 14 (serverSideHeads) in
 // backend/services/daily-health-report.js:
@@ -51,7 +51,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const seo = require('../functions/seo-head.js');
+const seo = require('../frontend/functions/seo-head.js');
 const {
   buildDailyHealthReport,
   HEALTH_REPORT_CHECK_KEYS,
@@ -774,15 +774,15 @@ describe('2.12 wiring: _routes.json, route files, dashboard', () => {
 
   it('the three route files exist and export onRequest', () => {
     for (const name of ['article', 'division', 'tools']) {
-      const mod = require(`../functions/pages/${name}.js`);
-      assert.equal(typeof mod.onRequest, 'function', `functions/pages/${name}.js exports onRequest`);
+      const mod = require(`../frontend/functions/pages/${name}.js`);
+      assert.equal(typeof mod.onRequest, 'function', `frontend/functions/pages/${name}.js exports onRequest`);
     }
   });
 
   it('the route files are thin: they only delegate to handleSeoRequest', () => {
     const kinds = { article: 'article', division: 'division', tools: 'tool' };
     for (const name of ['article', 'division', 'tools']) {
-      const src = read(`functions/pages/${name}.js`);
+      const src = read(`frontend/functions/pages/${name}.js`);
       assert.ok(src.includes("handleSeoRequest(context, '" + kinds[name] + "')"), name + ' delegates with its kind');
       assert.ok(!src.includes('seoHeaders') && !src.includes('rewriteArticleHtml'), name + ' carries no rewrite logic');
     }
@@ -796,7 +796,7 @@ describe('2.12 wiring: _routes.json, route files, dashboard', () => {
   });
 
   it('seo-head.js documents the mechanism, the cache decision and the root-directory assumption', () => {
-    const src = read('functions/seo-head.js');
+    const src = read('frontend/functions/seo-head.js');
     assert.ok(src.includes('WHY A PAGES FUNCTION, NOT BUILD-TIME GENERATION'), 'mechanism decision documented');
     assert.ok(src.includes('Root directory'), 'root-directory assumption recorded');
     assert.ok(src.includes('SEO_CACHE_CONTROL'), 'cache constant documented');
