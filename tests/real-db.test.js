@@ -99,6 +99,33 @@ function req(method, pathName, token, body) {
   return new Request(`${WORKER_URL}${pathName}`, { method, headers });
 }
 
+// Fix Pass 3 A1 (2026-11-23): fixtures that need a published article
+// publish through POST /publish (the single path), so they need a
+// gate-passing article first — same shape as the inline seeding in
+// the CMS publish test above (fresh PASS fact-check with the recorded
+// body hash, an evidenced VERIFIED claim, a source with a URL, a
+// fresh PASS SEO run).
+async function seedGatePass(db, articleId, body) {
+  const hash = await bodyHash(body);
+  const fc = db.prepare(
+    'INSERT INTO fact_checks (article_id, verdict, claims_total, claims_verified, claims_failed, body_hash) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(articleId, 'pass', 1, 1, 0, hash);
+  const fcId = Number(fc.lastInsertRowid);
+  db.prepare(
+    "INSERT INTO claim_checks (fact_check_id, claim_text, verdict, evidence_url, evidence_quote, explanation) VALUES (?, ?, ?, 'https://example.com/source-1', 'evidence', 'test')",
+  ).run(fcId, 'Real body claim.', 'VERIFIED');
+  db.prepare(
+    "INSERT INTO article_sources (article_id, source_title, source_url, source_type, accessed_at) VALUES (?, 'Test source', 'https://example.com/source-1', 'other', '2026-11-19T12:00:00Z')",
+  ).run(articleId);
+  const checksJson = JSON.stringify([
+    { name: 'seo-title', ok: true },
+    { name: 'duplicate', ok: true, detail: 'Highest 5-word shingle overlap: 0%.' },
+  ]);
+  db.prepare(
+    'INSERT INTO seo_checks (article_id, verdict, checks_json, body_hash) VALUES (?, ?, ?, ?)',
+  ).run(articleId, 'pass', checksJson, hash);
+}
+
 describe('Worker routes against the real schema + seed (fresh-deploy path)', () => {
   let db;
   let env;
@@ -317,11 +344,17 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
   });
 
   it('future-scheduled article stays hidden; due approved article publishes via the scheduler', async () => {
+    // Fix Pass 3 A1: the future article reaches 'published' through
+    // POST /publish (the single path), not create-with-status:'published'.
     const future = await handleRequest(req('POST', '/api/admin/articles', token, {
       title: 'Real DB Future Article', body: 'Future.', division: 'automotive',
-      status: 'published', publish_at: '2999-01-01T00:00:00.000Z',
+      publish_at: '2999-01-01T00:00:00.000Z',
     }), env);
     assert.equal(future.status, 201);
+    const futureArticle = (await future.json()).article;
+    await seedGatePass(db, futureArticle.id, 'Future.');
+    const futurePub = await handleRequest(req('POST', `/api/admin/articles/${futureArticle.id}/publish`, token), env);
+    assert.equal(futurePub.status, 200);
     const hidden = await handleRequest(req('GET', '/api/articles/real-db-future-article'), env);
     assert.equal(hidden.status, 404);
     const due = await handleRequest(req('POST', '/api/admin/articles', token, {
@@ -334,12 +367,14 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
     // article today (the future article above) — with the live default
     // the due article would (correctly) be skipped as over-limit. This
     // test is about due/future visibility, not the limit (pinned in
-    // tests/closeout-b1.test.js), so raise the limit to 2 for this run.
-    // This fresh-deploy DB (schema + seed) predates migration 005, so
-    // the autonomy_settings table itself must be created first — live
+    // tests/closeout-b1.test.js), so raise the limit to 10 for this
+    // run — the inactive-division test below publishes a third article
+    // in this shared DB, so 2 is no longer enough. This fresh-deploy
+    // DB (schema + seed) predates migration 005, so the
+    // autonomy_settings table itself must be created first — live
     // D1 has had it since migration 005.
     db.exec("CREATE TABLE IF NOT EXISTS autonomy_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (datetime('now')))");
-    db.prepare("INSERT OR REPLACE INTO autonomy_settings (key, value) VALUES ('max_articles_per_day', '2')").run();
+    db.prepare("INSERT OR REPLACE INTO autonomy_settings (key, value) VALUES ('max_articles_per_day', '10')").run();
     const result = await publishDueArticles(env);
     assert.equal(result.ok, true);
     assert.ok(result.slugs.includes('real-db-due-article'));
@@ -352,9 +387,12 @@ describe('Worker routes against the real schema + seed (fresh-deploy path)', () 
     assert.equal(div.status, 201);
     const divId = (await div.json()).division.id;
     const art = await handleRequest(req('POST', '/api/admin/articles', token, {
-      title: 'Real Temp Article', body: 'Temp.', division: 'real-temp', status: 'published',
+      title: 'Real Temp Article', body: 'Temp.', division: 'real-temp',
     }), env);
     assert.equal(art.status, 201);
+    const tempArticle = (await art.json()).article;
+    await seedGatePass(db, tempArticle.id, 'Temp.');
+    assert.equal((await handleRequest(req('POST', `/api/admin/articles/${tempArticle.id}/publish`, token), env)).status, 200);
     assert.equal((await handleRequest(req('GET', '/api/articles/real-temp-article'), env)).status, 200);
     await handleRequest(req('PUT', `/api/admin/divisions/${divId}`, token, { is_active: 0 }), env);
     assert.equal((await handleRequest(req('GET', '/api/articles/real-temp-article'), env)).status, 404);

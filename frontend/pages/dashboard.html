@@ -175,7 +175,16 @@
             <div class="field"><label for="articleTitle">Title</label><input id="articleTitle" type="text" required minlength="5" maxlength="200"></div>
             <div class="field"><label for="articleDivision">Division (slug)</label><input id="articleDivision" type="text" required placeholder="automotive"></div>
             <div class="field"><label for="articleCategory">Category</label><input id="articleCategory" type="text" placeholder="Guide"></div>
-            <div class="field"><label for="articleStatus">Status</label><select id="articleStatus"><option value="draft">Draft</option><option value="pending_approval">Pending approval</option><option value="approved">Approved</option><option value="published">Published</option></select></div>
+            <!-- Fix Pass 3 A1 (2026-11-23, owner decision YES): the form can
+                 never publish — the Published option is disabled, so the
+                 form can only save draft / pending_approval / approved.
+                 Publishing is the Publish button, which calls POST
+                 /api/admin/articles/:id/publish (gate + audited override).
+                 The disabled option stays so editing an already-published
+                 article still shows its status — and saving it sends
+                 status 'published' for an article that already is, which
+                 the API still allows (it is not a transition). -->
+            <div class="field"><label for="articleStatus">Status</label><select id="articleStatus"><option value="draft">Draft</option><option value="pending_approval">Pending approval</option><option value="approved">Approved</option><option value="published" disabled>Published</option></select></div>
             <div class="field form-span"><label for="articleExcerpt">Excerpt</label><textarea id="articleExcerpt" rows="2"></textarea></div>
             <div class="field form-span"><label for="articleBody">Body (HTML)</label><textarea id="articleBody" rows="6"></textarea></div>
             <div class="form-span"><button class="btn btn-primary" type="submit">Save article</button>

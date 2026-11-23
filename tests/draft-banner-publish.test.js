@@ -16,16 +16,19 @@
 //      banner line anywhere; stripAllDraftBannerLines is the renderer
 //      strip.
 //   2. Publish layer (backend/routes/admin-articles.js): the manual
-//      publish handler, publishDueArticles (scheduled path), AND every
-//      other transition INTO 'published' — creating an article already
-//      marked published, and a PUT that flips a draft to published (the
-//      dashboard's status dropdown offers Published on save, so both
-//      were live bypasses). Each strips the standard banner, saves the
-//      cleaned body, and publishes — but if any banner line survives
-//      the strip, publication is REFUSED (422 for the manual/create/PUT
-//      paths; skipped-and-left-a-draft for the scheduled run) before
-//      anything is written. Nothing is ever silently published with a
-//      banner. A save that does NOT publish never touches the body.
+//      publish handler and publishDueArticles (scheduled path) strip
+//      the standard banner, save the cleaned body, and publish — but
+//      if any banner line survives the strip, publication is REFUSED
+//      (422 for the manual path; skipped-and-left-a-draft for the
+//      scheduled run) before anything is written. Nothing is ever
+//      silently published with a banner. Fix Pass 3 A1 (2026-11-23,
+//      owner decision YES) removed the other two transitions INTO
+//      'published' — creating already-published, and a PUT that flips
+//      a draft to published, are now refused 422 with a pointer to
+//      POST /api/admin/articles/:id/publish, before any banner
+//      handling; the banner strip on those paths is gone with the
+//      transition. A save that does NOT publish never touches the
+//      body.
 //   3. Public renderer, twice over: the public API (backend/routes/
 //      articles.js) and the live article page (frontend/scripts/app.js
 //      stripDraftBanner + frontend/pages/article.html) strip banner lines
@@ -296,19 +299,24 @@ function createReq(body) {
   });
 }
 
-describe('create / PUT transitions into published', () => {
-  it('PUT draft→published strips a standard banner and publishes', async () => {
+describe('create / PUT transitions into published are refused (Fix Pass 3 A1)', () => {
+  it('PUT draft→published is refused: the publish gate is the single path', async () => {
+    // Fix Pass 3 A1 (2026-11-23, owner decision YES): the transition
+    // itself is refused 422 before any banner handling — the banner
+    // strip that used to run here is gone with the transition.
     const { db, env } = freshEnv();
     const id = insertArticle(db, 'Original body.', { id: 905, status: 'draft' });
     const res = await handleAdminArticles(
       putReq(id, { title: 'Test Article 905', body: STANDARD_BANNER_BODY, status: 'published' }),
       env, {}, AUTH,
     );
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 422);
+    assert.match((await res.json()).error, /POST \/api\/admin\/articles\/:id\/publish/);
     const stored = loadArticle(db, id);
-    assert.equal(stored.status, 'published');
-    assert.ok(stored.published_at, 'publish stamps published_at');
-    assert.equal(stored.body, '## Introduction\n\nEnrollment from abroad is down this fall.');
+    assert.equal(stored.status, 'draft');
+    assert.equal(stored.body, 'Original body.');
+    const revs = db.prepare('SELECT COUNT(*) AS n FROM article_revisions WHERE article_id = ?').get(id);
+    assert.equal(revs.n, 0, 'a refused publish stores no revision');
   });
 
   it('PUT draft→published with an un-strippable banner is refused with no trace', async () => {
@@ -319,7 +327,9 @@ describe('create / PUT transitions into published', () => {
       env, {}, AUTH,
     );
     assert.equal(res.status, 422);
-    assert.match((await res.json()).error, /AI-DRAFT banner/);
+    // The refusal is the publish-path refusal now, not the banner
+    // refusal — the transition is refused before banner handling.
+    assert.match((await res.json()).error, /POST \/api\/admin\/articles\/:id\/publish/);
     const stored = loadArticle(db, id);
     assert.equal(stored.status, 'draft');
     assert.equal(stored.body, 'Original body.');
@@ -327,17 +337,18 @@ describe('create / PUT transitions into published', () => {
     assert.equal(revs.n, 0, 'a refused publish stores no revision');
   });
 
-  it('create with status published strips a standard banner', async () => {
+  it('create with status published is refused (Fix Pass 3 A1)', async () => {
     const { db, env } = freshEnv();
     const res = await handleAdminArticles(
       createReq({ title: 'Standard Banner Create Article', division: 'automotive', excerpt: 'Excerpt.', body: STANDARD_BANNER_BODY, status: 'published' }),
       env, {}, AUTH,
     );
-    assert.equal(res.status, 201);
-    const data = await res.json();
-    assert.equal(data.article.status, 'published');
-    assert.equal(data.article.body, '## Introduction\n\nEnrollment from abroad is down this fall.');
-    assert.equal(loadArticle(db, data.article.id).body, '## Introduction\n\nEnrollment from abroad is down this fall.');
+    assert.equal(res.status, 422);
+    assert.match((await res.json()).error, /POST \/api\/admin\/articles\/:id\/publish/);
+    assert.equal(
+      db.prepare('SELECT id FROM articles WHERE slug = ?').get('standard-banner-create-article'),
+      undefined,
+    );
   });
 
   it('create with status published and an un-strippable banner creates nothing', async () => {
@@ -347,6 +358,7 @@ describe('create / PUT transitions into published', () => {
       env, {}, AUTH,
     );
     assert.equal(res.status, 422);
+    assert.match((await res.json()).error, /POST \/api\/admin\/articles\/:id\/publish/);
     assert.equal(
       db.prepare('SELECT id FROM articles WHERE slug = ?').get('malformed-banner-create-article'),
       undefined,

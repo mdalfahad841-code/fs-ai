@@ -687,9 +687,18 @@ describe('A5.7 lastRuns: stale daily warns, missing is NOT TESTED, fresh is OK',
 
   it('is OK when yesterday’s daily and a 2-day-old weekly exist', async () => {
     const { db, env } = freshEnv();
-    insertDailyReport(db, dateDaysAgo(1), 'daily', {});
-    insertDailyReport(db, dateDaysAgo(2), 'weekly', {});
-    const report = await buildDailyHealthReport(env, { health: healthyHealth(), fetchImpl: makeMockFetch() });
+    // Time-flake fix (2026-11-23): the production check ages a row from
+    // its date at 00:00 UTC, so a "yesterday" row is only <= 36 h old
+    // before 12:00 UTC — after noon the same fixture correctly WARNs
+    // (that is what the 19:05 baseline run proved: 37.1 h). Pin the clock
+    // through the builder's existing nowMs option so the test means what
+    // it says at any hour; no assertion changed, no production code
+    // touched.
+    const nowMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T06:00:00.000Z`);
+    const day = (d) => new Date(nowMs - d * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    insertDailyReport(db, day(1), 'daily', {});
+    insertDailyReport(db, day(2), 'weekly', {});
+    const report = await buildDailyHealthReport(env, { health: healthyHealth(), fetchImpl: makeMockFetch(), nowMs });
     assert.equal(report.checks.lastRuns.status, 'OK');
     assert.ok(report.checks.lastRuns.detail.daily.ageHours <= 36);
     assert.ok(report.checks.lastRuns.detail.weekly.ageHours <= 8 * 24);

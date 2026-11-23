@@ -61,6 +61,13 @@ describe('CMS admin articles (/api/admin/articles)', () => {
   before(async () => {
     env = await makeOwnerEnv();
     token = await loginOk(handleRequest, env);
+    // Fix Pass 3 A1 (2026-11-23): the visibility tests below now
+    // publish through POST /publish (the single path), so this shared
+    // env publishes several articles on one Dhaka day. The daily
+    // limit itself is pinned in tests/closeout-b1.test.js — raise it
+    // here so these tests measure visibility, not the limit. (Bound
+    // params: the fake D1 only handles the '?' form of this UPDATE.)
+    await env.DB.prepare('UPDATE autonomy_settings SET value = ? WHERE key = ?').bind('10', 'max_articles_per_day').run();
   });
 
   it('admin create without a token returns 401', async () => {
@@ -149,11 +156,17 @@ describe('CMS admin articles (/api/admin/articles)', () => {
   });
 
   it('future-scheduled published article stays hidden until publish_at passes', async () => {
+    // Fix Pass 3 A1: the article reaches 'published' through POST
+    // /publish (the single path), not create-with-status:'published'.
     const created = await createArticle(env, token, {
       title: 'Future Scheduled Article', body: 'Future body.', division: 'automotive',
-      status: 'published', publish_at: '2999-01-01T00:00:00.000Z',
+      publish_at: '2999-01-01T00:00:00.000Z',
     });
     assert.equal(created.res.status, 201);
+    const id = created.data.article.id;
+    await seedGatePass(env, id, 'Future body.');
+    const pubRes = await handleRequest(authedRequest('POST', `/api/admin/articles/${id}/publish`, token), env);
+    assert.equal(pubRes.status, 200);
     const publicRes = await handleRequest(new Request(`${WORKER_URL}/api/articles/future-scheduled-article`), env);
     assert.equal(publicRes.status, 404);
     const listRes = await handleRequest(new Request(`${WORKER_URL}/api/articles`), env);
@@ -168,9 +181,12 @@ describe('CMS admin articles (/api/admin/articles)', () => {
     assert.equal(divRes.status, 201);
     const divId = (await divRes.json()).division.id;
     const created = await createArticle(env, token, {
-      title: 'Temp Division Article', body: 'Temp body.', division: 'temp-division', status: 'published',
+      title: 'Temp Division Article', body: 'Temp body.', division: 'temp-division',
     });
     assert.equal(created.res.status, 201);
+    const tempId = created.data.article.id;
+    await seedGatePass(env, tempId, 'Temp body.');
+    assert.equal((await handleRequest(authedRequest('POST', `/api/admin/articles/${tempId}/publish`, token), env)).status, 200);
     const before = await handleRequest(new Request(`${WORKER_URL}/api/articles/temp-division-article`), env);
     assert.equal(before.status, 200);
     const deact = await handleRequest(authedRequest('PUT', `/api/admin/divisions/${divId}`, token, { is_active: 0 }), env);
@@ -183,10 +199,17 @@ describe('CMS admin articles (/api/admin/articles)', () => {
   });
 
   it('single health article carries the general-information disclaimer', async () => {
+    // Fix Pass 3 A1: published through POST /publish. The body
+    // carries the disclaimer the manual gate's special-review check
+    // requires for Health articles (the public `disclaimer` field
+    // itself is added by the renderer from the division).
     const created = await createArticle(env, token, {
-      title: 'Walking Health Test Article', body: 'Health body.', division: 'health-wellness', status: 'published',
+      title: 'Walking Health Test Article', body: 'Health body. General information only — not medical advice.', division: 'health-wellness',
     });
     assert.equal(created.res.status, 201);
+    const healthId = created.data.article.id;
+    await seedGatePass(env, healthId, 'Health body. General information only — not medical advice.');
+    assert.equal((await handleRequest(authedRequest('POST', `/api/admin/articles/${healthId}/publish`, token), env)).status, 200);
     const res = await handleRequest(new Request(`${WORKER_URL}/api/articles/walking-health-test-article`), env);
     assert.equal(res.status, 200);
     const body = await res.json();
@@ -196,9 +219,12 @@ describe('CMS admin articles (/api/admin/articles)', () => {
 
   it('short-body D1 rows are still returned (frontend falls back by slug)', async () => {
     const created = await createArticle(env, token, {
-      title: 'Short Body Article', body: 'Tiny body.', division: 'automotive', status: 'published',
+      title: 'Short Body Article', body: 'Tiny body.', division: 'automotive',
     });
     assert.equal(created.res.status, 201);
+    const shortId = created.data.article.id;
+    await seedGatePass(env, shortId, 'Tiny body.');
+    assert.equal((await handleRequest(authedRequest('POST', `/api/admin/articles/${shortId}/publish`, token), env)).status, 200);
     const res = await handleRequest(new Request(`${WORKER_URL}/api/articles/short-body-article`), env);
     assert.equal(res.status, 200);
     const body = await res.json();

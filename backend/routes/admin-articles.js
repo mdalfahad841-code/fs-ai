@@ -2,9 +2,18 @@
  * FS AI — CMS admin routes (owner-only; worker.js enforces requireOwner).
  *
  *   POST   /api/admin/articles                  create (draft by default)
+ *          Fix Pass 3 A1 (2026-11-23, owner decision YES): creating
+ *          with status 'published' is REFUSED with 422 — nothing is
+ *          created. The ONLY manual publish path is POST /publish
+ *          below (gate + audited override).
  *   GET    /api/admin/articles                  list ALL incl. drafts (?status= & ?division=)
  *   GET    /api/admin/articles/:id              one article, any status
  *   PUT    /api/admin/articles/:id              edit (stores a revision first)
+ *          Fix Pass 3 A1: a PUT that would move an article INTO
+ *          'published' (draft/approved/pending -> published) is
+ *          REFUSED with 422 before the revision is stored — nothing
+ *          changes. A PUT that KEEPS an already-published article
+ *          published, or moves it back to draft, still works.
  *   DELETE /api/admin/articles/:id              delete (dependent rows
  *          removed in one atomic batch; audit written with the delete —
  *          Fix Pass 2 item 5, 2026-11-23; revisions stay cascade-governed)
@@ -41,6 +50,22 @@ import {
 import { isSpecialReviewDivision } from '../publishing/divisions.js';
 
 const ARTICLE_COLUMNS = 'a.*, d.slug AS division, d.name AS division_name, a.published_at AS publishedAt';
+
+/**
+ * Fix Pass 3 A1 (2026-11-23, owner decision YES): the ONLY way an
+ * article becomes 'published' through the manual/admin API is POST
+ * /api/admin/articles/:id/publish — the publish gate plus the audited
+ * override phrase (Fix Pass 2 item 1). Creating with status
+ * 'published', or PUT-ing a draft/approved/pending article to
+ * 'published', is refused with 422 and writes nothing: no row, no
+ * status change, no revision, no audit row. The authorised autonomous
+ * paths (publishDueArticles, the auto-publish agent) are NOT routes
+ * and keep their own gates — they are untouched by this refusal.
+ */
+const PUBLISH_REFUSAL_CREATE =
+  'Articles cannot be created already published. Create the article as a draft, then publish it through POST /api/admin/articles/:id/publish — the publish gate applies there.';
+const PUBLISH_REFUSAL_TRANSITION =
+  'An article cannot be moved to published here. Publish it through POST /api/admin/articles/:id/publish — the publish gate applies there.';
 
 function articleSelectSql(where) {
   return `SELECT ${ARTICLE_COLUMNS} FROM articles a JOIN business_divisions d ON d.id = a.division_id ${where}`;
@@ -142,17 +167,17 @@ async function createArticle(request, env, auth) {
 
   const tags = cleanTags(body.tags) || [];
   const status = body.status || 'draft';
-  // Banner protection: creating an article already marked 'published'
-  // IS a publish transition, so the same strip-or-refuse rule applies.
-  // A draft create never touches the body.
-  let storedBody = body.body;
+  // Fix Pass 3 A1: creating already-published is refused — the
+  // publish gate (POST /publish) is the single path. The refusal
+  // happens before the INSERT, so no row can exist to publish. (The
+  // banner strip that used to run here is gone with the transition:
+  // a draft create never touches the body, and banner protection
+  // still runs on POST /publish and the scheduled/auto paths.)
   if (status === 'published') {
-    const prep = preparePublishBody(body.body);
-    if (!prep.ok) return jsonError(prep.error, 422);
-    storedBody = prep.body;
+    return jsonError(PUBLISH_REFUSAL_CREATE, 422);
   }
   const now = nowIso();
-  const publishedAt = status === 'published' ? now : null;
+  const publishedAt = null;
   const result = await d1Run(env,
     'INSERT INTO articles (division_id, title, slug, excerpt, body, author, status, fact_checked, seo_title, seo_description, featured_image, published_at, publish_at, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [
@@ -160,7 +185,7 @@ async function createArticle(request, env, auth) {
       sanitiseText(body.title, 200),
       slug,
       sanitiseText(body.excerpt || '', 500),
-      storedBody,
+      body.body,
       sanitiseText(body.author || 'FS AI', 100),
       status,
       body.fact_checked ? 1 : 0,
@@ -250,16 +275,17 @@ async function updateArticle(request, env, auth, id) {
       ? (body.publish_at ? new Date(body.publish_at).toISOString() : null)
       : current.publish_at,
   };
-  // Banner protection: a PUT that transitions an article INTO 'published'
-  // is a publish action, so the same strip-or-refuse rule applies — and
-  // the refusal happens BEFORE the revision is stored, so a failed
-  // publish leaves no trace at all. A PUT that does not publish (a draft
-  // or approved edit, or an edit to an already-published article) never
-  // touches the body; the renderer strip is the net for those.
+  // Fix Pass 3 A1: a PUT that would move an article INTO 'published'
+  // is refused — the publish gate (POST /publish) is the single path.
+  // The refusal happens BEFORE the revision is stored, so a failed
+  // publish leaves no trace at all. A PUT that does not publish (a
+  // draft or approved edit, or an edit to an already-published
+  // article) never touches the body; the renderer strip is the net
+  // for those. (The banner strip that used to run here is gone with
+  // the transition: banner protection still runs on POST /publish
+  // and the scheduled/auto paths.)
   if (next.status === 'published' && current.status !== 'published') {
-    const prep = preparePublishBody(next.body);
-    if (!prep.ok) return jsonError(prep.error, 422);
-    next.body = prep.body;
+    return jsonError(PUBLISH_REFUSAL_TRANSITION, 422);
   }
 
   // Store the pre-edit version first — the revision trail is the audit log.
@@ -408,13 +434,16 @@ async function buildDeleteStatements(env, id, current, auth) {
 }
 
 /**
- * Banner protection shared by every transition INTO 'published'
- * (2026-11-20): the manual publish endpoint, the scheduled publish run,
- * creating an article already marked published, and a PUT that flips a
- * draft to published. Strip the standard leading banner block; if ANY
- * banner line survives, the transition is refused ({ ok: false }) and the
- * caller must change NOTHING — no status change, no body save, no
- * publish. A failed strip never silently publishes anything.
+ * Banner protection shared by every remaining transition INTO
+ * 'published' (2026-11-20): the manual publish endpoint and the
+ * scheduled publish run. (Fix Pass 3 A1 removed the other two
+ * transitions — creating already-published and a PUT that flips a
+ * draft to published are now refused 422 before any body handling,
+ * so they never reach this strip.) Strip the standard leading banner
+ * block; if ANY banner line survives, the transition is refused
+ * ({ ok: false }) and the caller must change NOTHING — no status
+ * change, no body save, no publish. A failed strip never silently
+ * publishes anything.
  */
 function preparePublishBody(body) {
   const cleaned = stripDraftBanner(body || '');

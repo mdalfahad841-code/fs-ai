@@ -122,12 +122,23 @@ describe('backup -> restore round-trip (local SQLite)', () => {
     ).run();
 
     // Live activity 1: a new published article (id 28).
-    const created = await handleRequest(req('POST', '/api/admin/articles', token, {
-      title: 'Backup Restore Test Article',
-      body: 'Body with a semicolon; and an apostrophe\'s quote, plus "double quotes".',
-      division: 'automotive', status: 'published', tags: ['backup', 'restore-test'],
-    }), origEnv);
-    assert.equal(created.status, 201, 'creating the live article must succeed');
+    // Fix Pass 3 A1: creating with status 'published' is refused by
+    // the API now — the publish gate (POST /publish) is the single
+    // path. This test's subject is backup/restore fidelity, not the
+    // publish path (pinned in tests/cms.test.js +
+    // tests/fixpass3-a1.test.js), so the live published row is seeded
+    // directly, exactly as the #26/#27 rows above are. The body keeps
+    // the semicolon/apostrophe/double-quote mix the backup escaping
+    // must survive.
+    const live28 = origDb.prepare(
+      'INSERT INTO articles (division_id, title, slug, body, status, published_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(1, 'Backup Restore Test Article', 'backup-restore-test-article',
+      'Body with a semicolon; and an apostrophe\'s quote, plus "double quotes".',
+      'published', '2026-11-23T00:00:00.000Z');
+    assert.equal(Number(live28.lastInsertRowid), 28, 'the live published article lands on id 28');
+    for (const tag of ['backup', 'restore-test']) {
+      origDb.prepare('INSERT INTO article_tags (article_id, tag) VALUES (?, ?)').run(28, tag);
+    }
 
     // Live activity 2: edit seeded article 1 — stores a revision and
     // REPLACES its seed tags (the stale rows the restore must not revive).
@@ -150,13 +161,16 @@ describe('backup -> restore round-trip (local SQLite)', () => {
 
     // Live activity 5: create + edit + delete an article. On live D1 the
     // revision survives the delete as an orphan; the backup carries it.
+    // (Fix Pass 3 A1: created as a draft — creating already-published
+    // is refused now; the edit below is a plain draft edit, which is
+    // what stores the revision this activity is about.)
     const doomed = await handleRequest(req('POST', '/api/admin/articles', token, {
-      title: 'Doomed Article', body: 'Will be deleted.', division: 'automotive', status: 'published',
+      title: 'Doomed Article', body: 'Will be deleted.', division: 'automotive',
     }), origEnv);
     assert.equal(doomed.status, 201);
     const doomedId = (await doomed.json()).article.id;
     assert.equal((await handleRequest(req('PUT', `/api/admin/articles/${doomedId}`, token, {
-      title: 'Doomed Article Edited', body: 'Edited before delete.', division: 'automotive', status: 'published',
+      title: 'Doomed Article Edited', body: 'Edited before delete.', division: 'automotive',
     }), origEnv)).status, 200);
     assert.equal((await handleRequest(req('DELETE', `/api/admin/articles/${doomedId}`, token), origEnv)).status, 200);
     assert.equal(
@@ -270,15 +284,21 @@ describe('backup -> restore round-trip (local SQLite)', () => {
 
     // AUTOINCREMENT continues past the backup's max article id (28);
     // the deleted id 29 was never in the backup, so it is correctly reused.
+    // (Fix Pass 3 A1: created as a draft — creating already-published
+    // is refused now. The id assertion is what this step is about.)
     const created = await handleRequest(req('POST', '/api/admin/articles', restoredToken, {
-      title: 'Post Restore Article', body: 'After restore.', division: 'automotive', status: 'published',
+      title: 'Post Restore Article', body: 'After restore.', division: 'automotive',
     }), env);
     assert.equal(created.status, 201);
     assert.equal((await created.json()).article.id, 29);
 
     // Public list defaults to limit=25 and total is the page size.
+    // (Fix Pass 3 A1: the post-restore article is a draft now, so
+    // the public total is 25 seed + 1 live = 26 — the draft is
+    // hidden from the public list. Its existence on id 29 is
+    // asserted above.)
     const list = await handleRequest(req('GET', '/api/articles?limit=100'), env);
-    assert.equal((await list.json()).total, 27, '25 seed + 1 live + 1 created after restore');
+    assert.equal((await list.json()).total, 26, '25 seed + 1 live (the post-restore article is a draft)');
     const edited1 = await handleRequest(req('GET', '/api/articles/ev-charging-at-home-complete-beginners-guide'), env);
     assert.equal(edited1.status, 200, 'edited article 1 visible under its original slug');
     assert.equal((await edited1.json()).article.title, 'EV Charging at Home: UPDATED Title');
