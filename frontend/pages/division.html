@@ -22,7 +22,7 @@
 <meta name="twitter:title" content="Divisions — FS AI">
 <meta name="twitter:description" content="All FS AI divisions, one platform.">
 <meta name="twitter:image" content="https://fs-ai-5w5.pages.dev/og-image.png">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"CollectionPage","name":"Divisions — FS AI","url":"https://fs-ai-5w5.pages.dev/pages/division","isPartOf":{"@type":"WebSite","name":"FS AI","url":"https://fs-ai-5w5.pages.dev/"}}</script>
+<script type="application/ld+json" id="divisionJsonLd">{"@context":"https://schema.org","@type":"CollectionPage","name":"Divisions — FS AI","url":"https://fs-ai-5w5.pages.dev/pages/division","isPartOf":{"@type":"WebSite","name":"FS AI","url":"https://fs-ai-5w5.pages.dev/"}}</script>
 <!-- Per-division title/description/canonical are updated by JavaScript when
      ?division= is present; crawlers without JS see these generic tags. -->
 <noscript><style>.grid-loading{display:none}</style></noscript>
@@ -94,6 +94,24 @@ document.addEventListener('DOMContentLoaded', function () {
     if (ogUrl) ogUrl.setAttribute('content', divCanonical);
     var canon = document.querySelector('link[rel="canonical"]');
     if (canon) canon.setAttribute('href', divCanonical);
+    /* A3: twitter tags + per-division JSON-LD, same values as the og tags
+       above. The all-divisions view (no div) keeps the static generic
+       CollectionPage shipped in <head>. */
+    var twTitle = document.querySelector('meta[name="twitter:title"]');
+    if (twTitle) twTitle.setAttribute('content', div.name + ' — FS AI');
+    var twDesc = document.querySelector('meta[name="twitter:description"]');
+    if (twDesc) twDesc.setAttribute('content', div.description);
+    var divLd = {
+      '@context': 'https://schema.org', '@type': 'CollectionPage',
+      name: div.name + ' — FS AI', url: divCanonical, description: div.description,
+      isPartOf: { '@type': 'WebSite', name: 'FS AI', url: 'https://fs-ai-5w5.pages.dev/' }
+    };
+    var oldDivLd = document.getElementById('divisionJsonLd');
+    if (oldDivLd) {
+      /* In-place update: the static element keeps its id and position in
+         <head>; only its content becomes per-division. */
+      oldDivLd.textContent = JSON.stringify(divLd);
+    }
     /* Plain name first, then the icon + name as markup: a real browser
        reports the plain name from the markup children, and this keeps the
        name present even where only the text is read. */

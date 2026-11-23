@@ -106,6 +106,13 @@ document.addEventListener('DOMContentLoaded', function () {
   setMeta('twitter:description', a.excerpt, 'name');
   setMeta('twitter:image', 'https://fs-ai-5w5.pages.dev/og-image.png', 'name');
   setMeta('twitter:card', 'summary_large_image', 'name');
+  /* A3: og article properties — published date (from a.date, the Set B
+     published date), the division as the section, the category as the tag.
+     No modified-date field: neither the static bundle nor the live loader
+     carries a modified date, and inventing one would be false. */
+  setMeta('article:published_time', a.date, 'property');
+  setMeta('article:section', a.division, 'property');
+  if (a.category) setMeta('article:tag', a.category, 'property');
   setLink('canonical', canonical);
   var ld = {
     '@context': 'https://schema.org', '@type': 'Article',

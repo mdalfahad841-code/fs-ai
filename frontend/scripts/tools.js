@@ -489,6 +489,25 @@
       if (ogUrl) ogUrl.setAttribute('content', toolCanonical);
       var canon = document.querySelector('link[rel="canonical"]');
       if (canon) canon.setAttribute('href', toolCanonical);
+      /* A3: twitter tags + per-tool JSON-LD (WebApplication), same values
+         as the og tags above. A bare load (no ?tool=) keeps the static
+         WebPage JSON-LD shipped in <head>. */
+      var twTitle = document.querySelector('meta[name="twitter:title"]');
+      if (twTitle) twTitle.setAttribute('content', def.name + ' — FS AI');
+      var twDesc = document.querySelector('meta[name="twitter:description"]');
+      if (twDesc && toolDesc) twDesc.setAttribute('content', toolDesc);
+      var toolLd = {
+        '@context': 'https://schema.org', '@type': 'WebApplication',
+        name: def.name + ' — FS AI', url: toolCanonical,
+        applicationCategory: 'UtilitiesApplication', operatingSystem: 'Any'
+      };
+      if (toolDesc) toolLd.description = toolDesc;
+      var oldToolLd = document.getElementById('toolsJsonLd');
+      if (oldToolLd) {
+        /* In-place update: the static element keeps its id and position
+           in <head>; only its content becomes per-tool. */
+        oldToolLd.textContent = JSON.stringify(toolLd);
+      }
     }
     if (list) {
       list.querySelectorAll('button').forEach(function (b) {
