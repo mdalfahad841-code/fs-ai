@@ -656,7 +656,7 @@ describe('A5.8 sitemap-refresh: API failure is NOT TESTED, success OK, failed ru
     assert.match(report.checks.sitemapRefresh.detail.reason, /fetch failed/);
   });
 
-  it('is OK on a successful run and reports the age (never fails on age — A7 owns that)', async () => {
+  it('is OK on a fresh successful run and reports the age (A7 warns when the last success is over 3 h old)', async () => {
     const { env } = freshEnv();
     const report = await buildDailyHealthReport(env, {
       health: healthyHealth(),

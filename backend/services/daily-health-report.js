@@ -38,8 +38,12 @@
  * show up as a "settings changed" warning. The proof itself is surfaced
  * by check 13 instead.
  *
- * Sitemap-refresh age (check 7) is REPORTED but never fails on age:
- * the >3 h staleness alert is close-out A7, not A5.
+ * Sitemap-refresh age (check 7): the age is reported, and — since
+ * close-out A7 — a last successful run older than
+ * SITEMAP_REFRESH_STALE_HOURS (3 h) WARNs. The workflow runs hourly,
+ * so a gap over 3 h means the served sitemap may be out of date (or
+ * the schedule was disabled — GitHub auto-disables scheduled workflows
+ * after 60 days without repo activity).
  *
  * The Daily Shorts cron (check 10) is ALWAYS NOT TESTED: it lives in
  * Muse (fs-ai-daily-short-upload), not in the Worker or D1, so the
@@ -60,6 +64,11 @@ export const GITHUB_REPO = 'mdalfahad841-code/fs-ai';
 
 /** Per-fetch timeout, same AbortController pattern as backend/rss/rss.js fetchFeed. */
 export const FETCH_TIMEOUT_MS = 10 * 1000;
+
+/** Sitemap-refresh staleness limit (close-out A7): the workflow runs
+ * hourly, so a last successful run older than this many hours means
+ * the served sitemap may be out of date — check 7 WARNs. */
+export const SITEMAP_REFRESH_STALE_HOURS = 3;
 
 /** Protected / legacy drafts whose bodies must never change unnoticed (live ids 26–33). */
 export const PROTECTED_DRAFT_IDS = [26, 27, 28, 29, 30, 31, 33];
@@ -312,7 +321,10 @@ async function lastRunsCheck(env, today, nowMs) {
 
 /* ------------------------------------------------------------------ */
 /* Check 7 — last sitemap-refresh workflow run (GitHub API, no auth).  */
-/* A5 reports the age honestly; the >3 h staleness alert is A7.        */
+/* A7: a last SUCCESSFUL run older than SITEMAP_REFRESH_STALE_HOURS    */
+/* (3 h) WARNs — the workflow runs hourly, so a gap that long means   */
+/* the served sitemap may be out of date. Age is always reported in   */
+/* the detail, whatever the status.                                    */
 /* ------------------------------------------------------------------ */
 
 async function sitemapRefreshCheck(fetchImpl, githubRepo, nowMs) {
@@ -344,7 +356,20 @@ async function sitemapRefreshCheck(fetchImpl, githubRepo, nowMs) {
     runId: typeof run.id === 'number' ? run.id : null,
     htmlUrl: typeof run.html_url === 'string' ? run.html_url : null,
   };
-  if (run.conclusion === 'success') return check(OK, detail);
+  if (run.conclusion === 'success') {
+    // A7 staleness alert: the workflow runs hourly, so the last
+    // success being over 3 h old means the served sitemap may be out
+    // of date (or the schedule was disabled). An unparseable timestamp
+    // (ageHours null) cannot prove staleness — the success stands OK
+    // and the null age is reported honestly in the detail.
+    if (detail.ageHours !== null && detail.ageHours > SITEMAP_REFRESH_STALE_HOURS) {
+      return check(WARN, {
+        ...detail,
+        reason: `Last successful sitemap-refresh run is ${detail.ageHours} h old — over the ${SITEMAP_REFRESH_STALE_HOURS} h staleness limit (the workflow runs hourly; check the Actions tab).`,
+      });
+    }
+    return check(OK, detail);
+  }
   if (run.conclusion === null || run.conclusion === undefined) {
     return notTested('Latest sitemap-refresh run is still in progress (no conclusion yet).');
   }
