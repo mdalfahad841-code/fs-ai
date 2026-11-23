@@ -18,6 +18,7 @@
 import { d1All, d1First, d1Run, nowIso, DISCLAIMER_DIVISIONS, isMissingColumnError } from '../middleware/validation.js';
 import { getEmergencyStop } from '../routes/admin.js';
 import { bodyHash } from '../utils/bodyHash.js';
+import { claimKey } from '../agents/autonomy/factcheck.js';
 import { hasDraftBanner, stripDraftBanner } from '../utils/draftBanner.js';
 import {
   adviceClaimNeedsAuthority, extractLinkedArticleIds, getDivisionConfig,
@@ -62,6 +63,69 @@ async function setting(env, key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * Open-correction count for the publish gate (check 4) and the
+ * auto-publish eligibility wrapper — the SINGLE counting rule, so the
+ * two verdicts can never disagree about corrections.
+ *
+ * Phase 3, Priority 5: the gate counts unresolved CLAIMS, not rows —
+ * a claim is open when its LATEST correction row is still
+ * pending/failed; an earlier failed row followed by an applied row is
+ * resolved, and duplicate open rows for one claim count once.
+ *
+ * B6 (2026-11-23): the latest row per claim is not enough — a row can
+ * go STALE. Live #33 kept 4 attempt-1 'failed' rows whose claims the
+ * fresh latest fact-check (fc 34, 15/15 PASS) judged VERIFIED on full
+ * evidence — those claims never needed a correction, but the gate
+ * counted them and stayed Blocked. Live #30 kept rows for claims its
+ * correction had removed or reworded, so the fresh latest run (fc 35)
+ * no longer contains them at all. A stale row is history, not
+ * outstanding work — so when the latest fact-check run is FRESH (its
+ * recorded body_hash matches the article's current body), a correction
+ * counts as open ONLY if its claim still appears in that run with a
+ * verdict other than VERIFIED. A claim absent from the fresh run is
+ * gone from the body (removed/reworded); its correction rows are not
+ * counted. When the latest run is stale or absent there is no run to
+ * judge staleness against, so the count falls back to the latest-row
+ * rule (fail-closed — the pre-B6 behaviour). Before migration 017 (no
+ * claim_key column) the old row-count query is used instead.
+ *
+ * Claim identity is claimKey() (factcheck.js) — the same 200-char
+ * truncated key the correction flow writes — so a backfilled key and a
+ * fresh run's claim text compare equal. The truncation is lossy (two
+ * long claims can share a 200-char prefix); a collision can only
+ * over-count, never hide a genuinely failing claim the run still lists.
+ */
+export async function countOpenCorrections(env, articleId, { latestCheck = null, currentBodyHash = null } = {}) {
+  let latestRows;
+  try {
+    latestRows = await d1All(env,
+      "SELECT c.id, c.claim_key, c.original_text FROM (SELECT COALESCE(claim_key, original_text) AS k, MAX(id) AS max_id FROM article_corrections WHERE article_id = ? GROUP BY k) latest JOIN article_corrections c ON c.id = latest.max_id WHERE c.status IN ('pending', 'failed')",
+      [articleId]) || [];
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    const row = await d1First(env,
+      "SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = ? AND status IN ('pending', 'failed')", [articleId]);
+    return Number(row ? row.n : 0);
+  }
+  const fresh = Boolean(latestCheck)
+    && typeof latestCheck.body_hash === 'string' && latestCheck.body_hash.length > 0
+    && typeof currentBodyHash === 'string' && currentBodyHash.length > 0
+    && latestCheck.body_hash === currentBodyHash;
+  if (!fresh) return latestRows.length;
+  const claimRows = await d1All(env,
+    'SELECT claim_text, verdict FROM claim_checks WHERE fact_check_id = ?', [latestCheck.id]) || [];
+  const unresolvedKeys = new Set();
+  for (const r of claimRows) {
+    if (r.verdict !== 'VERIFIED') unresolvedKeys.add(claimKey(r.claim_text || ''));
+  }
+  let open = 0;
+  for (const row of latestRows) {
+    if (unresolvedKeys.has(row.claim_key || claimKey(row.original_text || ''))) open += 1;
+  }
+  return open;
 }
 
 export async function evaluatePublishGate(env, articleId) {
@@ -148,24 +212,14 @@ export async function evaluatePublishGate(env, articleId) {
   push('sources-verified', sourcesOk, sourcesDetail);
 
   // 4. Correction re-check: no correction left pending/failed.
-  // Phase 3, Priority 5: the gate counts unresolved CLAIMS, not rows.
-  // A claim is unresolved when its LATEST correction row is still
-  // pending/failed — an earlier failed row followed by an applied row
-  // is resolved, and duplicate open rows for one claim count once.
-  // Before migration 017 (no claim_key column) the old row-count
-  // query is used instead.
-  let openCorrections = null;
-  try {
-    openCorrections = await d1First(env,
-      "SELECT COUNT(*) AS n FROM (SELECT COALESCE(claim_key, original_text) AS k, MAX(id) AS max_id FROM article_corrections WHERE article_id = ? GROUP BY k) latest JOIN article_corrections c ON c.id = latest.max_id WHERE c.status IN ('pending', 'failed')", [id]);
-  } catch (e) {
-    if (!isMissingColumnError(e)) throw e;
-    openCorrections = await d1First(env,
-      "SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = ? AND status IN ('pending', 'failed')", [id]);
-  }
-  push('correction-recheck', !(openCorrections && Number(openCorrections.n) > 0),
-    openCorrections && Number(openCorrections.n) > 0
-      ? `${openCorrections.n} correction claim(s) still pending or failed.`
+  // Counted by countOpenCorrections() (the single rule shared with
+  // the auto-publish wrapper): latest row per claim, ignoring rows
+  // the fresh latest fact-check has judged stale — VERIFIED there, or
+  // gone from the body entirely (live #33 / #30, B6).
+  const openCorrections = await countOpenCorrections(env, id, { latestCheck, currentBodyHash });
+  push('correction-recheck', openCorrections === 0,
+    openCorrections > 0
+      ? `${openCorrections} correction claim(s) still pending or failed.`
       : 'No open corrections (re-check passes or nothing to correct).');
 
   // 5. SEO passes (latest run) — and the run must be FRESH (W3
@@ -690,17 +744,10 @@ export async function evaluateAutoPublishEligibility(env, articleId, { seoWaiver
       [latestCheck.id]);
     verifiedClaimsWithoutEvidence = Number(row ? row.n : 0);
   }
-  let openCorrections = 0;
-  try {
-    const row = await d1First(env,
-      "SELECT COUNT(*) AS n FROM (SELECT COALESCE(claim_key, original_text) AS k, MAX(id) AS max_id FROM article_corrections WHERE article_id = ? GROUP BY k) latest JOIN article_corrections c ON c.id = latest.max_id WHERE c.status IN ('pending', 'failed')", [id]);
-    openCorrections = Number(row ? row.n : 0);
-  } catch (e) {
-    if (!isMissingColumnError(e)) throw e;
-    const row = await d1First(env,
-      "SELECT COUNT(*) AS n FROM article_corrections WHERE article_id = ? AND status IN ('pending', 'failed')", [id]);
-    openCorrections = Number(row ? row.n : 0);
-  }
+  // 5. Correction re-check — same single rule as the gate (see
+  // countOpenCorrections): latest row per claim, ignoring rows the
+  // fresh latest fact-check has judged stale (live #33 / #30, B6).
+  const openCorrections = await countOpenCorrections(env, id, { latestCheck, currentBodyHash });
   const linkedArticleIds = extractLinkedArticleIds(article.body);
   let linkedArticles = [];
   if (linkedArticleIds.length) {

@@ -296,18 +296,27 @@ async function deleteArticle(env, id, auth) {
   // WS-E finding L4 (Workstream A fix, 2026-11-21): the old code
   // deleted only the articles row, leaving orphan article_tags and
   // article_sources rows behind. Clean up the article's own rows.
-  // (Both tables declare ON DELETE CASCADE, so in an FK-enforcing
-  // DB the cascade already removed them — these DELETEs delete 0
-  // rows there and are harmless. On live D1 the Worker's connection
-  // does not run schema.sql's PRAGMA foreign_keys = ON, so the
-  // cascade may NOT fire and the explicit DELETEs are what actually
-  // removes the orphans. Either way no orphan survives.)
-  // Revisions / fact_checks / seo_checks are kept by design as
-  // history where the cascade does not remove them; the audit row
-  // (migration 025, no FK to articles) is the durable record of the
-  // deletion either way — it records how many revisions existed at
-  // delete time (revisions_kept), since the revision rows themselves
-  // cascade away in an FK-enforcing DB.
+  // Both tables declare ON DELETE CASCADE, and D1 enforces foreign
+  // keys by default (PRAGMA foreign_keys reads 1 on live D1), so the
+  // cascade already removes them there — these DELETEs delete 0 rows
+  // and are harmless. The explicit DELETEs are the safety net for a
+  // store where the cascade does not fire. Either way no orphan
+  // survives.
+  // B4 (2026-11-23, comment corrected — behaviour UNCHANGED, see the
+  // close-out ledger): article_revisions also declares ON DELETE
+  // CASCADE, so a delete removes its revisions; the audit row
+  // (migration 025, no FK to articles) is the durable record either
+  // way — it records how many revisions existed at delete time
+  // (revisions_kept). But fact_checks and seo_checks declare
+  // REFERENCES articles(id) with NO ACTION, so deleting an article
+  // that has fact-check/SEO rows FAILS on live D1 with FOREIGN KEY
+  // constraint failed — nothing is deleted. This function does NOT
+  // delete those rows first and does NOT refuse the delete up front;
+  // whether to delete them explicitly or refuse with a clean 409 is
+  // an open decision (ledger B4 carried item) — do NOT test it by
+  // deleting a live article. Note: the audit row above is written
+  // before the DELETE, so a delete that fails on the FK still leaves
+  // an audit row for an article that still exists.
   await d1Run(env, 'DELETE FROM article_tags WHERE article_id = ?', [id]);
   await d1Run(env, 'DELETE FROM article_sources WHERE article_id = ?', [id]);
   return jsonOk({ ok: true, deleted: Number(id) });

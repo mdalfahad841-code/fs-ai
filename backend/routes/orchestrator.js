@@ -1253,7 +1253,18 @@ async function handleRecheckArticle(request, env, id) {
   const previous = before
     ? { id: before.id, verdict: before.verdict, claimsTotal: before.claims_total, claimsVerified: before.claims_verified, claimsFailed: before.claims_failed, createdAt: before.created_at }
     : null;
-  let task = existingTasks[0] || null;
+  // B6 (§7 follow-up): never convert a PENDING correction retry into a
+  // fact-check. findFactCheckTasksForArticle returns the newest row
+  // regardless of kind/status; when that row is a kind='correct' task
+  // still 'queued' for retry, forcing its kind to 'fact-check'
+  // silently consumes the retry (live #33 task #44, run #172). The
+  // find below reuses the newest row that is NOT a pending correction
+  // instead, and only enqueues a fresh task when no such row exists —
+  // so the pending correction row is left untouched and stays runnable
+  // from the task queue. Terminal rows (done/failed/skipped) keep the
+  // live-verified #31 reuse behaviour (runs #121/#122): a done
+  // kind='correct' row is still reused and forced to 'fact-check'.
+  let task = existingTasks.find((t) => !(t.kind === 'correct' && t.status === 'queued')) || null;
   let taskReused = false;
   if (task) {
     taskReused = true;
