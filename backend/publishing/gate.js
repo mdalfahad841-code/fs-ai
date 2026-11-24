@@ -638,12 +638,17 @@ export function evaluateAutoPublishEligibilityPure(input) {
   }
   push('seo-fresh-pass', seoOk, seoDetail);
 
-  // 7. Duplicate detection: exactly 0% shingle overlap vs published
-  //    articles (stricter than the SEO suite's <25% pass bar — an
-  //    auto-published article must not reuse any 5-word run). The
-  //    overlap is read from the duplicate check's own detail string;
-  //    an unparseable detail fails closed. "No other published
-  //    articles to compare against" counts as 0%.
+  // 7. Duplicate detection: exactly 0% shingle overlap vs every
+  //    other non-archived article (stricter than the SEO suite's <25%
+  //    pass bar — an auto-published article must not reuse any 5-word
+  //    run). The overlap is read from the duplicate check's own detail
+  //    string; an unparseable detail fails closed. The SEO suite
+  //    compares against ALL articles, draft or published (see
+  //    backend/agents/autonomy/seo.js duplicate check), so the detail
+  //    below names "another article" — never "another published
+  //    article", which misstated the comparator (Fix Pass 4 F3: all
+  //    five live non-zero overlaps were vs other drafts). "No other
+  //    published articles to compare against" counts as 0%.
   const dupEntry = seoCheck && !seoStale ? seoCheckByName(seoChecks, 'duplicate') : null;
   let dupOk = false;
   let dupDetail;
@@ -664,9 +669,9 @@ export function evaluateAutoPublishEligibilityPure(input) {
       dupDetail = 'Duplicate check passed but its overlap percentage is unreadable — refusing (fail-closed).';
     } else if (Number(m[1]) === 0) {
       dupOk = true;
-      dupDetail = 'Highest 5-word shingle overlap with another published article: 0%.';
+      dupDetail = 'Highest 5-word shingle overlap with another article: 0%.';
     } else {
-      dupDetail = `Highest 5-word shingle overlap with another published article: ${m[1]}% — auto-publish needs exactly 0%.`;
+      dupDetail = `Highest 5-word shingle overlap with another article: ${m[1]}% — auto-publish needs exactly 0%.`;
     }
   }
   push('duplicate-zero-overlap', dupOk, dupDetail);
@@ -682,7 +687,7 @@ export function evaluateAutoPublishEligibilityPure(input) {
   // 9. Internal-link validation: the body must link >=1 article, every
   //    linked article must resolve, and every resolved link must be
   //    genuinely relevant (same division AND title-keyword overlap).
-  //    An unrelated same-division link (live #31 -> #22) fails here
+  //    An unrelated same-division link fails here
   //    even though the SEO suite's own internal-links check passes.
   const internalEntry = seoCheck && !seoStale ? seoCheckByName(seoChecks, 'internal-links') : null;
   let linksOk = false;

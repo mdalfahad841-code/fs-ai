@@ -18,6 +18,7 @@ import { buildDailyHealthReport } from '../services/daily-health-report.js';
 import { HEALTH_REPORT_EXTERNAL_PATH } from './health-external.js';
 import { signInternalRequest } from '../security/crypto.js';
 import { runResearch } from '../agents/autonomy/research.js';
+import { fetchArticleEvidence } from '../services/article-fetch.js';
 import { runFactChecking } from '../agents/autonomy/factcheck.js';
 import { runSeo } from '../agents/autonomy/seo.js';
 import { evaluatePublishGate, publishGatePassed } from '../publishing/gate.js';
@@ -1195,7 +1196,28 @@ export async function drainTaskQueue(env, options = {}) {
           }
           if (conversion && conversion.converted) draftsConverted += 1;
         }
-        results.push({ ...base, outcome, attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, ...(conversion ? { conversion } : {}) });
+        // Fix Pass 4 F3: a drained daily-research task already fetched
+        // its division's feeds in this run. Record a small summary so
+        // the inline researchFetch step can skip re-fetching the same
+        // feeds (and count the drain's stored items instead of
+        // reporting 0). Additive only — no other consumer reads these
+        // entries' keys. The division falls back to the task payload
+        // when the agent result does not carry it.
+        let research = null;
+        if (task.agent === 'research' && task.kind === 'daily-research'
+          && res.result && typeof res.result === 'object') {
+          const rr = res.result;
+          const payloadDivision = task.payload && typeof task.payload.division === 'string'
+            ? task.payload.division : null;
+          research = {
+            division: typeof rr.division === 'string' ? rr.division : payloadDivision,
+            candidates: Array.isArray(rr.candidates) ? rr.candidates.length : 0,
+            itemsStored: Number(rr.itemsStored) || 0,
+            sourcesChecked: Number(rr.sourcesChecked) || 0,
+            fetchErrors: Array.isArray(rr.fetchErrors) ? rr.fetchErrors.length : 0,
+          };
+        }
+        results.push({ ...base, outcome, attempts: res.attempts, requeued: !!res.requeued, terminalState: res.terminalState || null, ...(conversion ? { conversion } : {}), ...(research ? { research } : {}) });
       } else {
         failed += 1;
         consecutiveFailures += 1;
@@ -1283,13 +1305,91 @@ async function step(env, agent, label, fn) {
 }
 
 /**
+ * Fix Pass 4 F3 — aggregate the drain's daily-research results by
+ * division. Input: the `results` array drainTaskQueue returns (each
+ * drained daily-research entry carries a `research` summary — see the
+ * drain loop). Output: { [division]: { division, candidates,
+ * itemsStored, sourcesChecked, fetchErrors, executions,
+ * cleanExecutions } }, where cleanExecutions counts executions that
+ * fetched the division's feeds with no fetch error at all. A division
+ * is "already fetched by the drain" exactly when cleanExecutions > 0:
+ * every enabled feed was fetched successfully at least once in this
+ * run, so an inline re-fetch would return only duplicates. Pure
+ * function (no D1, no fetch) so it is unit-testable in isolation.
+ */
+export function summarizeDrainedResearch(results) {
+  const byDivision = {};
+  for (const entry of Array.isArray(results) ? results : []) {
+    if (!entry || !entry.research || typeof entry.research.division !== 'string') continue;
+    const d = entry.research.division;
+    const cur = byDivision[d] || {
+      division: d, candidates: 0, itemsStored: 0, sourcesChecked: 0,
+      fetchErrors: 0, executions: 0, cleanExecutions: 0,
+    };
+    cur.candidates += Number(entry.research.candidates) || 0;
+    cur.itemsStored += Number(entry.research.itemsStored) || 0;
+    cur.sourcesChecked += Number(entry.research.sourcesChecked) || 0;
+    cur.fetchErrors += Number(entry.research.fetchErrors) || 0;
+    cur.executions += 1;
+    if ((Number(entry.research.sourcesChecked) || 0) > 0
+      && (Number(entry.research.fetchErrors) || 0) === 0) cur.cleanExecutions += 1;
+    byDivision[d] = cur;
+  }
+  return byDivision;
+}
+
+/**
+ * Fix Pass 4 F3 — fetch full-text evidence for drafts the drain just
+ * created, before the fact-check step runs. One fetchArticleEvidence
+ * call per draft article id (at most maxArticlesPerDay drafts exist
+ * per run). fetchArticleEvidence is fail-closed by design: a refusal
+ * (robots-denied, terms-prohibit-ai-use, paywall, 404) or a transient
+ * failure leaves the RSS-snippet evidence in place and returns a
+ * no-op/failed result — it never throws the run off. This wrapper
+ * additionally catches any unexpected throw per article, so one bad
+ * draft can never fail the whole step. Returns { attempted, enriched,
+ * results: [{ articleId, outcome, reason, researchItemId,
+ * extractedChars }] }.
+ */
+export async function enrichDraftEvidence(env, articleIds, { fetchImpl = fetch } = {}) {
+  const ids = (Array.isArray(articleIds) ? articleIds : [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  const results = [];
+  for (const articleId of ids) {
+    try {
+      const r = await fetchArticleEvidence(env, { articleId, fetchImpl });
+      results.push({
+        articleId, outcome: r.outcome, reason: r.reason || r.error || null,
+        researchItemId: r.researchItemId || null, extractedChars: r.extractedChars || 0,
+      });
+    } catch (err) {
+      results.push({
+        articleId, outcome: 'failed',
+        reason: String((err && err.message) || err).slice(0, 200),
+        researchItemId: null, extractedChars: 0,
+      });
+    }
+  }
+  return {
+    attempted: ids.length,
+    enriched: results.filter((r) => r.outcome === 'done').length,
+    results,
+  };
+}
+
+/**
  * Daily workflow. Steps: (0) drain the queue (W1: runHealthCheck,
  * then runTask per eligible queued task, oldest-first, max 10
  * ATTEMPTED per run — skipped tasks do not consume a slot, B2);
  * (1) security health check; (2) enqueue research
  * for the two thinnest divisions; (3) fetch RSS inline when
- * auto_research is on; (4) enqueue content tasks from today's fresh
+ * auto_research is on (Fix Pass 4 F3: divisions the drain already
+ * fetched are skipped and the drain's stored counts are reported);
+ * (4) enqueue content tasks from today's fresh
  * research items when auto_generation is on (daily limit respected);
+ * (4b) fetch full-text evidence for drafts the drain converted this
+ * run (Fix Pass 4 F3 evidence-enrich, before fact-checking);
  * (5) enqueue fact-checks for pending_approval articles; (6) run
  * fact-checks inline when auto_factcheck is on; (7) run corrections
  * inline when auto_correction is on; (8) run SEO checks inline for
@@ -1416,6 +1516,12 @@ export async function runDailyWorkflow(env, { force = false, fetchImpl = fetch }
       processed: drain.processed, done: drain.done, failed: drain.failed, skipped: drain.skipped,
       stoppedReason: drain.stoppedReason,
       healthOverall: drain.health ? drain.health.overall : null,
+      // Fix Pass 4 F3: the step result dropped draftsConverted, so the
+      // daily report's queueDraftsConverted count always read 0 even
+      // when the drain converted a draft — the same "counts lie by
+      // omission" defect class as the research counts below. Pass it
+      // through so the report tells the truth.
+      draftsConverted: drain.draftsConverted,
       // A5: the health-report step reads this — drainTaskQueue already
       // computed runHealthCheck, so the report reuses it instead of
       // calling runHealthCheck a second time (which would double-write
@@ -1451,16 +1557,35 @@ export async function runDailyWorkflow(env, { force = false, fetchImpl = fetch }
     if (flags.auto_research !== 'on') return { outcome: 'no-op', reason: 'auto_research is off.' };
     const counts = await divisionCounts(env);
     const thinnest = counts.slice(0, 2);
+    // Fix Pass 4 F3: the queue drain (step 0) already ran yesterday's
+    // daily-research tasks for these same divisions minutes ago in
+    // this run. Re-fetching the same feeds here returned only
+    // duplicates (every item the drain just stored) and made the daily
+    // counts read 0. Skip a division the drain already fetched
+    // cleanly, and count the drain's stored items instead — the daily
+    // counts now report what the RUN stored, not what the inline step
+    // alone stored. A division is skipped only when the drain fetched
+    // it with no fetch error; any error, failure, or skip in the drain
+    // falls through to the inline fetch exactly as before.
+    const drained = summarizeDrainedResearch(steps.queueDrain.result?.results);
     let fetched = 0;
     let added = 0;
     const errors = [];
+    const skipped = [];
     for (const d of thinnest) {
+      const s = drained[d.division];
+      if (s && s.cleanExecutions > 0) {
+        fetched += s.candidates;
+        added += s.itemsStored;
+        skipped.push(d.division);
+        continue;
+      }
       const r = await runResearch({ agent: 'research', kind: 'daily-research', payload: { division: d.division } }, env);
       if (r.outcome === 'done') { fetched += (r.candidates || []).length; added += r.itemsStored || 0; }
       else if (r.outcome === 'failed') errors.push({ division: d.division, error: r.error });
       else if (Array.isArray(r.fetchErrors)) errors.push(...r.fetchErrors);
     }
-    return { outcome: errors.length && !fetched ? 'failed' : 'done', divisions: thinnest.map((d) => d.division), fetched, added, errors };
+    return { outcome: errors.length && !fetched ? 'failed' : 'done', divisions: thinnest.map((d) => d.division), fetched, added, errors, skipped };
   });
 
   steps.contentFromResearch = await step(env, 'content-creation', 'content-from-research', async () => {
@@ -1485,6 +1610,27 @@ export async function runDailyWorkflow(env, { force = false, fetchImpl = fetch }
       if (res.ok) (res.duplicate ? duplicates++ : enqueued++);
     }
     return { outcome: 'done', candidates: items.length, enqueued, duplicates, skippedExisting, dailyLimit };
+  });
+
+  steps.evidenceEnrich = await step(env, 'research', 'evidence-enrich', async () => {
+    // Fix Pass 4 F3: a draft the drain converted this run was written
+    // from a 500-char RSS snippet (parseFeedXml caps every summary).
+    // Fetch the full source text for each such draft — at most one per
+    // run (maxArticlesPerDay is 1) — BEFORE the fact-check step runs,
+    // so the fact-checker judges against full text instead of the
+    // snippet. Only drafts the drain converted in THIS run are
+    // enriched (conversion.converted === true); a slug that already
+    // existed (alreadyConverted) is an older draft and is left to the
+    // manual article-fetch task. A refusal or failure leaves the RSS
+    // evidence in place and never blocks the run (see
+    // enrichDraftEvidence); days with no new draft are a clean
+    // no-op (attempted: 0).
+    const created = (steps.queueDrain.result?.results || [])
+      .filter((r) => r && r.conversion && r.conversion.converted === true
+        && Number.isInteger(r.conversion.articleId))
+      .map((r) => r.conversion.articleId);
+    const enriched = await enrichDraftEvidence(env, created, { fetchImpl });
+    return { outcome: 'done', ...enriched };
   });
 
   steps.factCheckQueue = await step(env, 'fact-checking', 'fact-check-queue', async () => {

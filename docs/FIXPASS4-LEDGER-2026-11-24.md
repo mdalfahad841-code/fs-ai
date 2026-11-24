@@ -297,7 +297,7 @@ and re-ran: 29/29 green, full suite 1775/0.
   subrequests, with queue `checkedAt` present. A 25 Nov 07:00 Dhaka
   verification is required (same as Fix Pass 3 A6(a)).
 
-## F2. CSP CONNECT-SRC — BUILT, awaiting deploy
+## F2. CSP CONNECT-SRC — DONE (built, deployed, live-verified; GA4-violation re-check in 1–2 days)
 
 - Status: BUILT (coordinator done 2026-11-24 ~12:05 Dhaka). NOT
   deployed yet — the parent deploys, live-verifies with raw GET, and
@@ -355,7 +355,152 @@ and re-ran: 29/29 green, full suite 1775/0.
 - Rollback: restore frontend/_headers + tests/pages-headers.test.js
   from the fixpass4 backup and redeploy; no D1 change involved.
 
-## F3. RESEARCH FIX — [PENDING]
+- **DEPLOYED: run #74 GREEN (2026-11-24 11:59–12:04 Dhaka, 11 s),
+  HEAD 94cb4a3b0adab56452e9e5840021188411603814, parent a05e5d5 (F1),
+  3 files +121/−4.** Squash worked this time (repo 103 → 102).
+  https://github.com/mdalfahad841-code/fs-ai/actions/runs/45337153092
+  Parent re-ran the suite: 1776/0 exact match.
+- Live evidence (raw GET ~12:05 Dhaka): home 200; header
+  `content-security-policy-report-only` carries connect-src
+  `... https://www.google-analytics.com https://www.google.com`
+  — the new host is live; NO enforcing `content-security-policy`
+  header (still Report-Only only). Protected #26–#33, #34/#35
+  untouched (no live D1 writes in this pass so far).
+- NOT TESTED live: no new csp_reports rows after the deploy — that
+  re-check needs real traffic + 1–2 days (see above); expect the
+  total to stay at 16.
+
+## F3. RESEARCH FIX — BUILT, awaiting deploy
+
+- Design (least-risky, in two parts):
+  - **(a)+(b) Double-fetch + lying counts.** The drain (step 0) already
+    runs yesterday's daily-research tasks for the same 2 thinnest
+    divisions minutes before the inline `researchFetch` step, which
+    re-fetched the same 6 feeds and stored 0 (pure duplicates) while
+    the daily counts (`researchFetched`/`researchItemsStored`) measured
+    only the inline step — so they read 0 on days the drain stored 13.
+    Fix: `drainTaskQueue` now attaches a small `research` summary
+    (`division`, `candidates`, `itemsStored`, `sourcesChecked`,
+    `fetchErrors`) to each drained daily-research result entry
+    (additive only — no other consumer reads those entries' keys);
+    new exported pure helper `summarizeDrainedResearch()` aggregates
+    them per division; the inline step skips a division the drain
+    already fetched cleanly (`cleanExecutions > 0`, i.e. at least one
+    drain execution fetched all its feeds with zero fetch errors) and
+    counts the drain's candidates/itemsStored instead. The daily
+    report lines are unchanged — they now read the run's real totals.
+    A division is NOT skipped (inline fetch runs exactly as before)
+    when the drain never ran it, failed it, skipped it, or any feed
+    errored — the retry/fallback behaviour is preserved. Which sources
+    are fetched is unchanged; the drain's behaviour is unchanged.
+    Side benefit (R3.7): 6 RSS fetches + their redirect hops are saved
+    every day, easing the subrequest budget F1 had to work around.
+  - **Drive-by fix in the same defect class (found by the F3 tests):
+    the daily report's `queueDraftsConverted` count always read 0.**
+    The queueDrain step's return object dropped `draftsConverted`
+    (the drain itself counted it correctly), so the summary line
+    `steps.queueDrain.result?.draftsConverted ?? 0` was always 0 even
+    on days the drain converted a draft. One line added
+    (`draftsConverted: drain.draftsConverted` in the step return).
+    Pre-existing bug, not introduced by F3; fixed here because it is
+    the same "counts lie by omission" defect in the same report.
+  - **(c) Full-text evidence — IMPLEMENTED (least-risky form).** New
+    daily step `evidenceEnrich` (after `contentFromResearch`, before
+    `factCheckQueue`): for each draft the drain converted THIS run
+    (`conversion.converted === true`, at most maxArticlesPerDay = 1),
+    call the existing `fetchArticleEvidence` (exported helper
+    `enrichDraftEvidence(env, articleIds, { fetchImpl })`) so the
+    fact-checker in the same run judges against full text, not the
+    500-char RSS snippet. Only the recorded `article_sources` URL is
+    fetched (the service's allowlist); robots.txt + publisher-terms
+    compliance are enforced inside the service (Guardian URLs refuse
+    with `terms-prohibit-ai-use` and keep the snippet — no workaround).
+    A refusal or failure leaves the RSS evidence in place and never
+    blocks the run (per-article try/catch in the helper; the step
+    always returns outcome 'done'). Days with no new draft are a
+    clean no-op (attempted: 0). A slug that already existed
+    (`alreadyConverted`) is NOT enriched — it is an older draft, left
+    to the manual article-fetch task. No new paid/keyed service; no
+    change to which sources are allowed; +2 fetches per new draft
+    (robots.txt + page) inside the main invocation's budget (drain 6
+    RSS + SEO HEADs 4–6 + this 2 ≈ 12–14 + hops — comfortable now
+    that the health report has its own invocation and the double-fetch
+    is gone).
+  - **NOT changed:** the 500-char `parseFeedXml` cap itself (raising
+    it would not give full text — RSS summaries are short by nature;
+    the fix is fetching the article, not widening the snippet);
+    the duplicate comparator (still ALL articles — comparing only vs
+    published would LOOSEN the 0% rule; that question goes to F6 as a
+    proposal); any gate logic, publish path, article, setting,
+    cron/schedule, OAuth flow, or the CSP header.
+- Wording fixes (R2 bug, fail-closed, cosmetic):
+  - `backend/publishing/gate.js`: the duplicate-zero-overlap detail
+    now says "Highest 5-word shingle overlap with another article:
+    X%" (was "another published article") in both the 0% and non-zero
+    branches, and the section comment now states the comparator is
+    every other non-archived article. The "No other published
+    articles to compare against (0% overlap)." branch is UNCHANGED —
+    with no other article at all, that statement is vacuously true,
+    and the SEO suite's detail phrase it parses is deliberately kept
+    (seo.js:490 comment; changing it would require changing the
+    gate's parser too). Behaviour unchanged: the 0% rule still
+    refuses on any overlap.
+  - Stale `#31 -> #22` example (verified live: #31's body links no
+    article, only the external Inside Higher Ed URL — read via the
+    D1 helper 2026-11-24): removed the "(live #31 -> #22)" claim
+    from the three present-tense comments
+    (`divisions.js` module doc + `isInternalLinkRelevant` doc,
+    `gate.js` internal-links comment). Deliberately LEFT:
+    `seo.js:632` (past tense — "The old repair linked…" — a true
+    historical statement) and `divisions.js:178` (hypothetical
+    mechanism — "would otherwise pass" — no live claim).
+- Files (exactly 4 paths vs the current tree; diff vs the fixpass4
+  backup is F1's 6 + F2's 2 + these 4 + the 2 docs):
+  `backend/routes/scheduler.js` (import; drain `research` summary;
+  `summarizeDrainedResearch` + `enrichDraftEvidence` exports;
+  `researchFetch` skip + counts; new `evidenceEnrich` step;
+  `draftsConverted` passthrough; doc comment),
+  `backend/publishing/gate.js` (duplicate wording + comment,
+  internal-links comment), `backend/publishing/divisions.js` (two
+  stale-example comments), NEW `tests/fixpass4-f3.test.js` (16 tests,
+  suites F3.1–F3.5).
+- Tests: before 1776/0 (455 suites, after F2) → after **1792/0 (460
+  suites)**; parent re-ran the full suite: 1792/0 exact match. No test
+  weakened. New tests: F3.1 `summarizeDrainedResearch` unit (6);
+  F3.2 full-run skip + counts (2 — drain stores 12, inline skips
+  both divisions, each feed URL fetched exactly once; partial-cover
+  case fetches the uncovered division inline); F3.3 full-run enrich
+  (2 — drain-converted draft gets 755-char full-text evidence,
+  source re-pointed, fetch audited; no-draft day is a clean no-op);
+  F3.4 helper fail-closed (3 — Guardian refusal keeps the snippet,
+  fetch throw never escapes, invalid ids ignored); F3.5 wording (3 —
+  0% and 6% vs a draft name "another article" and still refuse on
+  6%; the pass case still passes with the old SEO phrasing).
+  Two real defects caught by the tests during the build: the summary's
+  `steps` map stores only `{ outcome, error }` (step results must be
+  read from `agent_runs` detail — tests fixed, not the code), and the
+  `queueDraftsConverted` always-0 bug above (code fixed).
+- Negative control PASSED: with the three pre-change production files
+  restored from the fixpass4 backup tarball, the new test file runs
+  1 pass / 15 fail (exit 1); the single pass is F3.5's guard test
+  ("pass case still passes with the old phrasing"), which correctly
+  passes on both versions — it proves the wording fix did not break
+  the pass path. Restored, re-ran: 16/16 + full suite 1792/0.
+- Live proof still needed (parent): raw GET on the live site (home
+  200, Worker health 200, sitemap 60 URLs); the deployed code
+  containing `summarizeDrainedResearch` / `evidenceEnrich` /
+  "another article". The BEHAVIOURAL proof can only be observed
+  after the **25 Nov 00:00 UTC daily run**: the next report's
+  `researchFetched`/`researchItemsStored` should equal what the drain
+  stored (not 0), `rss_fetch_audit` should show each feed fetched
+  once (no inline duplicate executions), `queueDraftsConverted`
+  should read 1 on a day a draft converts, and a new draft's
+  `article_sources` should point at an `article-fetch` research item
+  with full-text evidence.
+- Rollback: restore the 3 production files + delete
+  `tests/fixpass4-f3.test.js` from the fixpass4 backup, redeploy.
+  The old inline behaviour returns immediately (the drain's extra
+  `research` field is ignored by old code).
 
 ## F4. INDEXNOW — [PENDING]
 

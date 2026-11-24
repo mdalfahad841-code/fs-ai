@@ -12,7 +12,7 @@
  *     require 2 sources, the rest 1.
  *   - internal-link scoping: links must be same-division AND topically
  *     relevant (title-keyword overlap — see isInternalLinkRelevant).
- *     A same-division link to an unrelated article (live #31 -> #22)
+ *     A same-division link to an unrelated article
  *     does NOT count.
  *   - schedule: an 8-day rolling rotation (cycleDays 8, one division
  *     per day, dayOffset 0-7) that respects the GLOBAL
@@ -192,7 +192,7 @@ const GENERIC_KEYWORDS = new Set([
  * target: same division AND at least one shared TOPICAL title keyword
  * (stopwords filtered, same function the SEO suite uses; generic
  * words like "guide" do not count). A same-division link with no
- * topical overlap (live #31 -> #22) is NOT relevant and must never
+ * topical overlap is NOT relevant and must never
  * satisfy the internal-links check.
  */
 export function isInternalLinkRelevant(article, linkedArticle) {
