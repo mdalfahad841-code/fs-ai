@@ -687,7 +687,10 @@ claim PASS from a desktop-width browser.
 
 - `docs/FIXPASS3-FINAL-REPORT-2026-11-23.md` — written 2026-11-24
   ~07:15 Dhaka, after the A6(a) read. Shipped to main in run #72
-  (docs-only deploy) — HEAD [to fill after deploy]. Delivered to the
+  (docs-only deploy) — HEAD ecad267f35d238157d506b0dc881ab2c15950582
+  (parent a20b9ab, 2 files +523/−16, run GREEN 11 s), parent-verified
+  live 2026-11-24 ~07:24 Dhaka (home 200, Worker health 200, final
+  report on main at ecad267, 388 lines). Delivered to the
   user in romanized Bangla with the ledger as attachments.
 - Pass totals: tests 1714/0 (439 suites) baseline → 1746/0 (450
   suites). Deploys #67–#71 all GREEN. Final HEAD before the report

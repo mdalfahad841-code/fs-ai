@@ -25,6 +25,7 @@ import { handleAdminArticles, publishDueArticles } from './routes/admin-articles
 import { handleNewsletter, handleAdminSubscribers } from './routes/newsletter.js';
 import { handleAdmin } from './routes/admin.js';
 import { handleAutonomy } from './routes/orchestrator.js';
+import { handleHealthReportExternal } from './routes/health-external.js';
 import { runDailyWorkflow, runWeeklyWorkflow } from './routes/scheduler.js';
 import { requireOwner } from './middleware/auth.js';
 import { rateLimit } from './middleware/rate-limit.js';
@@ -155,6 +156,16 @@ async function route(request, env, ctx) {
     const auth = await requireOwner(request, env);
     if (!auth.ok) return auth.response;
     return handleAdmin(request, env, ctx, auth);
+  }
+  // Internal health-report route (Fix Pass 4 F1): the daily run calls
+  // it once so the five external-fetch checks run in their own Worker
+  // invocation (fresh 50-subrequest budget). Auth is enforced INSIDE
+  // the handler — owner Bearer session OR the Worker's own HMAC-signed
+  // internal call (a cron invocation holds no owner session) — the
+  // same exemption shape as the social OAuth callback below. The
+  // handler is read-only: it runs the checks and returns them.
+  if (path === '/api/admin/health-report-external' && method === 'POST') {
+    return handleHealthReportExternal(request, env);
   }
   if (path.startsWith('/api/accounts') && method !== 'GET') {
     const auth = await requireOwner(request, env);

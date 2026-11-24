@@ -15,6 +15,8 @@ import { runAutonomyTask, DIVISION_RESEARCH_REGISTRY, registryIdForTask, QUEUE_A
 import { convertScaffoldToDraft, articlesCreatedToday } from '../agents/autonomy/content.js';
 import { runHealthCheck } from '../services/healthcheck.js';
 import { buildDailyHealthReport } from '../services/daily-health-report.js';
+import { HEALTH_REPORT_EXTERNAL_PATH } from './health-external.js';
+import { signInternalRequest } from '../security/crypto.js';
 import { runResearch } from '../agents/autonomy/research.js';
 import { runFactChecking } from '../agents/autonomy/factcheck.js';
 import { runSeo } from '../agents/autonomy/seo.js';
@@ -46,6 +48,80 @@ export { PROTECTED_TEST_ARTICLES };
 
 export function todayStr(date = new Date()) {
   return date.toISOString().slice(0, 10);
+}
+
+/**
+ * The Worker's own public URL (Fix Pass 4 F1) — the daily run calls
+ * the internal health-report route on it, so the five external-fetch
+ * checks run in their own Worker invocation with a fresh
+ * 50-subrequest budget. Hard-coded following the same precedent as
+ * backend/social/oauth.js:104 (the workers.dev URL is the Worker's
+ * stable public address; there is no env var for it).
+ */
+export const WORKER_BASE_URL = 'https://fs-ai.mdalfahad841.workers.dev';
+
+/** Safety valve on the single internal-route call: the route's five
+ * checks each carry a 10 s per-fetch timeout, so a hung route is cut
+ * off here and the builder falls back to the in-process checks. */
+export const HEALTH_REPORT_EXTERNAL_TIMEOUT_MS = 60 * 1000;
+
+/**
+ * Call the internal health-report route exactly once (Fix Pass 4 F1)
+ * and return its checks map, or null when the route is unavailable
+ * for any reason (no SESSION_SECRET configured, network error,
+ * non-200, unparseable body, wrong shape). The caller treats null as
+ * "route unavailable" and falls back to the in-process checks — a
+ * fetch failure is still reported as FAIL there, never OK.
+ *
+ * Auth: the request is HMAC-signed with env.SESSION_SECRET (see
+ * backend/security/crypto.js signInternalRequest) — the daily run is
+ * a cron invocation and holds no owner session, so it cannot present
+ * a requireOwner Bearer token. The signature covers method + path +
+ * timestamp; the timestamp is the same nowMs the report is built
+ * with, so the signed instant and the report instant agree.
+ */
+export async function fetchExternalHealthChecks(env, {
+  fetchImpl = fetch,
+  nowMs = Date.now(),
+  workerBaseUrl = WORKER_BASE_URL,
+} = {}) {
+  const secret = env && typeof env.SESSION_SECRET === 'string' ? env.SESSION_SECRET : '';
+  if (!secret) return null;
+  const timestamp = String(nowMs);
+  let signature = '';
+  try {
+    signature = await signInternalRequest(secret, 'POST', HEALTH_REPORT_EXTERNAL_PATH, timestamp);
+  } catch {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_REPORT_EXTERNAL_TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(`${workerBaseUrl}${HEALTH_REPORT_EXTERNAL_PATH}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-FS-AI-Internal-Timestamp': timestamp,
+        'X-FS-AI-Internal-Signature': signature,
+      },
+      body: JSON.stringify({}),
+      signal: controller.signal,
+    });
+    if (!res || res.status !== 200) return null;
+    let data = null;
+    try {
+      data = JSON.parse(await res.text());
+    } catch {
+      return null;
+    }
+    if (!data || typeof data !== 'object' || data.ok !== true
+      || typeof data.checks !== 'object' || data.checks === null) return null;
+    return data.checks;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function plusMinutes(baseIso, minutes) {
@@ -1297,7 +1373,7 @@ async function isFactCheckFreshForCurrentBody(env, articleId) {
   }
 }
 
-export async function runDailyWorkflow(env, { force = false } = {}) {
+export async function runDailyWorkflow(env, { force = false, fetchImpl = fetch } = {}) {
   if (!env || !env.DB) return { ok: false, error: 'D1 database is not bound.' };
   const date = todayStr();
   if (await getEmergencyStop(env)) {
@@ -1579,21 +1655,39 @@ export async function runDailyWorkflow(env, { force = false } = {}) {
     };
   });
 
-  // (15) Daily Autonomy Health Report (close-out A5, 2026-11-23):
-  // owner-only, produced by this existing daily run — no new cron.
-  // The report reuses the runHealthCheck result the queue drain
-  // already computed (steps.queueDrain.result.health) — it never calls
-  // runHealthCheck again (that writes rows). The step wrapper isolates
-  // failures, so a builder throw can never abort the run; the builder
-  // itself also never throws (every check is individually try/caught).
-  // The report lands in summary.healthReport, which upsertReport
-  // stores in the daily_reports row — that is the report's home; no
-  // new table. Read-only: it never publishes, edits or fixes anything.
+  // (15) Daily Autonomy Health Report (close-out A5, 2026-11-23;
+  // Fix Pass 4 F1, 2026-11-24): owner-only, produced by this existing
+  // daily run — no new cron. The report reuses the runHealthCheck
+  // result the queue drain already computed (steps.queueDrain.result
+  // .health) — it never calls runHealthCheck again (that writes rows).
+  // The five external-fetch checks (pages, sitemap, recentArticles,
+  // sitemapRefresh, serverSideHeads) are fetched from the internal
+  // route first: that route runs in its own Worker invocation with a
+  // fresh 50-subrequest budget, because this invocation's budget is
+  // already spent by the drain + SEO steps by the time the report
+  // runs (on 24 Nov they failed with "Too many subrequests"). The
+  // route is called exactly once; any failure returns null and the
+  // builder falls back to the in-process checks (today's behaviour —
+  // a fetch failure is still reported as FAIL, never OK). The step
+  // wrapper isolates failures, so a builder throw can never abort the
+  // run; the builder itself also never throws (every check is
+  // individually try/caught). The report lands in summary.healthReport,
+  // which upsertReport stores in the daily_reports row — that is the
+  // report's home; no new table. Read-only: it never publishes,
+  // edits or fixes anything.
   steps.healthReport = await step(env, 'scheduler', 'health-report', async () => {
+    const nowMs = Date.now();
+    let externalChecks = null;
+    try {
+      externalChecks = await fetchExternalHealthChecks(env, { fetchImpl, nowMs });
+    } catch {
+      externalChecks = null;
+    }
     const report = await buildDailyHealthReport(env, {
       health: steps.queueDrain.result?.health || null,
-      fetchImpl: fetch,
-      nowMs: Date.now(),
+      fetchImpl,
+      nowMs,
+      externalChecks,
     });
     return { outcome: 'done', ...report };
   });

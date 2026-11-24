@@ -25,6 +25,19 @@
  * NEVER calls runHealthCheck itself — that function writes
  * system_health_checks rows, and a second call would double-write.
  *
+ * External-fetch checks (Fix Pass 4 F1): the five checks that fetch
+ * public URLs (pages, sitemap, recentArticles, sitemapRefresh,
+ * serverSideHeads) can be supplied pre-computed via the
+ * `externalChecks` option — computed by the internal route
+ * (backend/routes/health-external.js) in its own Worker invocation,
+ * which has a fresh 50-subrequest budget. The daily run's own budget
+ * is exhausted by the drain + SEO steps before the report runs, so
+ * without this the checks fail with "Too many subrequests". Any key
+ * not supplied runs in-process exactly as before; a supplied check
+ * is used verbatim only if it carries one of the four honest
+ * statuses, so a fetch failure is still FAIL (or NOT TESTED),
+ * never OK.
+ *
  * Baselines (checks 8 + 9): the previous daily report's stored
  * healthReport snapshots are the baseline — NOT article_fingerprints
  * (those are as-of-last-SEO-check and provably stale: live #30 still
@@ -91,6 +104,21 @@ export const HEALTH_REPORT_CHECK_KEYS = [
   'workerHealth', 'pages', 'sitemap', 'recentArticles', 'queue', 'lastRuns',
   'sitemapRefresh', 'protectedDrafts', 'settings', 'shortsCron', 'lastVideo',
   'cspViolations', 'autoPublishProof', 'serverSideHeads',
+];
+
+/**
+ * The checks that fetch public URLs (Fix Pass 4 F1). They are the
+ * only checks that spend the Worker invocation's 50-subrequest
+ * budget — and the daily run's budget is already exhausted by the
+ * drain + SEO steps by the time the report runs (step 15), so on
+ * 24 Nov all of them failed with "Too many subrequests". They run
+ * unchanged in-process when no supplied results exist; when the
+ * caller passes results computed in the internal route's own
+ * invocation (runExternalHealthChecks, fresh budget), the builder
+ * uses those verbatim instead of fetching again.
+ */
+export const EXTERNAL_HEALTH_CHECK_KEYS = [
+  'pages', 'sitemap', 'recentArticles', 'sitemapRefresh', 'serverSideHeads',
 ];
 
 const OK = 'OK';
@@ -209,6 +237,16 @@ function queueCheck(health) {
     running: typeof detail.running === 'number' ? detail.running : null,
     stale: typeof detail.stale === 'number' ? detail.stale : null,
     oldestQueuedAt: detail.oldestQueuedAt || null,
+    // Fix Pass 4 F1: the queue numbers are a snapshot taken when the
+    // drain ran the health check (before any task executed) — the
+    // oldestQueuedAt value is correct for that moment, not live. Label
+    // the snapshot time so the reader can tell it is pre-drain: the
+    // component carries checkedAt (the health-check service's
+    // checkResult), and
+    // the run's top-level checkedAt is the same instant. Re-computing
+    // at report time is NOT done — it would need a second
+    // runHealthCheck call, which writes system_health_checks rows.
+    checkedAt: typeof queue.checkedAt === 'string' ? queue.checkedAt : null,
     reason: detail.reason || null,
   });
 }
@@ -721,6 +759,57 @@ async function serverSideHeadsCheck(env, fetchImpl, pagesBase) {
 }
 
 /* ------------------------------------------------------------------ */
+/* External-fetch checks as a standalone runner (Fix Pass 4 F1).       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Run exactly the five external-fetch checks (pages, sitemap,
+ * recentArticles, sitemapRefresh, serverSideHeads) and return them as
+ * a { key: check } map. Used by the internal route
+ * (backend/routes/health-external.js), which runs in its own Worker
+ * invocation with a fresh 50-subrequest budget — the same functions,
+ * same semantics, same fail-closed behaviour as the in-process path:
+ * a fetch failure is FAIL (or NOT TESTED for sitemapRefresh, exactly
+ * as the builder has always reported it), never OK. `only` restricts
+ * the run to a subset of EXTERNAL_HEALTH_CHECK_KEYS (unknown names
+ * are ignored here; the route validates them and answers 400).
+ */
+export async function runExternalHealthChecks(env, {
+  fetchImpl = fetch,
+  nowMs = Date.now(),
+  pagesBase = PAGES_BASE,
+  githubRepo = GITHUB_REPO,
+  only = null,
+} = {}) {
+  const wanted = Array.isArray(only) && only.length > 0
+    ? EXTERNAL_HEALTH_CHECK_KEYS.filter((k) => only.includes(k))
+    : EXTERNAL_HEALTH_CHECK_KEYS;
+  const checks = {};
+  const runOne = async (key, fn) => {
+    try {
+      checks[key] = await fn();
+    } catch (err) {
+      checks[key] = notTested(`Check could not run: ${String((err && err.message) || err).slice(0, 200)}`);
+    }
+  };
+  if (wanted.includes('pages')) await runOne('pages', () => pagesCheck(env, fetchImpl, pagesBase));
+  if (wanted.includes('sitemap')) await runOne('sitemap', () => sitemapCheck(env, fetchImpl, pagesBase));
+  if (wanted.includes('recentArticles')) await runOne('recentArticles', () => recentArticlesCheck(env, fetchImpl, pagesBase));
+  if (wanted.includes('sitemapRefresh')) await runOne('sitemapRefresh', () => sitemapRefreshCheck(fetchImpl, githubRepo, nowMs));
+  if (wanted.includes('serverSideHeads')) await runOne('serverSideHeads', () => serverSideHeadsCheck(env, fetchImpl, pagesBase));
+  return checks;
+}
+
+/** A supplied external check is usable only if it carries one of the
+ * four honest statuses — anything else (a wrong shape, a made-up
+ * status) is ignored and the check runs in-process instead. A fetch
+ * failure reported by the route is FAIL (or NOT TESTED), never OK. */
+function usableSuppliedCheck(value) {
+  return value && typeof value === 'object'
+    && ['OK', 'WARN', 'FAIL', 'NOT TESTED'].includes(value.status);
+}
+
+/* ------------------------------------------------------------------ */
 /* Builder.                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -728,7 +817,13 @@ async function serverSideHeadsCheck(env, fetchImpl, pagesBase) {
  * Build the Daily Autonomy Health Report. Reads D1 + public URLs only;
  * writes nothing. `health` is the runHealthCheck result the daily run
  * already computed (queue-drain step) — never re-fetched here.
- * Returns { date, generatedAt, overall, checks, snapshots }.
+ * `externalChecks` (Fix Pass 4 F1) is an optional map of the five
+ * external-fetch checks as computed by the internal route in its own
+ * Worker invocation (fresh subrequest budget); each supplied check is
+ * used verbatim, and any key not supplied runs in-process exactly as
+ * before — so when the route is unavailable the report behaves
+ * exactly as it did before this change. Returns
+ * { date, generatedAt, overall, checks, snapshots }.
  */
 export async function buildDailyHealthReport(env, {
   health = null,
@@ -736,11 +831,12 @@ export async function buildDailyHealthReport(env, {
   nowMs = Date.now(),
   pagesBase = PAGES_BASE,
   githubRepo = GITHUB_REPO,
+  externalChecks = null,
 } = {}) {
   const date = new Date(nowMs).toISOString().slice(0, 10);
   const generatedAt = new Date(nowMs).toISOString();
   try {
-    return await buildReport(env, { health, fetchImpl, nowMs, pagesBase, githubRepo, date, generatedAt });
+    return await buildReport(env, { health, fetchImpl, nowMs, pagesBase, githubRepo, date, generatedAt, externalChecks });
   } catch (err) {
     // Catastrophic builder failure: never throw into the daily run —
     // return a report whose checks all honestly say NOT TESTED.
@@ -751,7 +847,7 @@ export async function buildDailyHealthReport(env, {
   }
 }
 
-async function buildReport(env, { health, fetchImpl, nowMs, pagesBase, githubRepo, date, generatedAt }) {
+async function buildReport(env, { health, fetchImpl, nowMs, pagesBase, githubRepo, date, generatedAt, externalChecks = null }) {
   const checks = {};
   const runCheck = async (key, fn) => {
     try {
@@ -761,23 +857,33 @@ async function buildReport(env, { health, fetchImpl, nowMs, pagesBase, githubRep
     }
   };
 
+  // Fix Pass 4 F1: an external-fetch check supplied by the caller
+  // (computed in the internal route's own invocation) is used
+  // verbatim; anything not supplied — or supplied in an unusable
+  // shape — runs in-process exactly as before.
+  const useExternal = (key, fn) => async () => {
+    const supplied = externalChecks && typeof externalChecks === 'object' ? externalChecks[key] : null;
+    if (usableSuppliedCheck(supplied)) return supplied;
+    return fn();
+  };
+
   // The previous daily report's snapshots feed checks 8 + 9 (one read).
   const { snapshots: prevSnapshots, readError: prevReadError } = await readPreviousSnapshots(env, date);
 
   await runCheck('workerHealth', () => Promise.resolve(workerHealthCheck(health)));
-  await runCheck('pages', () => pagesCheck(env, fetchImpl, pagesBase));
-  await runCheck('sitemap', () => sitemapCheck(env, fetchImpl, pagesBase));
-  await runCheck('recentArticles', () => recentArticlesCheck(env, fetchImpl, pagesBase));
+  await runCheck('pages', useExternal('pages', () => pagesCheck(env, fetchImpl, pagesBase)));
+  await runCheck('sitemap', useExternal('sitemap', () => sitemapCheck(env, fetchImpl, pagesBase)));
+  await runCheck('recentArticles', useExternal('recentArticles', () => recentArticlesCheck(env, fetchImpl, pagesBase)));
   await runCheck('queue', () => Promise.resolve(queueCheck(health)));
   await runCheck('lastRuns', () => lastRunsCheck(env, date, nowMs));
-  await runCheck('sitemapRefresh', () => sitemapRefreshCheck(fetchImpl, githubRepo, nowMs));
+  await runCheck('sitemapRefresh', useExternal('sitemapRefresh', () => sitemapRefreshCheck(fetchImpl, githubRepo, nowMs)));
   await runCheck('protectedDrafts', () => protectedDraftsCheck(env, prevSnapshots, prevReadError));
   await runCheck('settings', () => settingsCheck(env, prevSnapshots, prevReadError));
   await runCheck('shortsCron', () => Promise.resolve(shortsCronCheck()));
   await runCheck('lastVideo', () => lastVideoCheck(env));
   await runCheck('cspViolations', () => cspViolationsCheck(env));
   await runCheck('autoPublishProof', () => autoPublishProofCheck(env));
-  await runCheck('serverSideHeads', () => serverSideHeadsCheck(env, fetchImpl, pagesBase));
+  await runCheck('serverSideHeads', useExternal('serverSideHeads', () => serverSideHeadsCheck(env, fetchImpl, pagesBase)));
 
   // Snapshots are the baselines the NEXT daily report compares against.
   // They are taken from the same reads the checks just did, so the

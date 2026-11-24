@@ -114,3 +114,36 @@ export function timingSafeEqual(a, b) {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+/**
+ * Internal Worker-to-Worker authentication (Fix Pass 4 F1): the daily
+ * run is a cron invocation and holds no owner session, so it signs its
+ * single call to the internal health-report route with an HMAC over
+ * method + path + timestamp, keyed by env.SESSION_SECRET (the secret
+ * the Worker already holds — no new secret, no live write). The
+ * signature is scoped to one path and expires after 5 minutes; the
+ * secret itself is never transmitted — unlike a Bearer token, a
+ * captured signature is useless after the window and only for that
+ * one path. Only code running inside this Worker can produce a valid
+ * signature. Verification is constant-time (timingSafeEqual).
+ */
+export async function signInternalRequest(secret, method, path, timestampMs) {
+  const message = `${String(method).toUpperCase()}\n${path}\n${timestampMs}`;
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(String(secret)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return bufToHex(sig);
+}
+
+export async function verifyInternalSignature(secret, method, path, timestampMs, signature, { maxAgeMs = 5 * 60 * 1000, nowMs = Date.now() } = {}) {
+  try {
+    if (!secret || typeof signature !== 'string' || !signature) return false;
+    const ts = Number(timestampMs);
+    if (!Number.isFinite(ts)) return false;
+    if (Math.abs(nowMs - ts) > maxAgeMs) return false;
+    const expected = await signInternalRequest(secret, method, path, String(ts));
+    return timingSafeEqual(expected, signature);
+  } catch {
+    return false;
+  }
+}

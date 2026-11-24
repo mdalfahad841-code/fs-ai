@@ -1,0 +1,286 @@
+# FS AI — FIX PASS 4 LEDGER — 2026-11-24
+
+Owner brief: 2026-11-24 11:08 (side chat, English). Goal: explain why
+nothing has auto-published since 22 Nov, fix the daily health report's
+subrequest failures, fix the CSP connect-src GA4 noise, fix the research
+double-fetch/counting, submit to IndexNow, write Bing Webmaster steps
+and gate proposals. Phase 1 READ first, then fixes, then report.
+
+## Hard rules (in force for the whole pass)
+
+- Do NOT publish, edit, delete or touch articles #26–#31 and #33.
+  #34 and #35 are READ-ONLY. Do NOT change auto-publish settings,
+  Emergency Stop, schedules or crons (no new cron either). Daily Shorts
+  cron stays PAUSED. social_auto_post stays OFF. No OAuth, no uploads,
+  no real publishing to test. $0 only. No secrets, passwords or tokens
+  in code, logs, reports or screenshots.
+- Do NOT loosen, bypass or weaken any quality, fact-check, SEO,
+  duplication or publish gate. Health and Finance keep human review.
+  No invented sources, claims or evidence.
+- Live D1: read-only. If a fix needs a live write, STOP that item and
+  list it for the owner with the exact statement.
+- Before ANY code change: fresh source backup, fresh live D1 backup,
+  full test-suite baseline. One code item at a time (change → tests
+  with a negative control against pre-change code → deploy → raw live
+  verification → next). If a live check fails, roll back that item.
+- Existing URLs must keep returning 200 with the same content.
+  Evidence: raw curl output (GET when a header matters). A browser
+  agent's description is NOT proof. Mark anything not run as NOT
+  TESTED. Never write PASS for something you did not run.
+- The push workflow never deletes files removed from the local tree:
+  any deletion needs an explicit removal step, verified live.
+- Sign-ins (Bing, Google, Microsoft) are owner-only: never type or
+  request a password; if a sign-in is needed, mark BLOCKED-OWNER and
+  write the exact steps.
+
+## Pre-change gates — DONE 2026-11-24 11:09–11:10
+
+- Source backup: `~/workspace/fs-ai-source/fs-ai-backup-20261124-fixpass4.tar.gz`
+  (1,911,240 B).
+- Live D1 backup: `~/workspace/goals/fs-ai-autonomous-business-platform/hidden_files/d1-backup-2026-11-24-fixpass4-pre-deploy.json`
+  (56 tables, 2,086,613 B; script `d1-backup-pre-deploy-2026-11-24-fixpass4.py`).
+- Baseline: `npm test` 1746 pass / 0 fail (matches the Fix Pass 3 final).
+
+## Phase 1 — READ — DONE 2026-11-24 ~11:28
+
+Findings doc: `docs/FIXPASS4-READ-FINDINGS-2026-11-24.md` (614 lines).
+READ-ONLY respected: no source changes, no live D1 writes, no deploy.
+
+- **R1 — Research "stall": NOT a stall.** Fetch engine healthy (73/73
+  audit rows `completed`, all 24 sources `ok`). The daily counts only
+  measure the inline `researchFetch` step, which re-fetches the same 2
+  divisions the queue drain already fetched ~90 s earlier — 0 is the
+  correct dedupe answer. The drain stored 13 new items on 24 Nov; the
+  counts never show them. Real defects: a double-fetch design + a
+  500-char evidence cap (`backend/rss/rss.js:80/84`,
+  `backend/rss/sources.js:176–177`). Guardian key gates only full-text
+  Guardian fetches, not the RSS stall.
+- **R2 — Gate bottleneck: 0 of 7 drafts auto-publishable; closest #31
+  at 11/14.** Binding constraint is thin evidence: 6 of 7 drafts were
+  fact-checked against ≤500 chars of RSS summary; the one draft with
+  full-text evidence (#33, 3,985 chars) passed 15/15. #34 refused
+  twice (publication_logs rows 1–2): row 1 timing (no checks yet),
+  row 2 fact-check 4/14 + 10 failed claims + SEO needs-review +
+  duplicate 6% + internal-links. New bug found (fail-closed,
+  cosmetic): the duplicate-zero-overlap detail says "overlap with
+  another **published** article" but all five non-zero overlaps are vs
+  other **drafts** (gate.js:665–668 comment disagrees with the SEO
+  suite). Corrections to the Fix Pass 3 summary recorded in the doc
+  (22/23 Nov drain attribution; #33's B6 correction count is 0 not 4;
+  #34's internal-links row 2 failed; #30's verifiedClaimsWithoutEvidence
+  is 0 not 1).
+- **R3 — Health budget: proven fetches total only 24–26 of 50, so the
+  budget is NOT fully accounted for.** The health report runs last
+  (step 15); its sitemap + serverSideHeads fetches hit the wall.
+  Residual ~24 subrequests most plausibly redirect hops (UNVERIFIED).
+  `oldestQueuedAt` is a correct pre-drain snapshot, not a bug
+  (healthcheck.js:151–177; drain calls runHealthCheck first,
+  scheduler.js:992; the report reuses that object, scheduler.js:1584–1600).
+- **R4 — CSP: all 16 rows are the site's own GA4 beacons**
+  (`connect-src`, `https://www.google.com/g/collect?v=2&tid=G-JVSCJT2DHJ…`),
+  Report-Only so nothing broke. Single root cause: GA4 not
+  allow-listed in `connect-src`.
+
+## F1. HEALTH REPORT SUBREQUESTS — BUILT, awaiting deploy
+
+**Status: built (2026-11-24 ~12:30 Dhaka), NOT YET DEPLOYED.** Parent
+deploys, live-verifies, and fills the deploy/live-evidence lines.
+
+### Design choice — option (a): authenticated internal route, called once
+
+The five external-fetch checks (pages, sitemap, recentArticles,
+sitemapRefresh, serverSideHeads) now run in the internal route
+`POST /api/admin/health-report-external`, which executes in its OWN
+Worker invocation with a fresh 50-subrequest budget. The daily run
+calls it exactly once at step (15) and embeds the returned checks in
+the daily report; if the call fails for any reason, the builder falls
+back to the in-process checks (today's behaviour — a fetch failure is
+still reported as FAIL, never OK).
+
+Why (a), and why the others were rejected:
+- **(a) is the only option that provably solves the budget problem.**
+  The route's invocation spends at most 8 fetches (pages 1, sitemap
+  1, recentArticles 0–5, sitemapRefresh 1, serverSideHeads 5) plus
+  redirect hops — comfortably under 50. The daily invocation spends
+  exactly 1 subrequest on the call itself (plus its proven 16–18:
+  12 RSS + 4–6 SEO HEADs), also comfortably under 50.
+- **(b) cut earlier-step fetches — rejected as the sole fix.** Proven
+  fetches total only 24–26 of 50; the residual ~24 is UNVERIFIED
+  (most plausibly redirect hops, R3.4). No cut can be proven
+  sufficient, and the 6 duplicate RSS fetches belong to F3's
+  double-fetch fix, not to F1.
+- **(c) batch — rejected.** Batching does not reduce subrequest
+  count: each fetch is a subrequest regardless of batching.
+- No new cron (the existing hourly trigger is untouched). No coverage
+  removed: the same five check functions run, with the same
+  semantics — sitemapRefresh fetch failure stays NOT TESTED, a
+  fetch failure anywhere else stays FAIL. No gate, publish path,
+  article, setting, schedule, or CSP header touched. Overall
+  FAIL/WARN/OK semantics unchanged: the overall is still computed
+  from the same 14 checks; only where the five external values come
+  from changed.
+
+### Auth — the requireOwner deviation, stated plainly
+
+The route accepts EITHER a `requireOwner` Bearer session (a human
+owner calling it directly — the same pattern as other admin routes)
+OR the Worker's own HMAC-signed internal call. `requireOwner` alone
+cannot be satisfied by a cron invocation: there is no owner session
+in a scheduled event, and minting one would be a live D1 write plus
+a transient full-owner credential. So the daily run signs its single
+call with HMAC-SHA256 over `POST\n/api/admin/health-report-external
+\n<timestamp>`, keyed by the existing `env.SESSION_SECRET` (no new
+secret, no live write), valid 5 minutes, constant-time compare
+(`backend/security/crypto.js` signInternalRequest /
+verifyInternalSignature). The secret is never transmitted; a captured
+signature is useless after the window and only for this one path.
+The route is READ-ONLY (public-URL fetches + D1 reads through the
+same check functions the builder uses; it writes nothing), so the
+blast radius of a forged call is limited to running the public
+checks. The route also validates its optional `{ checks: [...] }`
+subset body (unknown name → 400, bad JSON → 400) and answers 405 to
+non-POST.
+
+### oldestQueuedAt — verified correct, presentation fix only
+
+Verified in code (R3.6 confirmed): drain calls `runHealthCheck`
+first (`scheduler.js:992`); `healthcheck.js:151–177` computes
+`oldestQueuedAt` as the minimum `created_at` among queued tasks;
+`runHealthCheck` returns `{ overall, checkedAt, checks, persisted }`
+with `checkedAt` on every component; the report reuses that object
+(`scheduler.js:1584–1600`, `daily-health-report.js:200`). The value
+is a CORRECT pre-drain snapshot, not a bug — it was NOT "fixed" as
+one. The fix is presentation: the queue check detail now carries
+`checkedAt` (the drain-time instant), so the reader can see the
+numbers are a snapshot from drain time. Re-computing at report time
+was rejected: it would need a second `runHealthCheck` call, which
+WRITES `system_health_checks` rows — explicitly forbidden by the
+builder's own contract. (Dashboard note: the dashboard renders the
+queue detail generically and does not surface the new `checkedAt`
+field yet; the report JSON carries it, which is what the next READ
+and the owner need.)
+
+### Subrequest counter — left out, deliberately
+
+R3.7 asked for a per-invocation counter "if it fits cleanly". It
+does not: there is no shared fetch wrapper to instrument (fetch
+sites are `rss.js` fetchFeed, `seo.js` HEADs, and the builder's
+`fetchWithTimeout`), a module-level singleton would leak counts
+across isolate reuses, and threading a counter object through all
+three modules is a multi-file change for a diagnostic. The
+structural fix removes the need for precise accounting: both
+invocations now have 2–3× headroom (daily ~17–19 proven + hops,
+route ≤8 + hops).
+
+### Files changed (vs the fixpass4 backup — exactly 6 paths)
+
+- `backend/routes/health-external.js` (NEW, 136 lines): the route
+  handler + `verifyInternalHealthCall` + path/timeout constants.
+- `backend/services/daily-health-report.js`: `EXTERNAL_HEALTH_CHECK_KEYS`
+  + exported `runExternalHealthChecks` (same five functions, same
+  semantics); builder accepts `externalChecks` (supplied checks used
+  verbatim only with a valid honest status, else in-process);
+  queue detail gains `checkedAt`.
+- `backend/routes/scheduler.js`: `WORKER_BASE_URL` (precedent:
+  `oauth.js:104`), `HEALTH_REPORT_EXTERNAL_TIMEOUT_MS` (60 s),
+  exported `fetchExternalHealthChecks` (HMAC-signed single call,
+  null on any failure); `runDailyWorkflow` gains a `fetchImpl`
+  option (default global fetch); step (15) calls the route once,
+  then builds the report with `externalChecks`.
+- `backend/worker.js`: registers `POST
+  /api/admin/health-report-external` (auth inside the handler —
+  same exemption shape as the social OAuth callback).
+- `backend/security/crypto.js`: `signInternalRequest` +
+  `verifyInternalSignature` (HMAC-SHA256, 5-min window,
+  timingSafeEqual).
+- `tests/fixpass4-f1.test.js` (NEW, 741 lines, 29 tests, suites
+  F1.1–F1.5).
+
+No D1 schema change, no new dependency, no migration. No live D1
+write is needed for this fix to work (the route needs only the
+already-configured `SESSION_SECRET`; without it the daily run skips
+the self-call and behaves exactly as before).
+
+### Tests
+
+- Baseline (before): 1746 pass / 0 fail, 450 suites (verified by
+  the builder before starting).
+- After: **1775 pass / 0 fail, 455 suites** (+29 tests, +5 suites,
+  0 weakened). New file `tests/fixpass4-f1.test.js`: 29/29 pass —
+  F1.1 HMAC (5), F1.2 route auth/behaviour/read-only (11), F1.3
+  builder supplied-checks + queue label (6), F1.4 scheduler wiring
+  (3 full `runDailyWorkflow` runs), F1.5 helper (3).
+- One real failure caught during the build (fixed, not weakened):
+  the full suite failed 1 test — `closeout-a5.test.js` A5.10
+  ("builder never imports runHealthCheck", a source-string
+  assertion). Cause: a comment I wrote in `daily-health-report.js`
+  contained the literal strings `healthcheck.js` and
+  `runHealthCheck (` (with a paren), which that test treats as an
+  import/call. Fix: reworded the two comments (no code changed);
+  full suite green again. Lesson: that file's comments must never
+  spell `healthcheck.js` or `runHealthCheck (`.
+- One test-assertion fix during the build: F1.4's first test
+  expected overall OK, but the fixture's drain health is WARN (no
+  backup run in a fresh DB — the same honest WARN A5.11 expects).
+  The assertion now expects WARN + workerHealth WARN; the five
+  external checks are still asserted verbatim from the route.
+
+### Negative control — PASS (fix-dependent tests fail on pre-change code)
+
+Procedure: saved the new files to /tmp, copied the four
+pre-change production files from the fixpass4 backup tarball
+(`daily-health-report.js`, `scheduler.js`, `worker.js`,
+`crypto.js`), deleted the new route file, ran the new test file.
+Result: **the file fails to load at all — 0 pass, 1 file-level
+failure** (missing module `health-external.js` / missing exports).
+Granular probes on the pre-change tree: `runExternalHealthChecks`
+undefined, `EXTERNAL_HEALTH_CHECK_KEYS` undefined,
+`signInternalRequest`/`verifyInternalSignature` undefined,
+pre-change `scheduler.js` contains no `health-report-external` and
+no `fetchExternalHealthChecks`. Restored the new files from /tmp
+and re-ran: 29/29 green, full suite 1775/0.
+
+### Live proof still needed (parent — deploy time + 25 Nov run)
+
+- Deploy-time (provable without a live daily run): the route
+  responds to a direct authenticated call — POST the route with a
+  valid owner Bearer session and confirm 200 + all five checks with
+  real statuses (pages/sitemap/serverSideHeads OK on the live site).
+  Also confirm home 200, Worker health 200, and that no existing
+  URL changed.
+- The "next health report no longer fails on subrequests" proof can
+  ONLY be observed after the **25 Nov 00:00 UTC daily run** (06:00
+  Dhaka): read daily_reports for 25 Nov and confirm
+  `healthReport.checks.sitemap` and `serverSideHeads` are real
+  OK/FAIL (not the subrequest error), `sitemapRefresh` is no longer
+  NOT TESTED-on-subrequests, and the queue detail carries
+  `checkedAt`. If the route call itself failed, the report will
+  show the old in-process subrequest FAILs — that outcome is
+  honest, not hidden: check `agent_runs` for the health-report step
+  detail if so.
+- Rollback: restore the 4 modified production files + delete
+  `backend/routes/health-external.js` and `tests/fixpass4-f1.test.js`
+  from the fixpass4 backup, redeploy. The builder's
+  `externalChecks` default (null) means the old code path is the
+  fallback even before a rollback.
+
+## F2. CSP CONNECT-SRC — [PENDING]
+
+## F3. RESEARCH FIX — [PENDING]
+
+## F4. INDEXNOW — [PENDING]
+
+## F5. BING WEBMASTER STEPS — [PENDING]
+
+## F6. GATE PROPOSALS — [PENDING]
+
+## Final report — [PENDING]
+
+## Final confirmation (to complete at the end)
+
+- [ ] No protected article (#26–#31, #33) touched
+- [ ] #34/#35 untouched (read-only)
+- [ ] No auto-publish setting, Emergency Stop, schedule or cron changed
+- [ ] No OAuth connection, no secret touched
+- [ ] Nothing uploaded or published
+- [ ] Live D1 writes: [list, or none]
