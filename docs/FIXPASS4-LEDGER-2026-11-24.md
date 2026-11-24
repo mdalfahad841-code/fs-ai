@@ -520,7 +520,7 @@ and re-ran: 29/29 green, full suite 1775/0.
   day, new drafts pointing at `article-fetch` evidence). A 25 Nov
   07:00 Dhaka verification is required (same check as F1).
 
-## F4. INDEXNOW — BUILT, awaiting deploy
+## F4. INDEXNOW — DONE (key file live, 60 URLs submitted once — HTTP 202 Accepted; Bing effect NOT TESTED yet)
 
 - Key (public by design — it lives in a public file, not a secret):
   `c7d67fb31e9d02bd8fbcaf6fbfbddc561fbc8838fe94d137939b4f19e7f2e228`
@@ -569,17 +569,134 @@ and re-ran: 29/29 green, full suite 1775/0.
   (If the key is ever rotated, the key file AND the doc must change
   together — the test pins that they match.)
 
-## F5. BING WEBMASTER STEPS — [PENDING]
+- **DEPLOYED: run #76 GREEN (2026-11-24 12:31–12:34 Dhaka, 12 s),
+  HEAD 9a22e934e5b98fa8f210f730eed02cc0bdd82c16, parent 8d2c204 (F3),
+  4 files +277/−2.** Squash worked (repo 104 commits).
+  https://github.com/mdalfahad841-code/fs-ai/actions/runs/45341264877
+  Parent re-ran the suite: 1796/0 exact match.
+- Live evidence (raw curl ~12:35 Dhaka): home 200; key file
+  `https://fs-ai-5w5.pages.dev/c7d67fb31e9d02bd8fbcaf6fbfbddc561fbc8838fe94d137939b4f19e7f2e228.txt`
+  returns 200 with exactly the key. **One-off submit RUN ONCE
+  2026-11-24 ~12:36 Dhaka: payload built fresh from the live
+  sitemap (60 unique URLs, 3,596 bytes) → POST
+  https://api.indexnow.org/indexnow → HTTP 202 Accepted**
+  (202 is IndexNow's documented accepted response; the submit doc's
+  "HTTP 200 = accepted" wording is slightly off — 202 IS the
+  accept). Protected #26–#33, #34/#35 untouched (no live D1 writes
+  in this pass so far).
+- NOT TESTED: any Bing indexing effect — not observable immediately;
+  re-check Bing Webmaster Tools after the F5 setup for crawl/index
+  movement. IndexNow does NOT cover Google (stated plainly in the
+  doc).
 
-## F6. GATE PROPOSALS — [PENDING]
+## F5. BING WEBMASTER STEPS — DOC DONE, SETUP BLOCKED-OWNER
 
-## Final report — [PENDING]
+- Doc: `docs/BING-WEBMASTER-2026-11-24.md` (11,419 bytes) — exact
+  owner steps: sign in at bing.com/webmasters; Option A (RECOMMENDED)
+  import from Google Search Console (site already verified there, so
+  Bing imports verification + sitemaps automatically, no code change,
+  no deploy); Option B manual add + verify (meta tag `msvalidate.01`
+  recommended, XML file `BingSiteAuth.xml`, DNS CNAME / Domain
+  Connect noted as almost certainly unusable — the owner does not
+  control `pages.dev` DNS); sitemap submit; what success looks like
+  at each step + failure handling; where to look afterwards (Sitemaps,
+  URL Inspection, Index Explorer, Search Performance, IndexNow view)
+  with a realistic timeline (data after ~48 h, indexing over days);
+  Bing ≠ Google note (GSC "Couldn't fetch" is a separate Google-side
+  issue, unaffected by this setup).
+- **CORRECTION (verified, stated plainly): the IndexNow key file is
+  NOT a Bing Webmaster Tools verification method.** The brief's
+  premise was wrong. The key file proves ownership to the IndexNow
+  protocol only; BWT verification is XML file / meta tag / DNS
+  (CNAME / Domain Connect). Checked 2026-11-24 against nine
+  independent setup guides (all agree; none lists the key file).
+  The official bing.com help page could not be fetched from this
+  environment (domain blocked) — recorded in the doc, with menu
+  labels quoted as the guides give them. The key file stays in
+  place; the F4 submit stands; nothing about IndexNow changes.
+- No code, test, gate, publish path, article, setting, cron/schedule
+  or CSP header touched. No live D1 write. No deploy by the
+  coordinator (parent ships the doc with the final report deploy).
+  No test suite run (docs-only).
+- Status: doc DONE; setup BLOCKED-OWNER — the sign-in + add-site +
+  verify + sitemap-submit steps can only be done by the owner in his
+  own browser. No password, OTP or sign-in was typed, requested or
+  stored.
+- Live proof still needed (owner completes the steps, then): site
+  status Verified in Bing Webmaster Tools; sitemap listed with
+  Success / 60 discovered URLs; re-check in 3–7 days for first
+  indexed pages (Index Explorer / URL Inspection) and for the 60
+  IndexNow URLs in Bing's IndexNow view.
 
-## Final confirmation (to complete at the end)
+## F6. GATE PROPOSALS — DONE (proposals only; no gate changed, no article touched, nothing published)
 
-- [ ] No protected article (#26–#31, #33) touched
-- [ ] #34/#35 untouched (read-only)
-- [ ] No auto-publish setting, Emergency Stop, schedule or cron changed
-- [ ] No OAuth connection, no secret touched
-- [ ] Nothing uploaded or published
-- [ ] Live D1 writes: [list, or none]
+- Doc: `docs/GATE-BOTTLENECK-2026-11-24.md` (30,647 bytes) — per-draft
+  verdicts (x/14, failing checks named), binding blockers, options
+  with trade-offs, and recommendations, grounded entirely in R2
+  (nothing re-derived from live D1); the duplicate-comparator
+  question; the internal-links deadlock; the systemic thin-evidence
+  cause and what F3 does/does not fix for the existing 7; the Guardian
+  key owner steps (summary; full detail in
+  `docs/OWNER-ACTIONS-2026-11-23.md` §4).
+- Recommendations, one line each: **#28 HOLD** (1 failed claim + #14
+  link — owner-authorized correction round, then fresh fc + SEO);
+  **#29 DISCARD in principle** (601 chars, 0 verified claims, no
+  evidence; Delete was fixed in Fix Pass 2 — the old B4 foreign-key
+  failure no longer applies, though a live delete has not been tested
+  since the fix);
+  **#30 HOLD** (12 failed claims — correction plan after the Guardian
+  key, then fresh fc + SEO); **#31 PUBLISH** (fc PASS 3/3, duplicate
+  0%, only miss is by-design internal-links — dashboard Publish with
+  the audited override phrase `PUBLISH DESPITE GATE`); **#33 PUBLISH**
+  (Owner Pack condition met — SEO ran 24 Nov, 10/11 internal-links
+  only; fc PASS 15/15 on full-text evidence; same override step);
+  **#34 HOLD** (fc 4/14, 10 failed claims — correction round, then
+  fresh fc + SEO); **#35 HOLD** (fc 6/18, 12 failed claims, no SEO
+  row at all — correction round + first SEO run).
+- Gate-design proposals (no change): duplicate comparator — **keep
+  comparing against ALL articles (Option A, recommended)**; comparing
+  only vs published articles (Option B) would let #29's 32% overlap
+  vs draft #30 pass and needs an explicit owner decision naming the
+  change. Internal-links — **publish #31 first, then re-measure #33 /
+  #34 SEO (Option A, recommended)**; relaxing the relevance
+  requirement (Option B) is forbidden without an explicit owner
+  decision (`internal-links` is in `NEVER_WAIVABLE_SEO_CHECKS`,
+  `gate.js:57`); keep holding (Option C) is self-reinforcing.
+- Owner decisions still needed: #31 publish? #33 publish? #29
+  discard? Correction rounds for #28 / #30 / #34 / #35 (each needs a
+  go-ahead naming the article)? Guardian Open Platform API key?
+  Duplicate comparator — keep or change? Internal-links — publish #31
+  first or keep holding?
+- No code, test, gate, publish path, article, setting, cron/schedule,
+  or CSP header was touched. No live D1 write. No test suite was run
+  (docs-only item). No deploy by the coordinator — the parent ships
+  the doc with the final report deploy.
+
+## Final report — DONE
+
+`docs/FIXPASS4-FINAL-REPORT-2026-11-24.md` (12,956 bytes). Per-item
+status (R1–R4, F1–F6), the plain summary of why nothing has
+auto-published since 22 Nov, the 8 owner decisions/actions, and the
+25 Nov re-check list. Shipped with run #77 (docs-only deploy, see
+below).
+
+**Parent correction before shipping:** the F6 doc claimed "#29
+Delete hits the known B4 foreign-key error today" — WRONG. Delete
+was fixed in Fix Pass 2 (FK-safe batch delete, deployed run #62;
+`backend/routes/admin-articles.js:311–369`). The doc and the ledger
+F6 section were corrected: a live delete has NOT been tested since
+the fix, so the owner clicks Delete once and, if it errors, reports
+the exact error and does not retry.
+
+## Final confirmation (completed 2026-11-24)
+
+- [x] No protected article (#26–#31, #33) touched
+- [x] #34/#35 untouched (read-only)
+- [x] No auto-publish setting, Emergency Stop, schedule or cron changed
+- [x] No OAuth connection, no secret touched
+- [x] Nothing uploaded or published
+- [x] Live D1 writes: none (read-only throughout; the only live
+  writes in this pass are the four GitHub deploys and the one-off
+  IndexNow submit)
+- [x] Tests before/after: 1746/0 (450 suites) → 1796/0 (461 suites),
+  0 weakened, negative control passed on F1/F2/F3/F4
