@@ -81,7 +81,7 @@ READ-ONLY respected: no source changes, no live D1 writes, no deploy.
   Report-Only so nothing broke. Single root cause: GA4 not
   allow-listed in `connect-src`.
 
-## F1. HEALTH REPORT SUBREQUESTS — BUILT, awaiting deploy
+## F1. HEALTH REPORT SUBREQUESTS — DONE (built, deployed, live-verified; definitive proof awaits the 25 Nov daily run)
 
 **Status: built (2026-11-24 ~12:30 Dhaka), NOT YET DEPLOYED.** Parent
 deploys, live-verifies, and fills the deploy/live-evidence lines.
@@ -264,7 +264,96 @@ and re-ran: 29/29 green, full suite 1775/0.
   `externalChecks` default (null) means the old code path is the
   fallback even before a rollback.
 
-## F2. CSP CONNECT-SRC — [PENDING]
+- **DEPLOYED: run #73 GREEN (2026-11-24 11:49–11:53 Dhaka, 10 s),
+  HEAD a05e5d54109ca6a740434f61e4e4306ce8357006, 11 files +2,046/−56.**
+  https://github.com/mdalfahad841-code/fs-ai/actions/runs/45335978717
+  Parent re-ran the suite: 1775/0 exact match.
+- **History blemish (parent's transcription error, recorded honestly):
+  the retry browse call retyped the workflow YAML from memory and
+  DROPPED the `git reset --soft HEAD~2` + second `git add -A` lines,
+  so the squash never ran — the new commit's parent is 6b2a818 (the
+  zip-upload commit), not ecad267, and the repo went 98 → 101 commits
+  instead of 98 → 99. The two interim commits (workflow file cb357ce,
+  zip 6b2a818) are now permanent history; the TREE is correct (both
+  files deleted in a05e5d5). The live site is unaffected and future
+  squashes are unaffected (relative HEAD~2 arithmetic). No history
+  rewrite attempted — that needs the owner's say-so. Lesson added to
+  AGENTS.md: never retype the workflow YAML on a retry; copy it
+  verbatim.**
+- Live evidence (raw curl ~11:54 Dhaka): home 200; Worker health 200
+  ok:true db connected; deployed `backend/routes/health-external.js`
+  at a05e5d5 returns 200; deployed `backend/worker.js` contains
+  `health-report-external` ×1; **POST
+  `/api/admin/health-report-external` with no auth → 401 "Owner
+  session required" — the new route IS live on the Worker (old code
+  would 404) and the auth gate works**; sitemap 60 URLs; article 1
+  "Related guides" ×1. Protected #26–#33, #34/#35 untouched (no live
+  D1 writes in this pass so far).
+- NOT TESTED live: a direct authenticated call to the route (needs an
+  owner session or the HMAC secret — neither is available to curl);
+  the DEFINITIVE proof — the 25 Nov 00:00 UTC daily run's health
+  report showing sitemap/serverSideHeads as real OK/FAIL (not
+  subrequest errors) and sitemapRefresh no longer NOT TESTED-on-
+  subrequests, with queue `checkedAt` present. A 25 Nov 07:00 Dhaka
+  verification is required (same as Fix Pass 3 A6(a)).
+
+## F2. CSP CONNECT-SRC — BUILT, awaiting deploy
+
+- Status: BUILT (coordinator done 2026-11-24 ~12:05 Dhaka). NOT
+  deployed yet — the parent deploys, live-verifies with raw GET, and
+  completes the deploy/live-evidence lines below.
+- Evidence (R4): all 16 csp_reports rows are directive connect-src,
+  blocked_uri `https://www.google.com/g/collect?v=2&tid=G-JVSCJT2DHJ…`
+  (the site's own GA4 beacons). Root cause: the Report-Only CSP's
+  connect-src did not allow-list https://www.google.com.
+- Live header read before the change (raw curl, HEAD and GET agree,
+  2026-11-24 ~11:56 Dhaka, https://fs-ai-5w5.pages.dev/):
+  `Content-Security-Policy-Report-Only: default-src 'self'; script-src
+  'self' 'unsafe-inline' https://www.googletagmanager.com; style-src
+  'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';
+  connect-src 'self' https://fs-ai.mdalfahad841.workers.dev
+  https://www.googletagmanager.com https://www.google-analytics.com;
+  frame-ancestors 'none'; base-uri 'self'; report-uri
+  https://fs-ai.mdalfahad841.workers.dev/api/csp-report`
+  Note: https://www.googletagmanager.com WAS already in connect-src
+  (R4 flagged it to check) — recorded, NOT added (the brief names
+  https://www.google.com only).
+- Change (frontend/_headers ONLY, 1 line + comment): connect-src old
+  → new:
+  old: `connect-src 'self' https://fs-ai.mdalfahad841.workers.dev https://www.googletagmanager.com https://www.google-analytics.com`
+  new: `connect-src 'self' https://fs-ai.mdalfahad841.workers.dev https://www.googletagmanager.com https://www.google-analytics.com https://www.google.com`
+  Nothing else changed: policy stays Content-Security-Policy-Report-Only
+  (no enforcing CSP added), no other directive touched, X-Frame-Options:
+  DENY untouched, report-uri untouched. The file's comment now says GA4
+  beacons go to www.google-analytics.com AND www.google.com/g/collect.
+- Files changed (exactly 2): frontend/_headers (1 policy line +
+  3-line comment), tests/pages-headers.test.js (+1 test).
+- Tests: new test "connect-src allows https://www.google.com for GA4
+  beacons (Fix Pass 4 F2)" — extracts the connect-src directive and
+  asserts it contains exactly https://www.google.com as a token, plus a
+  deepEqual pin of the exact 5-entry host list (self + Worker +
+  googletagmanager + google-analytics + google.com) so no host can be
+  added or dropped silently. Full suite: before 1775/0 (455 suites,
+  after F1) → after 1776/0 (455 suites). No test weakened.
+- Negative control: the new test run against the pre-change
+  frontend/_headers from the fixpass4 backup tarball fails exactly
+  that test (4 pass / 1 fail); restoring the new header gives 5/5
+  pass.
+- Diff vs the fixpass4 backup: F1's files + exactly these 2 F2 files.
+  No gate, publish path, article, setting, cron/schedule or Worker
+  code touched. No live D1 write. No deploy by the coordinator.
+- Live proof still needed (parent): raw GET on the live site showing
+  the new connect-src with https://www.google.com; policy still
+  Report-Only; home 200; protected articles unchanged.
+- Re-check for "GA4 reports stop being new violations": no new
+  violation rows appear until a real visit fires a GA4 beacon, so
+  re-check after real traffic hits the site post-deploy — read
+  csp_reports fresh in 1–2 days (and the next daily health report's
+  cspViolations count): expect the total to stay at 16 with no new
+  rows dated after the deploy. Old rows stay in the table (history,
+  not an error).
+- Rollback: restore frontend/_headers + tests/pages-headers.test.js
+  from the fixpass4 backup and redeploy; no D1 change involved.
 
 ## F3. RESEARCH FIX — [PENDING]
 

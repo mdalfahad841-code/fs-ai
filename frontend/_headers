@@ -3,12 +3,14 @@
 # script from www.googletagmanager.com. No external stylesheets or fonts,
 # no images, no iframes or embeds. Fetches go only to the Worker
 # (https://fs-ai.mdalfahad841.workers.dev) and to this origin. GA4 beacons go
-# to www.google-analytics.com. The CSP ships REPORT-ONLY first: nothing is
+# to www.google-analytics.com and to www.google.com/g/collect (GA4 sends
+# some beacons to www.google.com — see Fix Pass 4 F2, R4: all 16 CSP
+# reports were www.google.com/g/collect beacons blocked by connect-src).
 # enforced, nothing can break. Violation reports go to the Worker
 # (POST /api/csp-report) — see docs/CLOSEOUT-A4-CSP-ENFORCEMENT-RULE-2026-11-23.md
 # for the exact rule that switches this to enforcement.
 # X-Frame-Options: DENY is enforced (the site is never embedded; the
 # Worker already denies framing on API responses).
 /*
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://fs-ai.mdalfahad841.workers.dev https://www.googletagmanager.com https://www.google-analytics.com; frame-ancestors 'none'; base-uri 'self'; report-uri https://fs-ai.mdalfahad841.workers.dev/api/csp-report
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://fs-ai.mdalfahad841.workers.dev https://www.googletagmanager.com https://www.google-analytics.com https://www.google.com; frame-ancestors 'none'; base-uri 'self'; report-uri https://fs-ai.mdalfahad841.workers.dev/api/csp-report
   X-Frame-Options: DENY

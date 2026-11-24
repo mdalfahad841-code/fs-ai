@@ -53,4 +53,30 @@ describe('Pages _headers (frontend/_headers)', () => {
     // Framing denied in the policy too, matching X-Frame-Options.
     assert.ok(policy.includes("frame-ancestors 'none'"), "frame-ancestors must be 'none'");
   });
+
+  it('connect-src allows https://www.google.com for GA4 beacons (Fix Pass 4 F2)', () => {
+    const text = readHeaders();
+    const policy = text.split('Content-Security-Policy-Report-Only:')[1].split('\n')[0];
+    const connectSrc = policy.split('connect-src')[1].split(';')[0].trim().split(/\s+/);
+    // R4: all 16 csp_reports rows are GA4 beacons to
+    // https://www.google.com/g/collect — the old connect-src did not
+    // allow-list that host, so every beacon was reported (and, under an
+    // enforced policy, would have been dropped).
+    assert.ok(
+      connectSrc.includes('https://www.google.com'),
+      'connect-src must allow https://www.google.com (GA4 g/collect beacons)',
+    );
+    // Exact host set: nothing may be added or dropped silently.
+    assert.deepEqual(
+      connectSrc,
+      [
+        "'self'",
+        'https://fs-ai.mdalfahad841.workers.dev',
+        'https://www.googletagmanager.com',
+        'https://www.google-analytics.com',
+        'https://www.google.com',
+      ],
+      'connect-src host list must be exactly the audited set',
+    );
+  });
 });
