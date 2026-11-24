@@ -278,7 +278,7 @@ proven by test.
 - Rollback: restore the two seo-head.js copies from the fixpass3
   backup and redeploy; no D1 change was made by A4.
 
-## A5. FUNCTION CLEANUP WITH PROOF — STEP A DONE (verdict: repo-root copy live); STEP B BUILD STARTED
+## A5. FUNCTION CLEANUP WITH PROOF — DONE (both steps deployed + live-verified)
 
 Two byte-identical Pages Function copies (repo-root functions/ and
 frontend/functions/) plus the x-seo-head diagnostic header.
@@ -431,11 +431,42 @@ marker counts frontend ×2, root ×0).
   `frontend/functions/`, and the 6 test files from the fixpass3 backup
   and redeploy without the `rm` step. No D1 change in Step B.
 
-- Step B deployed commit:
-- Raw live evidence:
-- Rollback:
+- Step B deployed commit: **run #71 GREEN (2026-11-23 20:39–20:41
+  Dhaka), HEAD a20b9ab177ad6d41716172252f5eeb664e3f78f6** (parent
+  f4b2838), 16 files +440/−1,315. Run:
+  https://github.com/mdalfahad841-code/fs-ai/actions/runs/45196606635
+  (11 s). The workflow file was created (ba8b22d) and the zip uploaded
+  (d5d73b2); both were squashed away by the force-push as designed —
+  main shows 97 commits, fs-ai-source.zip and push-source-once.yml
+  gone from the repo. The diff deletes the 5 frontend/functions files.
+- Raw live evidence (parent, raw GET ~20:41–20:44 Dhaka, minutes after
+  the deploy — no Pages stall this time): deployed functions/seo-head.js
+  at a20b9ab contains 0 occurrences of `x-seo-head`/`x-seo-src`;
+  `frontend/functions/seo-head.js` on main **404s**; live headers
+  `x-seo-head` and `x-seo-src` ABSENT on article 1, article 999,
+  division automotive and tool percentage (the old deploy set
+  x-seo-head on every response, so its absence proves the new code is
+  serving). BODIES prove the rewrites are alive — articles 1/12/25:
+  canonical ×1, Article + BreadcrumbList JSON-LD ×1, "Related guides"
+  ×1, noscript related links once each (1→10/11/12, 25→19/23/24);
+  division automotive (`?division=automotive`): CollectionPage ×1,
+  `<title>Automotive — FS AI</title>`, canonical, 12 noscript article
+  links (ids 1–12) + 8 division links; tool percentage: WebApplication
+  ×1; 999 fallback (only the static `<h2>Related guides</h2>` matched);
+  draft 28 fallback (generic title "Article — FS AI", no JSON-LD, no
+  canonical, zero leaks); home 200; Worker health 200 ok:true db
+  connected; sitemap 60 URLs; D1 published 25 / drafts 8, protected
+  #26–#31/#33 all draft at exact baselines (4895/245/2157/601/4088/
+  549/3478).
+- **Step A verdict CONFIRMED by this deploy: the rewrites survived the
+  removal of the frontend copy, so the repo-root copy was live.**
+  Falsification did not occur. Rollback: not needed; the recorded
+  rollback (restore `functions/seo-head.js`, `functions/pages/*.js`,
+  `frontend/functions/` and the 6 test files from the fixpass3 backup
+  + redeploy without the `rm` step) remains available. No D1 change
+  in Step B.
 
-## A6. READ-ONLY CHECKS — (b) + (c) DONE; (a) NOT YET AVAILABLE
+## A6. READ-ONLY CHECKS — DONE (all three parts)
 
 Only if the data exists; otherwise NOT YET AVAILABLE with the time to
 re-check.
@@ -458,9 +489,81 @@ re-check.
   the next refresh, canonical/title/og, JSON-LD, counts). If none
   exists yet, say so.
 
-- Status: PARTIAL — (b) and (c) done 2026-11-23 ~20:10 Dhaka (read-only
-  D1); (a) NOT YET AVAILABLE — the 24 Nov 00:00 UTC daily run has not
-  happened yet. Re-check after 24 Nov 06:00 Dhaka.
+- Status: DONE — (a) done 2026-11-24 ~07:05 Dhaka (parent read-only
+  D1 verification of the 24 Nov 00:00 UTC daily run); (b)+(c) done
+  2026-11-23 ~20:10 Dhaka.
+- Findings (a): **Daily report id 15 exists for 2026-11-24** (created
+  2026-11-24T00:07:07Z); no weekly report (Tuesday — correct).
+  agent_runs ids 196–215 for the run (00:01–00:07Z), outcomes
+  done/no-op, 0 failed. Daily counts: queueDrained 3, queueDone 3,
+  queueFailed 0, researchEnqueued 2, **researchFetched 0**,
+  researchItemsStored 0, contentEnqueued 1, factChecksEnqueued 0,
+  **factChecksRun 3**, correctionsRun 0, **seoRun 3**, seoEnqueued 0,
+  **gateEvaluated 9, gateApproved 0, published 0**, socialEnqueued 0,
+  failedTasks 0, securityEventsLast7Days 0.
+  - **seoRun (agent_runs id 207, 00:06:20Z): checked 3, skippedFresh
+    3** — #28/#31/#29 skipped-fresh, **#33 done (needs-review)**,
+    **#30 done (pass)**, #34 done (needs-review). The Fix Pass 2 item
+    4 fresh-skip fix works EXACTLY as predicted: the three fresh
+    drafts were skipped and the starved #33/#30 were finally reached.
+    New seo_checks rows (parent-read): **#30 id 27, verdict pass,
+    11/11 ok, body_length 4088, body_hash 691e5dac…,
+    created 2026-11-24 00:06:16**; **#33 id 26, verdict needs-review,
+    10/11 ok, body_length 3478, body_hash 67330d2e…,
+    created 2026-11-24 00:06:13** — #33's only failing check is
+    internal-links ("No genuinely relevant published article exists
+    in this division to link to — no link will be faked"), the honest
+    by-design failure. (Old #30 rows id 22/18 predate the correction.)
+  - **factCheckRun (agent_runs id 205, 00:06:08Z): checked 3,
+    skippedFresh 6** — #26/#27/#28/#31/#33/#30 skipped-fresh,
+    **#29 done (verdict failed)**, **#34 done (needs-review)**,
+    **#35 done (needs-review)**. The A3 fix works: the 6 fresh
+    drafts were skipped and the 3 genuinely stale ones were reached.
+    #29's verdict "failed" is its Guardian-blocked evidence state.
+  - **First daily health report (agent_runs id 215, health-report
+    step, 00:07:03Z): overall FAIL.** workerHealth OK (10 healthy),
+    pages OK (200), recentArticles OK, queue OK, lastRuns OK (daily
+    2026-11-23, 24.1 h; weekly 2026-11-22, 48.1 h). **sitemap FAIL
+    and serverSideHeads FAIL (checked 5, passed 0) — BOTH are fetch
+    failures, not real breakage: every fetch errored "Too many
+    subrequests by single Worker invocation"** (the Cloudflare
+    Workers 50-subrequest-per-invocation limit; the daily run's
+    earlier steps consumed the budget, so the health report's own
+    sitemap fetch, its 5 server-side-head fetches and its GitHub API
+    fetch all failed). sitemapRefresh NOT TESTED for the same reason.
+    The sitemap (60 URLs) and the server-side heads (rewritten on
+    1/12/25, division, tool) were PROVEN live by the parent's own
+    curl checks on 23 Nov — the health report simply cannot verify
+    them from inside the same invocation. **This is a real follow-up
+    defect: the health report's sitemap + serverSideHeads checks can
+    never pass inside a full daily run unless the subrequest budget
+    is fixed (separate invocation, fewer prior fetches, or a raised
+    limit) — NOT a Fix Pass 3 code item; it needs its own brief.**
+    protectedDrafts NOT TESTED (no prior baseline — this run records
+    it; all 7 drafts at baselines, changed [], missing []), settings
+    NOT TESTED (same reason; snapshot shows publishing_mode auto,
+    max_articles_per_day 1, social_auto_post off, llm_provider_order
+    workers-ai, cutoff 2026-11-22T04:55:28Z, emergency_stop 0),
+    shortsCron NOT TESTED (lives in Muse, owner-gated C4), lastVideo
+    NOT TESTED (youtube_videos 0 rows), autoPublishProof NOT TESTED
+    (no auto-published article yet), **cspViolations WARN: total 16,
+    all connect-src** (same GA4 class as (b)).
+  - Queue: exactly 3 queued — **#48/#49 daily-research
+    (00:02:27/00:02:28Z), #50 daily-content (00:02:41Z)**, enqueued by
+    this run; prior queued #45–47 drained to done. Minor inconsistency
+    noted: the health report's queue check reports
+    oldestQueuedAt 2026-11-23T00:03:40Z, which matches NO currently
+    queued task (oldest is 2026-11-24T00:02:27Z) — the check's
+    timestamp looks stale; the live queue itself is correct.
+  - Articles: published still 25, no new auto-publish. **Drafts 9,
+    total 34 — new draft #35 created 00:02:24Z** ("The spirit of a
+    borderless Europe steams from the pots and pans of Vienna"),
+    fact-check needs-review 6/18. #34 still draft. #26/#27/#31 bodies
+    unchanged (4895/245/549). #33 body 3478, fact-check still PASS
+    15/15 (factcheck id 34). #30 body 4088.
+  - Unexplained signals carried forward (not Fix Pass 3 items):
+    researchFetched 0 two runs running (23 + 24 Nov); the queue's
+    oldestQueuedAt staleness above.
 - Findings (b): **9 rows total** (ids 2–10; id 1 was the parent's own
   test row, deleted during Fix Pass 2 item 4 verification). ALL 9 are
   the SAME directive — `connect-src` — and ALL blocked URIs are Google
@@ -570,10 +673,26 @@ claim PASS from a desktop-width browser.
 
 - Status: NOT TESTED (list for owner)
 
-## Final confirmation (to complete at the end)
+## Final confirmation (completed 2026-11-24 ~07:15 Dhaka)
 
-- [ ] No protected article (#26–#31, #33) touched
-- [ ] No auto-publish setting, Emergency Stop, schedule or cron changed
-- [ ] No OAuth connection, no secret touched
-- [ ] Nothing uploaded or published
-- [ ] Only live D1 write: the single llm_provider_order row (A2)
+- [x] No protected article (#26–#31, #33) touched — all draft at exact
+  baselines after every deploy and after the 24 Nov daily run
+- [x] No auto-publish setting, Emergency Stop, schedule or cron changed
+  (E-Stop OFF; daily Shorts cron still PAUSED/disabled)
+- [x] No OAuth connection, no secret touched
+- [x] Nothing uploaded or published
+- [x] Only live D1 write: the single llm_provider_order row (A2)
+
+## Final report
+
+- `docs/FIXPASS3-FINAL-REPORT-2026-11-23.md` — written 2026-11-24
+  ~07:15 Dhaka, after the A6(a) read. Shipped to main in run #72
+  (docs-only deploy) — HEAD [to fill after deploy]. Delivered to the
+  user in romanized Bangla with the ledger as attachments.
+- Pass totals: tests 1714/0 (439 suites) baseline → 1746/0 (450
+  suites). Deploys #67–#71 all GREEN. Final HEAD before the report
+  ship: a20b9ab.
+- Follow-up defect found by A6(a) (needs its own brief, NOT part of
+  this pass): the daily health report's sitemap + serverSideHeads
+  checks fail every full run on the Workers 50-subrequest limit
+  ("Too many subrequests by single Worker invocation").
