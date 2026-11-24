@@ -370,7 +370,7 @@ and re-ran: 29/29 green, full suite 1775/0.
   re-check needs real traffic + 1–2 days (see above); expect the
   total to stay at 16.
 
-## F3. RESEARCH FIX — BUILT, awaiting deploy
+## F3. RESEARCH FIX — DONE (built, deployed, live-verified; behavioural proof awaits the 25 Nov daily run)
 
 - Design (least-risky, in two parts):
   - **(a)+(b) Double-fetch + lying counts.** The drain (step 0) already
@@ -502,7 +502,72 @@ and re-ran: 29/29 green, full suite 1775/0.
   The old inline behaviour returns immediately (the drain's extra
   `research` field is ignored by old code).
 
-## F4. INDEXNOW — [PENDING]
+- **DEPLOYED: run #75 GREEN (2026-11-24 12:21–12:24 Dhaka, 10 s),
+  HEAD 8d2c204bbef8278cdcb0167847243d23f6f16b67, parent 94cb4a3 (F2),
+  5 files +940/−16.** Squash worked (repo 104 → 103).
+  https://github.com/mdalfahad841-code/fs-ai/actions/runs/45340073787
+  Parent re-ran the suite: 1792/0 exact match.
+- Live evidence (raw curl ~12:25 Dhaka): home 200; Worker health 200
+  ok:true db connected; deployed `backend/routes/scheduler.js` at
+  8d2c204 contains `evidenceEnrich`/`summarizeDrainedResearch` ×3;
+  deployed `backend/publishing/gate.js` contains "overlap with
+  another article" ×2 and the old "published article" phrasing ×0.
+  Protected #26–#33, #34/#35 untouched (no live D1 writes in this
+  pass so far).
+- NOT TESTED live: the behavioural proof — only the 25 Nov 00:00 UTC
+  daily run can show it (research counts ≠ 0, each feed fetched once
+  in `rss_fetch_audit`, `queueDraftsConverted` reading 1 on a convert
+  day, new drafts pointing at `article-fetch` evidence). A 25 Nov
+  07:00 Dhaka verification is required (same check as F1).
+
+## F4. INDEXNOW — BUILT, awaiting deploy
+
+- Key (public by design — it lives in a public file, not a secret):
+  `c7d67fb31e9d02bd8fbcaf6fbfbddc561fbc8838fe94d137939b4f19e7f2e228`
+  (64 hex chars, `openssl rand -hex 32`, 2026-11-24).
+- Key file: `frontend/c7d67fb31e9d02bd8fbcaf6fbfbddc561fbc8838fe94d137939b4f19e7f2e228.txt`
+  (65 bytes: key + trailing newline, nothing else). It sits next to
+  `frontend/sitemap.xml` — the copy Pages serves — so the live URL
+  will be
+  https://fs-ai-5w5.pages.dev/c7d67fb31e9d02bd8fbcaf6fbfbddc561fbc8838fe94d137939b4f19e7f2e228.txt
+- Doc: `docs/indexnow-submit.md` (8,452 bytes) — what IndexNow is
+  and is NOT (covers Bing + some other engines, NOT Google — stated
+  plainly), the key + key file location, the exact one-off submit
+  command with the full 60-URL list inlined, how to rebuild the list
+  from the live sitemap, what success looks like (HTTP 200 =
+  accepted, not indexed), and a SHORT auto-ping-on-publish proposal
+  (proposal only — NOT implemented: publish-path helper, one URL per
+  publish, ~5 s cap, failure must never block a publish).
+- URL list: extracted from the live sitemap 2026-11-24 and verified —
+  60 URLs, all on `fs-ai-5w5.pages.dev`, all unique (1 home + 9
+  division + 25 article + 20 tool + 5 static). Extraction command in
+  the doc. The sitemap itself was NOT changed.
+- Files changed (exactly 3, all new): the key file above,
+  `docs/indexnow-submit.md`, `tests/fixpass4-f4.test.js` (4 tests,
+  following the existing frontend-file pattern —
+  `fs.readFileSync(path.join(__dirname, '..', 'frontend', ...))` as
+  in `tests/pages-headers.test.js` / `tests/indexing-canonical.test.js`).
+  No gate, publish path, article, setting, cron/schedule, OAuth flow,
+  CSP header or sitemap touched. No live D1 write. No deploy by the
+  coordinator. Nothing submitted to IndexNow by the coordinator.
+- Tests: before 1792/0 (460 suites, after F3) → after **1796/0
+  (461 suites)**. No test weakened.
+- Negative control: with the key file moved away, the new test file
+  runs 2 pass / 2 fail (the exists + content tests fail; the key-format
+  + doc-match tests pass, as they do not depend on the file); restored,
+  4/4 pass.
+- Diff vs the fixpass4 backup: F1 + F2 + F3 files + exactly these 3
+  F4 files.
+- Live proof still needed (parent): deploy → raw curl the key file
+  live (must return exactly the key) → run the one-off submit ONCE
+  from `docs/indexnow-submit.md` → record the HTTP status in the
+  ledger. IndexNow's effect on Bing indexing is NOT observable
+  immediately — mark it NOT TESTED / not yet available; re-check Bing
+  Webmaster Tools after the F5 setup for any crawl/index movement.
+- Rollback: delete the key file + `docs/indexnow-submit.md` +
+  `tests/fixpass4-f4.test.js` and redeploy; no D1 change involved.
+  (If the key is ever rotated, the key file AND the doc must change
+  together — the test pins that they match.)
 
 ## F5. BING WEBMASTER STEPS — [PENDING]
 
