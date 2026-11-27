@@ -184,7 +184,7 @@ describe('API fallback: GET /api/articles', () => {
 });
 
 describe('Frontend data: frontend/scripts/app.js', () => {
-  it('25 articles, every body >= 3733 chars (live min 3733, max 5332)', () => {
+  it('25 articles, every body >= 2968 chars (live min 2968, max 5253)', () => {
     const FSAI = loadFrontend();
     assert.equal(FSAI.ARTICLES.length, 25);
     // Array.from: the vm sandbox has its own Array prototype, so a vm
@@ -193,10 +193,10 @@ describe('Frontend data: frontend/scripts/app.js', () => {
       Array.from(FSAI.ARTICLES.map((a) => a.id)).sort((a, b) => a - b),
       Array.from({ length: 25 }, (_, i) => i + 1));
     const lengths = FSAI.ARTICLES.map((a) => (a.body || '').length);
-    assert.ok(lengths.every((n) => n >= 3733),
-      `shortest body is ${Math.min(...lengths)} chars, expected >= 3733`);
-    assert.equal(Math.min(...lengths), 3733);
-    assert.equal(Math.max(...lengths), 5332);
+    assert.ok(lengths.every((n) => n >= 2968),
+      `shortest body is ${Math.min(...lengths)} chars, expected >= 2968`);
+    assert.equal(Math.min(...lengths), 2968);
+    assert.equal(Math.max(...lengths), 5253);
     for (const article of FSAI.ARTICLES) {
       assert.ok(article.title && article.excerpt && article.division && article.category,
         `article ${article.id} must have title/excerpt/division/category`);

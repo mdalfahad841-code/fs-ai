@@ -640,22 +640,39 @@ function sortLatestFirst(a, b) {
  * The 3 related articles for the article page (site traffic,
  * 2026-11-23) — a pure mirror of app.js relatedArticles: same
  * division first (newest first), then other divisions to fill to 3,
- * never the current article. `list` is the merged published list
+ * never the current article, and never an article the current body
+ * already links (2026-11-28: bodies now carry a Related-reading
+ * link; without this the linked article would appear twice in the
+ * served source — once in the body, once in the related list —
+ * breaking the A4 exactly-once rule, while the SEO internal-links
+ * rule requires the body link). `list` is the merged published list
  * (see mergeArticles); drafts can never appear because they never
  * enter that list. Pure: returns a new array, changes nothing.
  */
 export function relatedArticles(current, list) {
   const items = Array.isArray(list) ? list : [];
   const currentId = current ? current.id : null;
+  const linked = linkedArticleIds(current ? current.body : '');
   const same = [];
   const other = [];
   for (const a of items) {
-    if (!a || a.id === currentId) continue;
+    if (!a || a.id === currentId || linked.has(a.id)) continue;
     if (current && a.division === current.division) same.push(a); else other.push(a);
   }
   same.sort(sortLatestFirst);
   other.sort(sortLatestFirst);
   return same.concat(other).slice(0, 3);
+}
+
+/**
+ * Article ids linked from a body (`?id=N` / `&id=N`) — the same
+ * extraction the backend SEO check uses (publishing/divisions.js
+ * extractLinkedArticleIds). Mirror of app.js linkedArticleIds.
+ */
+function linkedArticleIds(body) {
+  const ids = new Set();
+  for (const m of String(body || '').matchAll(/[?&]id=(\d+)/g)) ids.add(Number(m[1]));
+  return ids;
 }
 
 /**

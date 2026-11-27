@@ -119,12 +119,14 @@ describe('A4: one "Related guides" heading in the served source', () => {
     }
   });
 
-  it('article 25: exactly one heading, related links 19/24/23 once each', async () => {
+  it('article 25: exactly one heading, related links 24/23/22 once each', async () => {
     const { res, body } = await handle(PAGES_BASE + '/pages/article?id=25', ARTICLE_HTML, { kind: 'article' });
     assert.equal(res.headers.get('x-seo-head'), null, 'A5 Step B: no diagnostic header');
     assert.equal(countOccurrences(body, 'Related guides'), 1, 'one heading only');
-    assert.deepEqual(noscriptRelatedIds(body), [19, 24, 23]);
-    for (const id of [19, 24, 23]) {
+    // 2026-11-28: #25's body links #19 (Related reading), so the picker
+    // skips #19 — the related list is the next three by the same rule.
+    assert.deepEqual(noscriptRelatedIds(body), [24, 23, 22]);
+    for (const id of [24, 23, 22]) {
       assert.equal(countOccurrences(body, '/pages/article?id=' + id), 1, `id ${id} linked exactly once`);
     }
   });

@@ -114,6 +114,20 @@ describe('relatedArticles picker (pure)', () => {
     ];
     assert.deepEqual(Array.from(FSAI.relatedArticles(tied[0], tied), (a) => a.id), [13, 12, 11]);
   });
+
+  it('skips articles the current body already links (A4 exactly-once)', () => {
+    const FSAI = loadFrontend();
+    // FIXTURE[0] would otherwise pick [3, 2, 6]; its body links id 3,
+    // so 3 drops out and the next other-division article (5) fills in.
+    const current = { ...FIXTURE[0], body: '<p>See also <a href="/pages/article?id=3">A newest</a>.</p>' };
+    assert.deepEqual(Array.from(FSAI.relatedArticles(current, FIXTURE), (a) => a.id), [2, 6, 5]);
+    // The &id= form counts too (same extraction the backend SEO check uses).
+    const amp = { ...FIXTURE[0], body: '<p><a href="/pages/article?x=1&id=3">A newest</a></p>' };
+    assert.deepEqual(Array.from(FSAI.relatedArticles(amp, FIXTURE), (a) => a.id), [2, 6, 5]);
+    // A body with no links changes nothing.
+    const plain = { ...FIXTURE[0], body: '<p>No links here.</p>' };
+    assert.deepEqual(Array.from(FSAI.relatedArticles(plain, FIXTURE), (a) => a.id), [3, 2, 6]);
+  });
 });
 
 describe('relatedArticles on the real published bundle (25 articles)', () => {
@@ -151,6 +165,21 @@ describe('relatedArticles on the real published bundle (25 articles)', () => {
       // The newest published articles overall are ids 21-25 (2026-11-11,
       // Set B dates) — the fill must reach them, not stop at the division.
       assert.ok(out.some((x) => x.date === '2026-11-11'), 'fill reaches the newest articles');
+    }
+  });
+
+  it('articles whose body links a related guide skip it (A4 exactly-once)', () => {
+    const FSAI = loadFrontend();
+    // 2026-11-28: the simplified bodies carry a Related-reading link.
+    // Each linked article must NOT also appear in the related list.
+    const expected = { 17: [18, 25, 23], 19: [24, 23, 22], 24: [18, 25, 23], 25: [24, 23, 22] };
+    for (const [id, want] of Object.entries(expected)) {
+      const a = FSAI.articleById(Number(id));
+      const out = FSAI.relatedArticles(a);
+      assert.deepEqual(Array.from(out, (x) => x.id), want, `article ${id} related list`);
+      const linked = [...a.body.matchAll(/[?&]id=(\d+)/g)].map((m) => Number(m[1]));
+      assert.ok(linked.length > 0, `article ${id} body links something`);
+      assert.ok(linked.every((lid) => !out.some((x) => x.id === lid)), `article ${id} body-linked id must not be related`);
     }
   });
 });
