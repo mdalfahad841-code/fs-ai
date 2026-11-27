@@ -381,6 +381,70 @@
     return cleaned === body ? body : cleaned;
   }
 
+  /* Markdown bodies (2026-11-28): D1 bodies are markdown — "## "
+     headings, blank-line paragraphs, "[text](url)" links, "- " bullets,
+     "**bold**" — but the article page inserts the body as HTML, so a
+     markdown body showed literal "##" markers and a raw link on the
+     live page (#38, verified 2026-11-28; #1, an HTML bundle body,
+     renders clean). The static bundle is HTML because the bundle build
+     converts at build time; live-merged rows arrive raw. Converting
+     D1 bodies is not an option: the publish gate compares body_hash,
+     so a conversion would stale the stored PASS rows, and a fresh
+     HTML re-check fails on the platform's extractClaims HTML bug.
+     So the page renders markdown at render time instead.
+     Detection: a body is markdown when a line starts with a "# "
+     heading ("## " / "### ") or it contains a "[text](url)" link.
+     HTML bundle bodies contain neither, so they pass through
+     BYTE-IDENTICAL — never re-parsed or re-serialised. The converter
+     is the same line-based state machine the bundle regen used
+     (proven on all six live-merged bodies, visible-text parity
+     verified), so runtime output matches the bundle build's HTML for
+     the same input. Headings, bullets and paragraphs are recognised
+     per line, so a heading with no blank line after it and a bullet
+     list straight after a label line still convert. */
+  var MD_HEADING_RE = /^#{1,3}\s+\S/m;
+  var MD_LINK_RE = /\[[^\]]+\]\([^)]+\)/;
+  function isMarkdownBody(body) {
+    if (typeof body !== 'string' || body === '') return false;
+    return MD_HEADING_RE.test(body) || MD_LINK_RE.test(body);
+  }
+  function mdInline(s) {
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return s;
+  }
+  function renderMarkdownBody(body) {
+    var lines = String(body).split('\n');
+    var out = [];
+    var para = [];
+    var items = [];
+    var flushPara = function () { if (para.length) { out.push('<p>' + mdInline(para.join(' ')) + '</p>'); para = []; } };
+    var flushList = function () { if (items.length) { out.push('<ul>' + items.map(function (i) { return '<li>' + i + '</li>'; }).join('') + '</ul>'); items = []; } };
+    var i;
+    for (i = 0; i < lines.length; i += 1) {
+      var ln = lines[i].trim();
+      if (!ln) { flushPara(); flushList(); continue; }
+      var h3 = ln.match(/^###\s+(.*)$/);
+      var h2 = !h3 && ln.match(/^##\s+(.*)$/);
+      if (h3 || h2) { flushPara(); flushList(); out.push(h3 ? '<h3>' + mdInline(h3[1].trim()) + '</h3>' : '<h2>' + mdInline(h2[1].trim()) + '</h2>'); continue; }
+      var bullet = ln.match(/^[-*]\s+(.*)$/);
+      if (bullet) { flushPara(); items.push(mdInline(bullet[1].trim())); continue; }
+      if (items.length) { items[items.length - 1] += ' ' + mdInline(ln); continue; }
+      if (ln.charAt(0) === '<') { flushPara(); out.push(ln); continue; }
+      para.push(ln);
+    }
+    flushPara(); flushList();
+    return out.join('');
+  }
+  /* The article page's body renderer: strip the internal draft banner
+     first (line-based, works for both formats), then convert markdown
+     bodies to HTML; HTML bodies pass through unchanged. */
+  function renderBody(body) {
+    var cleaned = stripDraftBanner(body);
+    if (typeof cleaned !== 'string' || cleaned === '') return cleaned;
+    return isMarkdownBody(cleaned) ? renderMarkdownBody(cleaned) : cleaned;
+  }
+
   /* Live articles (Phase 2, 2026-11-22): the public pages read the live
      published list from the Worker (GET /api/articles, published-only,
      D1-backed) and merge it over the static bundle, so a newly
@@ -513,6 +577,7 @@
     relatedArticles: relatedArticles,
     seriesForArticle: seriesForArticle, renderSeriesNav: renderSeriesNav,
     countsByDivision: countsByDivision, formatDate: formatDate, esc: esc, stripDraftBanner: stripDraftBanner,
+    renderBody: renderBody, isMarkdownBody: isMarkdownBody, renderMarkdownBody: renderMarkdownBody,
     liveReady: liveReady, mapLiveArticle: mapLiveArticle, mergeLiveArticles: mergeLiveArticles, applyLiveArticles: applyLiveArticles
   };
 

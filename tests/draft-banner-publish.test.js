@@ -444,7 +444,7 @@ describe('public renderer — API + live page', () => {
     assert.ok(!data.article.body || !data.article.body.includes('AI-DRAFT'));
   });
 
-  it('the live article page strips via window.FSAI.stripDraftBanner', () => {
+  it('the live article page strips via window.FSAI.renderBody', () => {
     const src = fs.readFileSync(path.join(ROOT, 'frontend', 'scripts', 'app.js'), 'utf8');
     const sandbox = {
       window: {},
@@ -464,10 +464,32 @@ describe('public renderer — API + live page', () => {
       'Real content.\n\n\nMore content.',
     );
     assert.strictEqual(strip(LEGIT_MENTION_BODY), LEGIT_MENTION_BODY);
+    /* Markdown rendering (2026-11-28): the page renders the body
+       through renderBody, which strips the banner first and then
+       converts markdown bodies — so the banner never reaches the
+       page even for a markdown body. */
+    const renderBody = sandbox.window.FSAI.renderBody;
+    assert.equal(typeof renderBody, 'function');
+    assert.equal(
+      renderBody(STANDARD_BANNER_BODY),
+      '<h2>Introduction</h2><p>Enrollment from abroad is down this fall.</p>',
+      'banner stripped, then the markdown body rendered to HTML',
+    );
+    assert.equal(
+      renderBody(MALFORMED_BANNER_BODY),
+      'Real content.\n\n\nMore content.',
+    );
+    /* A body that merely MENTIONS AI-DRAFT mid-sentence is not a
+       banner: the strip leaves it alone, and the renderer converts
+       its markdown while keeping the mentions as prose. */
+    assert.strictEqual(
+      renderBody(LEGIT_MENTION_BODY),
+      '<h2>How drafts work</h2><p>Our team reviews every draft. The AI-DRAFT marker is only for internal drafts and never reaches readers.</p><p>See the AI-DRAFT note above for the review steps.</p>',
+    );
     const html = fs.readFileSync(path.join(ROOT, 'frontend', 'pages', 'article.html'), 'utf8');
     assert.ok(
-      html.includes('window.FSAI.stripDraftBanner(a.body)'),
-      'article.html must render through the strip, not a.body verbatim',
+      html.includes('window.FSAI.renderBody(a.body)'),
+      'article.html must render through renderBody (banner strip + markdown), not a.body verbatim',
     );
     assert.ok(!html.includes("'<div class=\"article-full\">' + a.body + '</div>'"));
   });

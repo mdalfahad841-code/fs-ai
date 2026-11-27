@@ -233,6 +233,14 @@ async function runArticlePage(search) {
     },
     DISCLAIMER: 'Fixture disclaimer.',
     stripDraftBanner: (b) => b,
+    /* Markdown rendering (2026-11-28): the page renders the body
+       through renderBody, which strips the banner and converts
+       markdown bodies. The fixture bodies are HTML with no banner
+       lines, so the real renderBody returns them unchanged — the
+       identity stub is faithful here, exactly as stripDraftBanner
+       above. Markdown rendering itself is covered by
+       tests/markdown-body-render.test.js. */
+    renderBody: (b) => b,
   };
   const sandbox = {
     window: { FSAI, location: { search } },

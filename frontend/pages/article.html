@@ -158,7 +158,7 @@ document.addEventListener('DOMContentLoaded', function () {
     '<figure class="article-hero"><img class="article-hero-img" src="' + window.FSAI.articleImage(a) + '" alt="' + window.FSAI.esc(a.title) + '" width="1600" height="900"></figure>' +
     (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
-    (a.body ? '<div class="article-full">' + window.FSAI.stripDraftBanner(a.body) + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
+    (a.body ? '<div class="article-full">' + window.FSAI.renderBody(a.body) + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
     '<p>Found this useful? Explore the <a href="tools">free tools</a> — including the calculators that go with this topic — or explore the related guides below.</p>';
   /* Reading sequence (owner order 2026-11-27): the series nav — "Part
      X of Y" + next-guide link — renders between the article body and
