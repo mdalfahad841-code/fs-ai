@@ -49,6 +49,15 @@
   function articleNo(id) {
     return 'No. ' + String(id).padStart(2, '0');
   }
+  /* Article pictures (owner order 2026-11-27): one original illustration
+     per article, stored at /images/articles/article-<id>.jpg. The path is
+     derived from the id — no bundle field, no D1 column — so it works for
+     static articles and live-merged ones alike, and a draft's picture is
+     already in place the moment it publishes. */
+  function articleImage(a) {
+    if (!a || !a.id) return '';
+    return '/images/articles/article-' + a.id + '.jpg';
+  }
   /* Per-division topic number (owner order 2026-11-27): the article's
      position within its own division's PUBLISHED articles, creation order
      (oldest = 1), computed at render time — no stored number, so a new
@@ -484,6 +493,7 @@
     SITE: SITE, DIVISIONS: DIVISIONS, ARTICLES: ARTICLES, TOOLS: TOOLS, AGENTS: AGENTS, ACCOUNTS: ACCOUNTS,
     DISCLAIMER: GENERAL_DISCLAIMER,
     divisionById: divisionById, divisionPageState: divisionPageState, articlesByDivision: articlesByDivision, articleById: articleById,
+    articleImage: articleImage,
     relatedArticles: relatedArticles,
     seriesForArticle: seriesForArticle, renderSeriesNav: renderSeriesNav,
     countsByDivision: countsByDivision, formatDate: formatDate, esc: esc, stripDraftBanner: stripDraftBanner,
@@ -548,7 +558,8 @@
        production every rendered article is in ARTICLES, so it never runs. */
     var topicNo = divisionTopicNo(a);
     var noText = topicNo ? 'Topic ' + topicNo : articleNo(a.id);
-    return '<article class="card article-card reveal"><div class="card-tag">' + esc(a.division) + ' · ' + esc(a.category) + '</div>' +
+    return '<article class="card article-card reveal"><img class="card-img" src="' + articleImage(a) + '" alt="" loading="lazy" width="1600" height="900">' +
+      '<div class="card-tag">' + esc(a.division) + ' · ' + esc(a.category) + '</div>' +
       '<h3><a href="pages/article?id=' + a.id + '">' + esc(a.title) + '</a></h3>' +
       '<p>' + esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + formatDate(a.date) + '</time> ' +
       '<span class="article-no">' + noText + '</span> ' +

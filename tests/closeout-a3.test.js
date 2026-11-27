@@ -173,6 +173,11 @@ const fixtureDivisionTopicNo = (article) => {
   return null;
 };
 
+/* Faithful stub of window.FSAI.articleImage (app.js): the picture path
+   is derived from the id — /images/articles/article-<id>.jpg — '' for
+   a missing article. */
+const fixtureArticleImage = (a) => (!a || !a.id ? '' : '/images/articles/article-' + a.id + '.jpg');
+
 function articleHeadSeed() {
   return makeHead([
     { tag: 'meta', attrs: { name: 'description', content: 'Read a free FS AI article.' } },
@@ -209,6 +214,7 @@ async function runArticlePage(search) {
     formatDate: (d) => d,
     articleNo: (id) => 'No. ' + String(id).padStart(2, '0'),
     divisionTopicNo: fixtureDivisionTopicNo,
+    articleImage: fixtureArticleImage,
     articlesByDivision: (name) => Object.values(ARTICLE_FIXTURES).filter((a) => a.division === name),
     /* Same contract as window.FSAI.relatedArticles (app.js): same
        division first (newest first), then other divisions to fill
@@ -305,6 +311,7 @@ async function runDivisionPage(search) {
     formatDate: (d) => d,
     articleNo: (id) => 'No. ' + String(id).padStart(2, '0'),
     divisionTopicNo: fixtureDivisionTopicNo,
+    articleImage: fixtureArticleImage,
   };
   const sandbox = {
     window: { FSAI, location: { search } },
@@ -437,6 +444,10 @@ describe('A3.1 article page JS sets per-article SEO', () => {
     assert.equal(crumbs['@type'], 'BreadcrumbList', 'breadcrumb JSON-LD');
     assert.equal(crumbs.itemListElement[2].item, canonical, 'breadcrumb points at the article');
     assert.ok(bodyEls.articleBody.innerHTML.includes(a.title), 'article body rendered');
+    /* Article pictures (owner order 2026-11-27): the hero figure renders
+       the article's own picture, and the related card renders its own. */
+    assert.ok(bodyEls.articleBody.innerHTML.includes('<img class="article-hero-img" src="/images/articles/article-1.jpg"'), 'hero picture for id 1');
+    assert.ok(bodyEls.relatedGrid.innerHTML.includes('<img class="card-img" src="/images/articles/article-26.jpg"'), 'related card picture for id 26');
   });
 
   it('not-found sets a plain title and injects no JSON-LD', async () => {
