@@ -163,6 +163,7 @@
     { name: 'YouTube', handle: '@FSAI-e5f', url: 'https://www.youtube.com/@FSAI-e5f', status: 'Exists', detail: 'Channel handle @FSAI-e5f.' },
     { name: 'Pinterest', handle: 'watchwithf', url: 'https://www.pinterest.com/watchwithf/', status: 'Exists', detail: 'Profile watchwithf.' },
     { name: 'Instagram', handle: '@fsai.406', url: 'https://www.instagram.com/fsai.406', status: 'Exists', detail: 'Profile @fsai.406.' },
+    { name: 'Threads', handle: '@fsai.406', url: 'https://www.threads.com/@fsai.406', status: 'Exists', detail: 'Profile @fsai.406 — verified signed in 2026-11-27.' },
     { name: 'Facebook', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },
     { name: 'WhatsApp Business', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },
     { name: 'Business Email', handle: null, url: null, status: 'Paused', detail: 'Paused by owner — not created yet.' },
@@ -421,7 +422,7 @@
     var existing = ACCOUNTS.filter(function (a) { return a.status === 'Exists'; });
     var links = existing.map(function (a) {
       return '<a href="' + a.url + '" target="_blank" rel="noopener">' + esc(a.name) + ' (' + esc(a.handle) + ')</a>';
-    }).join(' · ');
+    }).join('');
     /* A1.2 (2026-11-23): the public footer carries no owner-internal
        wording — no revenue, traffic, analytics-status or account-status
        lines. Those stay in the owner dashboard (dashboard.js reads
@@ -433,7 +434,7 @@
       '<p>Founded by Fahad Somrat. Zero-cost platform: no paid services.</p></div>' +
       '<div><h3>Divisions</h3><p>' + DIVISIONS.map(function (d) { return '<a href="' + prefix + 'pages/division?division=' + d.id + '">' + esc(d.name) + '</a>'; }).join(' · ') + '</p>' +
       '<p><a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div>' +
-      '<div><h3>Accounts</h3><p>' + links + '</p></div>' +
+      '<div><h3>Accounts</h3><p class="footer-accounts">' + links + '</p></div>' +
       '<div><h3>On this site</h3><p>Articles: ' + ARTICLES.length + ' · Divisions: ' + DIVISIONS.length + ' · Tools: ' + TOOLS.length + '</p></div>' +
       '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. No personal or family content is used on this platform. <a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div></footer>';
   }

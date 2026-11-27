@@ -20,6 +20,7 @@
 :root[data-theme="light"] .card p { color: var(--text-secondary); }
 :root[data-theme="light"] .site-footer { background: #efe9df; }
 :root[data-theme="light"] .footer-grid a { color: var(--text-secondary); }
+:root[data-theme="light"] .footer-accounts a:hover { box-shadow: 0 6px 18px -8px rgba(28, 95, 214, .35); }
 :root[data-theme="light"] .newsletter { background: var(--surface); }
 :root[data-theme="light"] .article-body p { color: var(--text-secondary); }
 :root[data-theme="light"] .card h3 a { color: var(--text); }

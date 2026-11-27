@@ -259,4 +259,9 @@ ul.clean li { padding: 12px 0; border-bottom: 1px solid var(--border); }
 .footer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 24px; }
 .footer-grid h3 { margin-top: 0; }
 .footer-grid a { color: var(--text-secondary); }
+/* Footer account links — Marcelo glow pills (Threads add, 2026-11-27):
+   same 999px pill + brand-blue glow language as the hero CTAs. */
+.footer-accounts { display: flex; flex-wrap: wrap; gap: 8px; }
+.footer-accounts a { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; color: var(--text-secondary); text-decoration: none; }
+.footer-accounts a:hover { color: var(--blue-fill); border-color: var(--blue-fill); box-shadow: 0 6px 18px -6px rgba(28, 95, 214, .65); }
 .footer-bottom { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 16px; color: var(--muted); font-size: 14px; }
