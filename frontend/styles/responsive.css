@@ -23,8 +23,16 @@
   .main-nav a { padding: 12px 14px; }
   .header-actions { margin-left: auto; }
   .hero { padding: 48px 0 40px; }
-  .hero h1 { font-size: 32px; }
+  .hero h1 { font-size: 44px; }
   .hero p.lead { font-size: 16px; }
+  /* Marcelo mobile: tighter stacked offsets so the layers never push
+     the preview off the viewport, and the bento lead card goes back
+     to a single column (span 2 in a 1-column grid would create an
+     implicit second column and overflow). */
+  #heroPreview::before { transform: translate(8px, 8px); }
+  #heroPreview::after { transform: translate(16px, 16px); }
+  .grid-bento > :first-child { grid-column: auto; }
+  .hero-stats { gap: 8px 24px; }
   .search-box { flex-direction: column; }
   .search-box .btn { width: 100%; }
   .grid { grid-template-columns: 1fr; }

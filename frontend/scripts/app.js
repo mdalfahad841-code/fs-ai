@@ -537,11 +537,18 @@
      derived from the merged list at runtime, never from hard-coded
      copy. Called immediately on DOMContentLoaded (static bundle) and
      again in renderShared (after the live merge), so a newly published
-     article updates every count without a deploy. */
+     article updates every count without a deploy.
+     Marcelo run 2026-11-27: the stats render as a giant number with a
+     spec chip each (the live articles count is the blue hero number) —
+     same numbers, same order, no hard-coded copy. The counts stay bare
+     text inside <strong> so the />N</ assertions in closeout-a1 still
+     match. */
   function renderDerivedCounts() {
     var stats = document.getElementById('heroStats');
     if (stats) {
-      stats.innerHTML = '<strong>' + DIVISIONS.length + '</strong> divisions · <strong>' + ARTICLES.length + '</strong> articles · <strong>' + TOOLS.length + '</strong> free tools';
+      stats.innerHTML = '<span class="hero-stat"><strong class="hero-stat-num">' + DIVISIONS.length + '</strong><span class="hero-stat-label">divisions</span></span>' +
+        '<span class="hero-stat"><strong class="hero-stat-num">' + ARTICLES.length + '</strong><span class="hero-stat-label">articles</span></span>' +
+        '<span class="hero-stat"><strong class="hero-stat-num">' + TOOLS.length + '</strong><span class="hero-stat-label">free tools</span></span>';
     }
     var sub = document.getElementById('latestSubhead');
     if (sub) sub.textContent = ARTICLES.length + ' articles across ' + DIVISIONS.length + ' divisions';

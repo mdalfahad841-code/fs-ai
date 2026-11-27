@@ -12,8 +12,10 @@
 }
 :root[data-theme="light"] .site-header { background: rgba(247, 244, 238, 0.94); }
 :root[data-theme="light"] .hero {
-  background: linear-gradient(180deg, #efe9df, #f7f4ee);
+  background: radial-gradient(720px 420px at 82% 18%, rgba(28, 95, 214, .10), rgba(28, 95, 214, 0) 70%), linear-gradient(180deg, #efe9df, #f7f4ee);
 }
+/* Marcelo light theme: the blue glow is softer on paper. */
+:root[data-theme="light"] .card { box-shadow: var(--shadow), 0 16px 40px -24px rgba(28, 95, 214, .35); }
 :root[data-theme="light"] .hero p.lead { color: var(--text-secondary); }
 :root[data-theme="light"] .card p { color: var(--text-secondary); }
 :root[data-theme="light"] .site-footer { background: #efe9df; }

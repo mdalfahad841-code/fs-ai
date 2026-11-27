@@ -9,8 +9,8 @@
 .grid .reveal:nth-child(4) { transition-delay: .15s; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .fade-in { animation: fadeIn .4s cubic-bezier(0.22, 1, 0.36, 1) both; }
-.card { transition: border-color .18s cubic-bezier(0.22, 1, 0.36, 1); }
-.card:hover { border-color: var(--border-strong); }
+.card { transition: border-color .18s cubic-bezier(0.22, 1, 0.36, 1), box-shadow .18s cubic-bezier(0.22, 1, 0.36, 1); }
+.card:hover { border-color: var(--border-strong); box-shadow: var(--shadow), 0 20px 48px -20px rgba(28, 95, 214, .6); }
 .btn { transition: background-color .18s cubic-bezier(0.22, 1, 0.36, 1), border-color .18s cubic-bezier(0.22, 1, 0.36, 1); }
 
 @media (prefers-reduced-motion: reduce) {

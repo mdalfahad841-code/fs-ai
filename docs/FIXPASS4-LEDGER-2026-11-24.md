@@ -677,8 +677,13 @@ and re-ran: 29/29 green, full suite 1775/0.
 `docs/FIXPASS4-FINAL-REPORT-2026-11-24.md` (12,956 bytes). Per-item
 status (R1–R4, F1–F6), the plain summary of why nothing has
 auto-published since 22 Nov, the 8 owner decisions/actions, and the
-25 Nov re-check list. Shipped with run #77 (docs-only deploy, see
-below).
+25 Nov re-check list. Shipped with run #77 (docs-only deploy):
+**run #77 GREEN (2026-11-24 12:41–12:44 Dhaka, 14 s), HEAD
+9a6cfd5a75a7e4283de9cf42c8d347473a60765e, parent 9a22e934 (F4), 4
+files +1,146/−15, all docs-only.** Squash worked (106 → 105).
+https://github.com/mdalfahad841-code/fs-ai/actions/runs/45342531020
+Live: home 200, Worker health 200, final report at HEAD 200,
+sitemap 60 URLs.
 
 **Parent correction before shipping:** the F6 doc claimed "#29
 Delete hits the known B4 foreign-key error today" — WRONG. Delete
