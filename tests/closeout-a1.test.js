@@ -496,7 +496,11 @@ describe('A1.6 search hint, badge gap, Latest-guide tie-break', () => {
     await FSAI.liveReady;
     await tick();
     assert.ok(made.els.heroPreview.innerHTML.includes('How to Plan a Road Trip'), 'hero shows id 25');
-    assert.ok(made.els.heroPreview.innerHTML.includes('No. 25'), 'hero plate shows No. 25');
+    /* Per-division topic numbering (owner order 2026-11-27): id 25 is
+       Travel & Lifestyle's 2nd article, so the plate shows "Topic 2",
+       not the old global "No. 25". */
+    assert.ok(made.els.heroPreview.innerHTML.includes('Topic 2'), 'hero plate shows Topic 2');
+    assert.ok(!made.els.heroPreview.innerHTML.includes('No. 25'), 'hero plate no longer shows the global number');
     assert.ok(!made.els.heroPreview.innerHTML.includes('What Is AI?'), 'hero no longer shows id 13');
     assert.ok(!made.els.heroPreview.innerHTML.includes('EV Charging at Home'), 'hero no longer shows id 1');
   });

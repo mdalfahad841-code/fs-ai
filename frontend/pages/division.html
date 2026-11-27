@@ -130,7 +130,7 @@ document.addEventListener('DOMContentLoaded', function () {
       grid.innerHTML = list.map(function (a) {
         return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(a.category) + '</div>' +
           '<h3><a href="article?id=' + a.id + '">' + window.FSAI.esc(a.title) + '</a></h3>' +
-          '<p>' + window.FSAI.esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + window.FSAI.formatDate(a.date) + '</time> <span class="article-no">' + window.FSAI.articleNo(a.id) + '</span></article>';
+          '<p>' + window.FSAI.esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + window.FSAI.formatDate(a.date) + '</time> <span class="article-no">Topic ' + window.FSAI.divisionTopicNo(a) + '</span></article>';
       }).join('');
     } else {
       grid.innerHTML = '<p>No articles in this division yet.</p>';

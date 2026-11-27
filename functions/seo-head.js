@@ -684,6 +684,22 @@ function articleNo(id) {
   return 'No. ' + String(id).padStart(2, '0');
 }
 
+/* Per-division topic number (owner order 2026-11-27) — mirror of
+   divisionTopicNo in frontend/scripts/app.js. Same rule: position within
+   the division's published articles, date ascending, ties by id
+   ascending. Null when the list is absent or the article is not in it;
+   articleNoscript then falls back to the legacy "No. NN" so older
+   3-argument callers keep their pinned output. */
+function divisionTopicNo(article, list) {
+  if (!article || !Array.isArray(list)) return null;
+  const same = list.filter((x) => x.division === article.division);
+  same.sort((x, y) => (x.date !== y.date ? (x.date < y.date ? -1 : 1) : x.id - y.id));
+  for (let i = 0; i < same.length; i++) {
+    if (same[i].id === article.id) return i + 1;
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Head builders — the exact values the page JS injects (A3), so the    */
 /* crawler head and the browser head agree.                            */
@@ -748,11 +764,14 @@ function articleBreadcrumbs(article, divisions) {
  * rewriteArticleHtml). Related titles are escaped, so they can never
  * break out of the noscript. The whole noscript stays on one line
  * (no newlines), which the byte-identical test in
- * tests/fixpass2-item2.test.js relies on. */
-export function articleNoscript(article, related) {
+ * tests/fixpass2-item2.test.js relies on. The meta line shows the
+ * per-division "Topic N" when the caller passes the topic number
+ * (rewriteArticleHtml does); without it the legacy "No. NN" is kept. */
+export function articleNoscript(article, related, topicNo) {
+  const noText = typeof topicNo === 'number' ? 'Topic ' + topicNo : articleNo(article.id);
   let out = '<h1>' + escHtml(article.title) + '</h1>'
     + '<p class="card-tag">' + escHtml(article.division) + ' · ' + escHtml(article.category) + '</p>'
-    + '<p class="article-meta"><span class="article-no">' + escHtml(articleNo(article.id)) + '</span> · Published '
+    + '<p class="article-meta"><span class="article-no">' + escHtml(noText) + '</span> · Published '
     + escHtml(article.date) + ' · FS AI · ' + escHtml(article.division) + '</p>'
     + '<p><strong>' + escHtml(article.excerpt) + '</strong></p>'
     + '<div class="article-full">' + article.body + '</div>';
@@ -884,10 +903,11 @@ export function rewriteArticleHtml(html, article, divisions, allArticles) {
   out = replaceOnce(out, '</head>', extra + '</head>');
   if (out === null) return { html, rewritten: false };
   const related = relatedArticles(article, Array.isArray(allArticles) ? allArticles : []);
+  const topicNo = divisionTopicNo(article, Array.isArray(allArticles) ? allArticles : null);
   out = replaceOnce(
     out,
     '<p class="muted">Loading article…</p>',
-    '<noscript>' + articleNoscript(article, related) + '</noscript>',
+    '<noscript>' + articleNoscript(article, related, topicNo) + '</noscript>',
   );
   if (out === null) return { html, rewritten: false };
   return { html: out, rewritten: true };

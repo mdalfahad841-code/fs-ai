@@ -42,6 +42,7 @@
     <div class="wrap article-body" id="articleBody">
       <p class="muted">Loading article…</p>
     </div>
+    <div class="wrap" id="seriesNav"></div>
     <div class="wrap">
       <h2>Related guides</h2>
       <div class="grid" id="relatedGrid"></div>
@@ -152,18 +153,24 @@ document.addEventListener('DOMContentLoaded', function () {
   body.innerHTML =
     '<p class="card-tag">' + window.FSAI.esc(a.division) + ' · ' + window.FSAI.esc(a.category) + '</p>' +
     '<h1>' + window.FSAI.esc(a.title) + '</h1>' +
-    '<p class="article-meta"><span class="article-no">' + window.FSAI.articleNo(a.id) + '</span> · Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
+    '<p class="article-meta"><span class="article-no">Topic ' + window.FSAI.divisionTopicNo(a) + '</span> · Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
     (div ? '<a href="division?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
     (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
     (a.body ? '<div class="article-full">' + window.FSAI.stripDraftBanner(a.body) + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
     '<p>Found this useful? Explore the <a href="tools">free tools</a> — including the calculators that go with this topic — or explore the related guides below.</p>';
+  /* Reading sequence (owner order 2026-11-27): the series nav — "Part
+     X of Y" + next-guide link — renders between the article body and
+     the related section below. Empty string on articles outside any
+     arc, so nothing extra appears there. */
+  var seriesNav = document.getElementById('seriesNav');
+  seriesNav.innerHTML = window.FSAI.renderSeriesNav(a);
   var related = window.FSAI.relatedArticles(a);
   var grid = document.getElementById('relatedGrid');
   grid.innerHTML = related.map(function (x) {
     return '<article class="card article-card"><div class="card-tag">' + window.FSAI.esc(x.division) + ' · ' + window.FSAI.esc(x.category) + '</div>' +
       '<h3><a href="article?id=' + x.id + '">' + window.FSAI.esc(x.title) + '</a></h3>' +
-      '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time> <span class="article-no">' + window.FSAI.articleNo(x.id) + '</span></article>';
+      '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time> <span class="article-no">Topic ' + window.FSAI.divisionTopicNo(x) + '</span></article>';
   }).join('') || '<p>No related guides yet.</p>';
   });
 });

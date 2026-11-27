@@ -220,7 +220,11 @@ describe('round 2 — illustration plates (2026-11-20)', () => {
   });
 
   it('hero preview carries a tall cover plate with the latest guide number', () => {
-    assert.match(APP, /divisionPlate\(div, articleNo\(latest\.id\)\)/);
+    /* Per-division topic number (owner order 2026-11-27) replaces the
+       global articleNo on the hero plate — the plate now carries
+       "Topic N" for the latest guide's own division. */
+    assert.match(APP, /divisionPlate\(div, 'Topic ' \+ divisionTopicNo\(latest\)\)/);
+    assert.doesNotMatch(APP, /divisionPlate\(div, articleNo\(latest\.id\)\)/);
     assert.match(APP, /hero-preview-body/);
     assert.match(MAIN, /\.hero-preview \.div-plate\s*\{[^}]*height:\s*180px/);
   });

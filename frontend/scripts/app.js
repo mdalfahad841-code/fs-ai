@@ -43,9 +43,31 @@
     return '<svg' + (cls ? ' class="' + cls + '"' : '') + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICON_PATHS[name] || '') + '</svg>';
   }
   /* Field-guide index number — the signature detail (unslop run 2026-11-20):
-     every guide carries a quiet mono number, "No. 04". */
+     every guide carries a quiet mono number, "No. 04". Kept for
+     backwards-compatible callers; reader-facing displays now use the
+     per-division topic number below. */
   function articleNo(id) {
     return 'No. ' + String(id).padStart(2, '0');
+  }
+  /* Per-division topic number (owner order 2026-11-27): the article's
+     position within its own division's PUBLISHED articles, creation order
+     (oldest = 1), computed at render time — no stored number, so a new
+     publish shifts later numbers automatically. Articles are sorted by
+     date ascending, ties by id ascending (ids rise with creation). Returns
+     null when the article is not in the list (e.g. a draft) — callers must
+     not render a number for it. The input list is never mutated. */
+  function divisionTopicNo(article, list) {
+    var items = Array.isArray(list) ? list : ARTICLES;
+    if (!article) return null;
+    var same = items.filter(function (x) { return x.division === article.division; });
+    same.sort(function (x, y) {
+      if (x.date !== y.date) return x.date < y.date ? -1 : 1;
+      return x.id - y.id;
+    });
+    for (var i = 0; i < same.length; i++) {
+      if (same[i].id === article.id) return i + 1;
+    }
+    return null;
   }
   /* Round 2 (2026-11-20): coded illustration plates. Each division gets a
      flat-colour plate carrying a large hand-drawn line scene of its own
@@ -232,6 +254,63 @@
     return same.concat(other).slice(0, 3);
   }
   function articleById(id) { return ARTICLES.find(function (a) { return a.id === Number(id); }) || null; }
+  /* Reading sequence (owner order 2026-11-27): the 6 series arcs from
+     the idea bank — a fixed "next guide" order per arc. Data only: no
+     article body, title or publish status is touched. `list` is the
+     merged published ARTICLES list (same source as relatedArticles),
+     so a next article that is a draft — or not yet published — can
+     never be linked: the nav is dropped instead of linking a draft.
+     The last article in an arc loops back to the first ("start
+     again"), so the sequence never dead-ends. Pure: takes the list,
+     returns a new object, changes nothing. */
+  var SERIES_ARCS = [
+    { name: 'EV series', ids: [1, 7, 8] },
+    { name: 'Buying guides', ids: [4, 10, 12, 15, 16] },
+    { name: 'Money basics', ids: [17, 18, 24] },
+    { name: 'Health basics', ids: [21, 23] },
+    { name: 'Free tools', ids: [14, 20] },
+    { name: 'Travel', ids: [19, 25] }
+  ];
+  function seriesForArticle(current, list) {
+    var items = Array.isArray(list) ? list : ARTICLES;
+    if (!current) return null;
+    var arc = null;
+    var index = -1;
+    var i;
+    var j;
+    for (i = 0; i < SERIES_ARCS.length; i += 1) {
+      j = SERIES_ARCS[i].ids.indexOf(current.id);
+      if (j !== -1) { arc = SERIES_ARCS[i]; index = j; break; }
+    }
+    if (!arc) return null; /* not in any arc — no nav */
+    var byId = {};
+    for (i = 0; i < items.length; i += 1) if (items[i]) byId[items[i].id] = items[i];
+    if (!byId[current.id]) return null; /* current not in the published list — no nav */
+    var next = byId[arc.ids[(index + 1) % arc.ids.length]] || null;
+    if (!next) return null; /* next not published yet — never link a draft */
+    return { arc: arc.name, ids: arc.ids.slice(), index: index, total: arc.ids.length, next: next, isLast: index === arc.ids.length - 1 };
+  }
+  /* The nav block for the article page: a small "Part X of Y" label
+     plus the next-guide link. Returns '' when there is no arc, so the
+     page renders nothing extra on articles outside any arc. */
+  function renderSeriesNav(current, list) {
+    var s = seriesForArticle(current, list);
+    if (!s) return '';
+    var part = 'Part ' + (s.index + 1) + ' of ' + s.total;
+    /* The next guide also carries its per-division topic number (owner
+       order 2026-11-27) in full "Division · Topic N" form — arcs cross
+       divisions (Buying guides: Automotive → Gadgets; Free tools: AI &
+       Technology → Digital Tools), so the division is informative here.
+       The number is computed from the same list the arc was picked from,
+       so it can never point at a draft. */
+    var items = Array.isArray(list) ? list : ARTICLES;
+    var topicNo = divisionTopicNo(s.next, items);
+    var topicSuffix = topicNo ? ' <span class="series-nav-topic">' + esc(s.next.division) + ' · Topic ' + topicNo + '</span>' : '';
+    var nextLine = s.isLast
+      ? 'You finished the ' + esc(s.arc) + ' — start again: <a href="article?id=' + s.next.id + '">' + esc(s.next.title) + '</a> →' + topicSuffix
+      : 'Next guide: <a href="article?id=' + s.next.id + '">' + esc(s.next.title) + '</a> →' + topicSuffix;
+    return '<nav class="series-nav" aria-label="Reading sequence"><p class="series-nav-label">' + esc(s.arc) + ' · ' + part + '</p><p class="series-nav-next">' + nextLine + '</p></nav>';
+  }
   function countsByDivision() {
     return DIVISIONS.map(function (d) {
       return { division: d.name, count: articlesByDivision(d.name).length };
@@ -406,6 +485,7 @@
     DISCLAIMER: GENERAL_DISCLAIMER,
     divisionById: divisionById, divisionPageState: divisionPageState, articlesByDivision: articlesByDivision, articleById: articleById,
     relatedArticles: relatedArticles,
+    seriesForArticle: seriesForArticle, renderSeriesNav: renderSeriesNav,
     countsByDivision: countsByDivision, formatDate: formatDate, esc: esc, stripDraftBanner: stripDraftBanner,
     liveReady: liveReady, mapLiveArticle: mapLiveArticle, mergeLiveArticles: mergeLiveArticles, applyLiveArticles: applyLiveArticles
   };
@@ -462,10 +542,16 @@
   }
 
   function articleCard(a) {
+    /* Per-division topic number (owner order 2026-11-27) replaces the
+       global "No. NN" on every reader-facing card. The fallback keeps the
+       old display only for an article outside the published list — in
+       production every rendered article is in ARTICLES, so it never runs. */
+    var topicNo = divisionTopicNo(a);
+    var noText = topicNo ? 'Topic ' + topicNo : articleNo(a.id);
     return '<article class="card article-card reveal"><div class="card-tag">' + esc(a.division) + ' · ' + esc(a.category) + '</div>' +
       '<h3><a href="pages/article?id=' + a.id + '">' + esc(a.title) + '</a></h3>' +
       '<p>' + esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + formatDate(a.date) + '</time> ' +
-      '<span class="article-no">' + articleNo(a.id) + '</span> ' +
+      '<span class="article-no">' + noText + '</span> ' +
       '<a class="read-more" href="pages/article?id=' + a.id + '">Read article →</a></article>';
   }
   /* articleCard links are written from the site root; fix them when rendered on a sub-page. */
@@ -517,13 +603,14 @@
 
   /* Hero moment (unslop run 2026-11-20, cover plate added in round 2): the
      latest guide rendered as a real card with a tall flat-colour cover —
-     the article's division scene, large, with its "No. NN" on the plate. */
+     the article's division scene, large, with its per-division "Topic N"
+     on the plate (owner order 2026-11-27 replaces the global "No. NN"). */
   function renderHeroPreview(root) {
     if (!root) return;
     var latest = ARTICLES.slice().sort(sortLatestFirst)[0];
     if (!latest) return;
     var div = DIVISIONS.find(function (x) { return x.name === latest.division; });
-    var plate = div ? divisionPlate(div, articleNo(latest.id)) : '';
+    var plate = div ? divisionPlate(div, 'Topic ' + divisionTopicNo(latest)) : '';
     root.innerHTML = '<article class="card hero-preview">' + plate +
       '<div class="hero-preview-body"><p class="card-tag">' + esc(latest.division) + ' · ' + esc(latest.category) + '</p>' +
       '<h3><a href="pages/article?id=' + latest.id + '">' + esc(latest.title) + '</a></h3>' +
@@ -539,6 +626,7 @@
   window.FSAI.renderTools = renderTools;
   window.FSAI.articleCard = articleCard;
   window.FSAI.articleNo = articleNo;
+  window.FSAI.divisionTopicNo = divisionTopicNo;
   window.FSAI.divisionNo = divisionNo;
   window.FSAI.divisionPlate = divisionPlate;
   window.FSAI.divisionIcon = function (id) {

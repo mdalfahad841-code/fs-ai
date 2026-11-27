@@ -160,6 +160,19 @@ const ARTICLE_FIXTURES = {
   },
 };
 
+/* Faithful stub of window.FSAI.divisionTopicNo (app.js) over the
+   fixtures: position within the same division, date ascending, ties by
+   id ascending. Fixture 1 → 1, fixture 26 → 2 (both Automotive). */
+const fixtureDivisionTopicNo = (article) => {
+  if (!article) return null;
+  const same = Object.values(ARTICLE_FIXTURES).filter((a) => a.division === article.division);
+  same.sort((x, y) => (x.date !== y.date ? (x.date < y.date ? -1 : 1) : x.id - y.id));
+  for (let i = 0; i < same.length; i++) {
+    if (same[i].id === article.id) return i + 1;
+  }
+  return null;
+};
+
 function articleHeadSeed() {
   return makeHead([
     { tag: 'meta', attrs: { name: 'description', content: 'Read a free FS AI article.' } },
@@ -180,15 +193,22 @@ function articleHeadSeed() {
 
 async function runArticlePage(search) {
   const head = articleHeadSeed();
-  const bodyEls = { articleBody: makeEl('div'), relatedGrid: makeEl('div') };
+  const bodyEls = { articleBody: makeEl('div'), seriesNav: makeEl('div'), relatedGrid: makeEl('div') };
   const made = makeDocument(head, bodyEls, 'Article \u2014 FS AI');
   const FSAI = {
     liveReady: Promise.resolve(),
     articleById: (id) => ARTICLE_FIXTURES[String(id)] || null,
+    /* Reading sequence (owner order 2026-11-27): the page renders
+       the series nav into #seriesNav. The fixtures hold only ids 1
+       and 26 — article 1's next (7) is absent and 26 is in no arc —
+       so the real picker would return '' here too; the series nav
+       itself is covered by tests/series-reading-sequence.test.js. */
+    renderSeriesNav: () => '',
     DIVISIONS: [{ id: 'automotive', name: 'Automotive', description: 'Cars, EVs and driving guides.' }],
     esc,
     formatDate: (d) => d,
     articleNo: (id) => 'No. ' + String(id).padStart(2, '0'),
+    divisionTopicNo: fixtureDivisionTopicNo,
     articlesByDivision: (name) => Object.values(ARTICLE_FIXTURES).filter((a) => a.division === name),
     /* Same contract as window.FSAI.relatedArticles (app.js): same
        division first (newest first), then other divisions to fill
@@ -284,6 +304,7 @@ async function runDivisionPage(search) {
     esc,
     formatDate: (d) => d,
     articleNo: (id) => 'No. ' + String(id).padStart(2, '0'),
+    divisionTopicNo: fixtureDivisionTopicNo,
   };
   const sandbox = {
     window: { FSAI, location: { search } },
