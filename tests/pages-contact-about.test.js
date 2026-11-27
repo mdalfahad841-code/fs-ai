@@ -5,6 +5,7 @@
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { describe, it } = require('node:test');
 
 const ROOT = path.join(__dirname, '..');
@@ -12,6 +13,28 @@ const FRONTEND = path.join(ROOT, 'frontend');
 
 function read(rel) {
   return fs.readFileSync(path.join(ROOT, rel), 'utf8');
+}
+
+/* Minimal app.js loader (same shape as closeout-a1's loadApp): the file
+   only registers a DOMContentLoaded listener at load, and liveReady
+   resolves immediately with no fetch in the sandbox. */
+function loadFooter() {
+  const sandbox = {
+    window: { location: { pathname: '/' } },
+    document: { addEventListener() {}, getElementById: () => null },
+    console,
+    URLSearchParams,
+    setTimeout(fn) { return { fn, cleared: false }; },
+    clearTimeout() {},
+    AbortController: class {
+      constructor() { this.signal = {}; }
+      abort() {}
+    },
+  };
+  sandbox.window.window = sandbox.window;
+  vm.createContext(sandbox);
+  vm.runInContext(read('frontend/scripts/app.js'), sandbox);
+  return sandbox.window.FSAI.renderFooter();
 }
 
 describe('Contact / About / 404 pages', () => {
@@ -58,8 +81,34 @@ describe('Contact / About / 404 pages', () => {
   it('footer Accounts column links Instagram @fsai.406', () => {
     const appJs = read('frontend/scripts/app.js');
     // renderFooter() renders every ACCOUNTS entry with status 'Exists' as
-    // "Name (handle)" links, so this entry is the footer Instagram link.
+    // an icon-only link, so this entry is the footer Instagram link.
     assert.ok(appJs.includes("name: 'Instagram', handle: '@fsai.406', url: 'https://www.instagram.com/fsai.406', status: 'Exists'"), 'Instagram Exists entry in ACCOUNTS');
+  });
+
+  it('footer Accounts column is icon-only: logo, no visible name/handle/URL text', () => {
+    // Owner order 2026-11-27 (phone screenshot): "Social media logo
+    // thakbe shudu click korle dhukbe kono name or link show korbe na"
+    // — the five account links are brand logos only; the platform name
+    // lives in aria-label (screen readers) and the click still opens
+    // the same profile URL.
+    const html = loadFooter();
+    const m = html.match(/<p class="footer-accounts">([\s\S]*?)<\/p>/);
+    assert.ok(m, 'footer-accounts paragraph present');
+    const accounts = m[1];
+    for (const url of [
+      'https://github.com/mdalfahad841-code/fs-ai',
+      'https://www.youtube.com/@FSAI-e5f',
+      'https://www.pinterest.com/watchwithf/',
+      'https://www.instagram.com/fsai.406',
+      'https://www.threads.com/@fsai.406',
+    ]) assert.ok(accounts.includes('href="' + url + '"'), 'link to ' + url);
+    for (const name of ['GitHub', 'YouTube', 'Pinterest', 'Instagram', 'Threads']) {
+      assert.ok(accounts.includes('aria-label="' + name + '"'), 'aria-label ' + name);
+    }
+    assert.equal((accounts.match(/<svg/g) || []).length, 5, 'exactly five brand logos');
+    const visibleText = accounts.replace(/<[^>]*>/g, '').trim();
+    assert.equal(visibleText, '', 'no visible text in the Accounts links, got: ' + JSON.stringify(visibleText));
+    assert.ok(!accounts.includes('(@'), 'no visible handle text');
   });
 
   it('sitemap lists the About and Contact pages (60 URLs total)', () => {

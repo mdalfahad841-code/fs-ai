@@ -20,8 +20,25 @@
     graduation: '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
     moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
-    menu: '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>'
+    menu: '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>',
+    /* Footer social brand marks (icons-only footer, owner order
+       2026-11-27): same 1.5-stroke line language as the rest of the
+       set — YouTube / Instagram are the Feather glyphs, Pinterest is a
+       circled P, Threads is the @ sign. No emoji, no icon font, no CDN. */
+    youtube: '<path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z"/><polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02"/>',
+    instagram: '<rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/>',
+    pinterest: '<circle cx="12" cy="12" r="10"/><path d="M9 20V7h3a3.5 3.5 0 0 1 0 7H9"/>',
+    threads: '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>'
   };
+  /* Filled brand marks — GitHub's octocat cannot be drawn recognisably
+     as a 1.5-stroke line icon, so it keeps its canonical filled mark
+     (same 24x24 viewBox, currentColor, no external asset). */
+  var BRAND_FILL_PATHS = {
+    github: '<path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>'
+  };
+  function brandIcon(name) {
+    return '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' + (BRAND_FILL_PATHS[name] || '') + '</svg>';
+  }
   function svgIcon(name, cls) {
     return '<svg' + (cls ? ' class="' + cls + '"' : '') + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICON_PATHS[name] || '') + '</svg>';
   }
@@ -420,8 +437,13 @@
     var inPages = window.location.pathname.indexOf('/pages/') !== -1;
     var prefix = inPages ? '../' : '';
     var existing = ACCOUNTS.filter(function (a) { return a.status === 'Exists'; });
+    /* Icons-only footer (owner order 2026-11-27): each account is just
+       its brand logo — no visible name, handle or URL text. The platform
+       name lives only in aria-label (screen readers), and the click
+       still opens the same profile URL. */
     var links = existing.map(function (a) {
-      return '<a href="' + a.url + '" target="_blank" rel="noopener">' + esc(a.name) + ' (' + esc(a.handle) + ')</a>';
+      var icon = a.name === 'GitHub' ? brandIcon('github') : svgIcon(a.name.toLowerCase());
+      return '<a href="' + a.url + '" target="_blank" rel="noopener" aria-label="' + esc(a.name) + '">' + icon + '</a>';
     }).join('');
     /* A1.2 (2026-11-23): the public footer carries no owner-internal
        wording — no revenue, traffic, analytics-status or account-status
@@ -436,7 +458,7 @@
       '<p><a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div>' +
       '<div><h3>Accounts</h3><p class="footer-accounts">' + links + '</p></div>' +
       '<div><h3>On this site</h3><p>Articles: ' + ARTICLES.length + ' · Divisions: ' + DIVISIONS.length + ' · Tools: ' + TOOLS.length + '</p></div>' +
-      '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. No personal or family content is used on this platform. <a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div></footer>';
+      '</div><div class="wrap footer-bottom"><p>© 2026 FS AI — Fahad Somrat. All content is free to read. <a href="' + prefix + 'pages/about">About</a> · <a href="' + prefix + 'pages/contact">Contact</a> · <a href="' + prefix + 'pages/privacy">Privacy</a> · <a href="' + prefix + 'pages/terms">Terms</a></p></div></footer>';
   }
 
   function articleCard(a) {
