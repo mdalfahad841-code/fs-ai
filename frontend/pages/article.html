@@ -155,7 +155,7 @@ document.addEventListener('DOMContentLoaded', function () {
     '<h1>' + window.FSAI.esc(a.title) + '</h1>' +
     '<p class="article-meta"><span class="article-no">Topic ' + window.FSAI.divisionTopicNo(a) + '</span> · Published ' + window.FSAI.formatDate(a.date) + ' · FS AI · ' +
     (div ? '<a href="division?division=' + div.id + '">' + window.FSAI.esc(div.name) + '</a>' : window.FSAI.esc(a.division)) + '</p>' +
-    '<figure class="article-hero"><img class="article-hero-img" src="' + window.FSAI.articleImage(a) + '" alt="' + window.FSAI.esc(a.title) + '" width="1600" height="900"></figure>' +
+    '<figure class="article-hero"><img class="article-hero-img" src="' + window.FSAI.articleImage(a) + '" alt="' + window.FSAI.esc(a.title) + '" width="1600"></figure>' +
     (showDisclaimer ? '<p class="disclaimer-banner" role="note"><strong>Disclaimer:</strong> ' + window.FSAI.esc(disclaimer) + '</p>' : '') +
     '<p><strong>' + window.FSAI.esc(a.excerpt) + '</strong></p>' +
     (a.body ? '<div class="article-full">' + window.FSAI.renderBody(a.body) + '</div>' : '<p>The full text of this guide is coming soon.</p>') +
@@ -169,7 +169,7 @@ document.addEventListener('DOMContentLoaded', function () {
   var related = window.FSAI.relatedArticles(a);
   var grid = document.getElementById('relatedGrid');
   grid.innerHTML = related.map(function (x) {
-    return '<article class="card article-card"><img class="card-img" src="' + window.FSAI.articleImage(x) + '" alt="" loading="lazy" width="1600" height="900">' +
+    return '<article class="card article-card"><img class="card-img" src="' + window.FSAI.articleImage(x) + '" alt="" loading="lazy" width="1600">' +
       '<div class="card-tag">' + window.FSAI.esc(x.division) + ' · ' + window.FSAI.esc(x.category) + '</div>' +
       '<h3><a href="article?id=' + x.id + '">' + window.FSAI.esc(x.title) + '</a></h3>' +
       '<p>' + window.FSAI.esc(x.excerpt) + '</p><time datetime="' + x.date + '">' + window.FSAI.formatDate(x.date) + '</time> <span class="article-no">Topic ' + window.FSAI.divisionTopicNo(x) + '</span></article>';

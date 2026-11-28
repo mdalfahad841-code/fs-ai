@@ -639,7 +639,7 @@
        production every rendered article is in ARTICLES, so it never runs. */
     var topicNo = divisionTopicNo(a);
     var noText = topicNo ? 'Topic ' + topicNo : articleNo(a.id);
-    return '<article class="card article-card reveal"><img class="card-img" src="' + articleImage(a) + '" alt="" loading="lazy" width="1600" height="900">' +
+    return '<article class="card article-card reveal"><img class="card-img" src="' + articleImage(a) + '" alt="" loading="lazy" width="1600">' +
       '<div class="card-tag">' + esc(a.division) + ' · ' + esc(a.category) + '</div>' +
       '<h3><a href="pages/article?id=' + a.id + '">' + esc(a.title) + '</a></h3>' +
       '<p>' + esc(a.excerpt) + '</p><time datetime="' + a.date + '">' + formatDate(a.date) + '</time> ' +

@@ -28,9 +28,9 @@ const ARTICLE_HTML = fs.readFileSync(path.join(FRONTEND, 'pages', 'article.html'
 const MAIN_CSS = fs.readFileSync(path.join(FRONTEND, 'styles', 'main.css'), 'utf8');
 const IMG_DIR = path.join(FRONTEND, 'images', 'articles');
 
-// Every article that gets a picture: 28 published (1-25, 31, 33, 38)
+// Every article that gets a picture: 29 published (1-25, 31, 33, 38, 40)
 // + drafts #35/#36/#37/#39 (their pictures are in place before they publish).
-const IMAGED_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 31, 33, 35, 36, 37, 38, 39];
+const IMAGED_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 31, 33, 35, 36, 37, 38, 39, 40];
 // Protected drafts — edit protection stands, no picture file for these.
 const PROTECTED_IDS = [28, 29, 30, 34];
 
@@ -71,7 +71,7 @@ describe('article cards carry the picture', () => {
     for (const a of F.ARTICLES) {
       const card = F.articleCard(a);
       assert.ok(
-        card.includes('<img class="card-img" src="/images/articles/article-' + a.id + '.jpg" alt="" loading="lazy" width="1600" height="900">'),
+        card.includes('<img class="card-img" src="/images/articles/article-' + a.id + '.jpg" alt="" loading="lazy" width="1600">'),
         'card ' + a.id,
       );
       assert.ok(card.indexOf('card-img') < card.indexOf('card-tag'), 'card ' + a.id + ': image comes before the tag');
@@ -111,6 +111,13 @@ describe('article picture CSS', () => {
     assert.ok(MAIN_CSS.includes('aspect-ratio: 16 / 9'), '16:9 aspect ratio present');
     assert.ok(MAIN_CSS.includes('object-fit: cover'), 'cover crop present');
   });
+
+  it('no height attribute on article images — the 900px height must never be forced (2026-11-28: hero + card images rendered as tall portrait strips)', () => {
+    assert.ok(!APP_JS.includes('height="900"'), 'app.js card images carry no height attribute');
+    assert.ok(!ARTICLE_HTML.includes('height="900"'), 'article.html hero/related images carry no height attribute');
+    assert.ok(MAIN_CSS.includes('.card-img { display: block; width: 100%; height: auto;'), '.card-img sets height: auto');
+    assert.ok(MAIN_CSS.includes('.article-hero-img { display: block; width: 100%; height: auto;'), '.article-hero-img sets height: auto');
+  });
 });
 
 describe('article picture files', () => {
@@ -124,7 +131,7 @@ describe('article picture files', () => {
     }
   });
 
-  it('exactly the 32 expected files, no extras', () => {
+  it('exactly the 33 expected files, no extras', () => {
     const files = fs.readdirSync(IMG_DIR).filter((f) => f.endsWith('.jpg')).sort();
     const expected = IMAGED_IDS.map((id) => 'article-' + id + '.jpg').sort();
     assert.deepEqual(files, expected);

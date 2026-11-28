@@ -325,28 +325,4 @@
     <changefreq>weekly</changefreq>
     <priority>0.3</priority>
   </url>
-  <url>
-    <loc>https://fs-ai-5w5.pages.dev/pages/article?id=40</loc>
-    <lastmod>2026-11-28T00:05:54.382Z</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://fs-ai-5w5.pages.dev/pages/article?id=38</loc>
-    <lastmod>2026-11-27T16:47:34.136Z</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://fs-ai-5w5.pages.dev/pages/article?id=33</loc>
-    <lastmod>2026-11-24T07:18:12.198Z</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
-  <url>
-    <loc>https://fs-ai-5w5.pages.dev/pages/article?id=31</loc>
-    <lastmod>2026-11-24T07:16:57.444Z</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.7</priority>
-  </url>
 </urlset>

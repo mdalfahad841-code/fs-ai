@@ -178,9 +178,9 @@ img, canvas { max-width: 100%; }
    per article. Cards carry the image inset at the top; the article page
    carries it as a full-width hero under the meta line. 16:9, cover crop,
    quiet radius in the same language as .card. */
-.card-img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 10px; margin-bottom: 16px; background: var(--surface-2); }
+.card-img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 10px; margin-bottom: 16px; background: var(--surface-2); }
 .article-hero { margin: 0 0 24px; }
-.article-hero-img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius); background: var(--surface-2); }
+.article-hero-img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius); background: var(--surface-2); }
 .div-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
 .div-icon { display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 12px; background: var(--surface-2); color: var(--text-secondary); }
 .div-icon svg { width: 24px; height: 24px; }
